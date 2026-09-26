@@ -51,6 +51,8 @@ pub struct ZoneView {
     pub can_previous: bool,
     pub can_seek: bool,
     pub queue_items_remaining: Option<u32>,
+    /// Seconds of music left in the whole queue.
+    pub queue_time_remaining: Option<f64>,
     pub outputs: Vec<OutputView>,
 }
 
@@ -165,6 +167,7 @@ fn zone_view(zone: &Zone) -> ZoneView {
         can_previous: zone.is_previous_allowed,
         can_seek: zone.is_seek_allowed,
         queue_items_remaining: zone.queue_items_remaining,
+        queue_time_remaining: zone.queue_time_remaining,
         outputs: zone
             .outputs
             .iter()
@@ -194,6 +197,8 @@ struct Inner {
     zones: BTreeMap<String, ZoneView>,
     /// The user's explicit pick (saved in settings.json).
     picked_zone_id: Option<String>,
+    /// The zone queue.rs is currently following.
+    queue_zone_id: Option<String>,
 }
 
 /// Zone state, stored in Tauri's managed state.
@@ -245,13 +250,24 @@ impl Zones {
     }
 
     fn update(&self, change: impl FnOnce(&mut Inner)) {
-        let payload = {
+        let (payload, queue_change) = {
             let mut inner = self.inner.lock().unwrap();
             change(&mut inner);
-            Self::payload(&inner)
+            let payload = Self::payload(&inner);
+            // Point the queue at the selected zone whenever that changes.
+            let queue_change = if payload.selected_zone_id != inner.queue_zone_id {
+                inner.queue_zone_id = payload.selected_zone_id.clone();
+                Some((inner.core.clone(), payload.selected_zone_id.clone()))
+            } else {
+                None
+            };
+            (payload, queue_change)
         };
         if let Some(app) = self.app.get() {
             let _ = app.emit("roon-zones", &payload);
+            if let Some((core, zone_id)) = queue_change {
+                crate::queue::follow(app, core, zone_id);
+            }
         }
     }
 
@@ -278,6 +294,9 @@ pub fn attach(app: &AppHandle, core: Core) {
         inner.core = Some(core.clone());
         inner.zones.clear();
     });
+    // The zones were just cleared, so the queue stopped following; forget which
+    // zone it followed so the first zone update re-subscribes on the new connection.
+    zones.inner.lock().unwrap().queue_zone_id = None;
     tauri::async_runtime::spawn(watch(app.clone(), core));
 }
 

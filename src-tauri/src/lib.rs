@@ -5,6 +5,7 @@ use tauri::{
 };
 
 mod browse;
+mod queue;
 mod roon;
 mod settings;
 mod zones;
@@ -158,6 +159,7 @@ pub fn run() {
         // Registered before any window opens, so pages asking for zones or the
         // connection status right at startup always get an answer.
         .manage(zones::Zones::default())
+        .manage(queue::Queue::default())
         .manage(roon::Roon::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
@@ -216,6 +218,7 @@ pub fn run() {
 
             // Connect the zone state to the app, then connect to Roon in the background.
             app.state::<zones::Zones>().init(app.handle());
+            app.state::<queue::Queue>().init(app.handle());
             roon::start(app.handle());
 
             Ok(())
@@ -244,7 +247,9 @@ pub fn run() {
             zones::roon_set_volume,
             zones::roon_mute,
             browse::roon_browse,
-            browse::roon_browse_more
+            browse::roon_browse_more,
+            queue::roon_queue,
+            queue::roon_play_from_here
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

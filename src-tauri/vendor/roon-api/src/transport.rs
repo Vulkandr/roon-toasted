@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use roon_moo::MooVerb;
 use roon_moo::connection::MooConnection;
@@ -6,7 +7,78 @@ use tokio::sync::mpsc;
 
 use crate::error::ApiError;
 use crate::output::Output;
-use crate::zone::{Zone, ZoneSeek};
+use crate::zone::{LineInfo, ThreeLineInfo, TwoLineInfo, Zone, ZoneSeek};
+
+// ---------------------------------------------------------------------------
+// Queue support (Vulkandr addition, following RoonLabs' node-roon-api-transport:
+// subscribe_queue / unsubscribe_queue / play_from_here)
+// ---------------------------------------------------------------------------
+
+/// Subscription keys for queues. 0 and 1 are used by the zone and output
+/// subscriptions, so queue subscriptions start well above them.
+static NEXT_QUEUE_KEY: AtomicU32 = AtomicU32::new(100);
+
+/// One track in a zone's play queue.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct QueueItem {
+    pub queue_item_id: u64,
+    #[serde(default)]
+    pub length: Option<f64>,
+    #[serde(default)]
+    pub image_key: Option<String>,
+    pub one_line: LineInfo,
+    #[serde(default)]
+    pub two_line: Option<TwoLineInfo>,
+    #[serde(default)]
+    pub three_line: Option<ThreeLineInfo>,
+}
+
+/// One change to a queue, applied in order.
+#[derive(Debug, Clone)]
+pub enum QueueChange {
+    /// Insert `items` starting at position `index`.
+    Insert { index: usize, items: Vec<QueueItem> },
+    /// Remove `count` items starting at position `index`.
+    Remove { index: usize, count: usize },
+}
+
+/// Events received from a queue subscription.
+#[derive(Debug, Clone)]
+pub enum QueueEvent {
+    /// The queue's first `max_item_count` items.
+    Initial(Vec<QueueItem>),
+    /// Changes since the last event.
+    Changed(Vec<QueueChange>),
+}
+
+fn parse_queue_event(status: &str, body: &serde_json::Value) -> Option<QueueEvent> {
+    match status {
+        "Subscribed" => {
+            let items: Vec<QueueItem> = serde_json::from_value(body["items"].clone()).ok()?;
+            Some(QueueEvent::Initial(items))
+        }
+        "Changed" => {
+            let mut changes = Vec::new();
+            for change in body.get("changes")?.as_array()? {
+                let index = change["index"].as_u64()? as usize;
+                match change["operation"].as_str()? {
+                    "insert" => {
+                        let items: Vec<QueueItem> =
+                            serde_json::from_value(change["items"].clone()).ok()?;
+                        changes.push(QueueChange::Insert { index, items });
+                    }
+                    "remove" => {
+                        let count = change["count"].as_u64()? as usize;
+                        changes.push(QueueChange::Remove { index, count });
+                    }
+                    _ => {}
+                }
+            }
+            Some(QueueEvent::Changed(changes))
+        }
+        _ => None,
+    }
+}
 
 /// Events received from a zone subscription.
 #[derive(Debug, Clone)]
@@ -363,6 +435,75 @@ impl Transport {
         }
         self.connection
             .send_request("com.roonlabs.transport:2/convenience_switch", Some(body))
+            .await?;
+        Ok(())
+    }
+
+    /// Vulkandr addition: subscribe to a zone's play queue (its first
+    /// `max_item_count` items). Returns the subscription key (pass it to
+    /// `unsubscribe_queue` when done) and a receiver of queue events.
+    pub async fn subscribe_queue(
+        &self,
+        zone_or_output_id: &str,
+        max_item_count: u32,
+    ) -> Result<(u32, mpsc::Receiver<QueueEvent>), ApiError> {
+        let key = NEXT_QUEUE_KEY.fetch_add(1, Ordering::Relaxed);
+        let mut raw_rx = self
+            .connection
+            .subscribe(
+                "com.roonlabs.transport:2/subscribe_queue",
+                serde_json::json!({
+                    "zone_or_output_id": zone_or_output_id,
+                    "max_item_count": max_item_count,
+                    "subscription_key": key
+                }),
+            )
+            .await?;
+
+        let (tx, rx) = mpsc::channel(32);
+
+        tokio::spawn(async move {
+            while let Some(msg) = raw_rx.recv().await {
+                if msg.verb == MooVerb::Complete {
+                    break;
+                }
+                if let Some(body) = msg.json_body()
+                    && let Some(event) = parse_queue_event(&msg.name, body)
+                    && tx.send(event).await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        Ok((key, rx))
+    }
+
+    /// Vulkandr addition: stop a queue subscription started by `subscribe_queue`.
+    pub async fn unsubscribe_queue(&self, subscription_key: u32) -> Result<(), ApiError> {
+        self.connection
+            .send_request(
+                "com.roonlabs.transport:2/unsubscribe_queue",
+                Some(serde_json::json!({ "subscription_key": subscription_key })),
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Vulkandr addition: start playing the queue from a specific item.
+    pub async fn play_from_here(
+        &self,
+        zone_or_output_id: &str,
+        queue_item_id: u64,
+    ) -> Result<(), ApiError> {
+        self.connection
+            .send_request(
+                "com.roonlabs.transport:2/play_from_here",
+                Some(serde_json::json!({
+                    "zone_or_output_id": zone_or_output_id,
+                    "queue_item_id": queue_item_id
+                })),
+            )
             .await?;
         Ok(())
     }

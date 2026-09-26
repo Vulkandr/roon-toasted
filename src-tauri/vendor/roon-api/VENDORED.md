@@ -18,7 +18,11 @@ see LICENSE-APACHE).
 2. `src/browse.rs`: added fields Roon sends but the published structs dropped:
    `BrowseList.subtitle`, and `BrowseResult.message` / `BrowseResult.is_error`
    (the text Roon returns when an action answers with a message, e.g. an error).
-3. `Cargo.toml`: removed the example, test and dev-dependency entries, since
+3. `src/transport.rs`: added queue support, which the published version doesn't
+   have: `subscribe_queue()`, `unsubscribe_queue()`, `play_from_here()`, and the
+   `QueueItem` / `QueueEvent` / `QueueChange` types (exported from lib.rs),
+   following RoonLabs' node-roon-api-transport.
+4. `Cargo.toml`: removed the example, test and dev-dependency entries, since
    those files aren't included here.
 
 If a future roon-api release includes these fixes (and anything added below),

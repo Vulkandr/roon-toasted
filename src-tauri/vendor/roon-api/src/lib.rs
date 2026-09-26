@@ -33,7 +33,7 @@ pub use token::{
     FileStateStore, FileTokenStore, MemoryStateStore, MemoryTokenStore, StateStore, TokenStore,
 };
 pub use transport::{
-    ControlAction, MuteAction, OutputEvent, SeekMode, Transport, VolumeMode, ZoneEvent,
+    ControlAction, MuteAction, OutputEvent, SeekMode, Transport, VolumeMode, ZoneEvent, QueueChange, QueueEvent, QueueItem,
 };
 pub use volume_control::{VolumeControlDef, VolumeControlService, VolumeRequest};
 pub use zone::{NowPlaying, PlayState, Zone, ZoneSeek, ZoneSettings};
