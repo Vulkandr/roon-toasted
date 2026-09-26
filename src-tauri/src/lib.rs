@@ -4,6 +4,7 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 
+mod browse;
 mod roon;
 mod settings;
 mod zones;
@@ -154,6 +155,10 @@ pub fn run() {
     }
 
     builder
+        // Registered before any window opens, so pages asking for zones or the
+        // connection status right at startup always get an answer.
+        .manage(zones::Zones::default())
+        .manage(roon::Roon::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
@@ -209,9 +214,8 @@ pub fn run() {
                 }
             }
 
-            // Zone state has to exist before the Roon connection starts feeding it.
-            app.manage(zones::Zones::new(app.handle()));
-            // Connect to Roon in the background.
+            // Connect the zone state to the app, then connect to Roon in the background.
+            app.state::<zones::Zones>().init(app.handle());
             roon::start(app.handle());
 
             Ok(())
@@ -238,7 +242,9 @@ pub fn run() {
             zones::roon_seek,
             zones::roon_zone_settings,
             zones::roon_set_volume,
-            zones::roon_mute
+            zones::roon_mute,
+            browse::roon_browse,
+            browse::roon_browse_more
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -7,7 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use roon_api::{ApiError, FileStateStore, RoonClient, RoonClientBuilder, RoonEvent, StateStore};
@@ -66,10 +66,30 @@ struct Inner {
 }
 
 /// Handle to the Roon status, stored in Tauri's managed state.
+///
+/// It's registered with the app before any window exists (so a page asking
+/// for the status at startup always gets an answer), and `start()` fills in
+/// the app handle and pairing file path a moment later.
 pub struct Roon {
     inner: Mutex<Inner>,
-    state_path: PathBuf,
-    app: AppHandle,
+    state_path: OnceLock<PathBuf>,
+    app: OnceLock<AppHandle>,
+}
+
+impl Default for Roon {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(Inner {
+                state: ConnectionState::Searching,
+                paired_core_id: None,
+                connected: None,
+                seen: HashMap::new(),
+                last_sent: None,
+            }),
+            state_path: OnceLock::new(),
+            app: OnceLock::new(),
+        }
+    }
 }
 
 impl Roon {
@@ -101,7 +121,9 @@ impl Roon {
             status
         };
         print_status(&status);
-        let _ = self.app.emit("roon-status", &status);
+        if let Some(app) = self.app.get() {
+            let _ = app.emit("roon-status", &status);
+        }
     }
 
     fn core_seen(&self, core: CoreInfo) {
@@ -162,18 +184,22 @@ pub async fn switch_core(roon: State<'_, Roon>, core_id: String) -> Result<(), S
         return Err("That Core isn't on the network right now.".into());
     };
 
-    FileStateStore::new(roon.state_path.clone())
+    let (Some(state_path), Some(app)) = (roon.state_path.get(), roon.app.get()) else {
+        return Err("Still starting up, try again in a moment.".into());
+    };
+    FileStateStore::new(state_path.clone())
         .save_paired_core_id(Some(&core_id))
         .map_err(|e| format!("Couldn't save the new Core: {e}"))?;
     println!("[roon] switching to \"{}\", restarting...", core.name);
-    roon.app.restart();
+    app.restart();
 }
 
 // ---------------------------------------------------------------------------
 // Connection
 // ---------------------------------------------------------------------------
 
-/// Sets up the Roon status and starts connecting in the background. Returns immediately.
+/// Connects the Roon status to the app and starts connecting in the background.
+/// Returns immediately. (`Roon` itself is registered in lib.rs before any window opens.)
 pub fn start(app: &AppHandle) {
     // Pairing approval is saved here so Roon only asks once:
     // %APPDATA%\com.vulkan.roon-toasted\roon-state.json on Windows.
@@ -184,17 +210,9 @@ pub fn start(app: &AppHandle) {
             return;
         }
     };
-    app.manage(Roon {
-        inner: Mutex::new(Inner {
-            state: ConnectionState::Searching,
-            paired_core_id: None,
-            connected: None,
-            seen: HashMap::new(),
-            last_sent: None,
-        }),
-        state_path: state_path.clone(),
-        app: app.clone(),
-    });
+    let roon = app.state::<Roon>();
+    let _ = roon.state_path.set(state_path.clone());
+    let _ = roon.app.set(app.clone());
 
     let app = app.clone();
     tauri::async_runtime::spawn(async move {

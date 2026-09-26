@@ -13,7 +13,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use roon_api::zone::LoopMode;
 use roon_api::{
@@ -197,26 +197,24 @@ struct Inner {
 }
 
 /// Zone state, stored in Tauri's managed state.
+///
+/// Registered with the app before any window exists (so a page asking for
+/// zones at startup always gets an answer); `init()` connects it to the app
+/// and loads the saved zone pick a moment later.
+#[derive(Default)]
 pub struct Zones {
     inner: Mutex<Inner>,
-    settings_path: Option<PathBuf>,
-    app: AppHandle,
+    settings_path: OnceLock<PathBuf>,
+    app: OnceLock<AppHandle>,
 }
 
 impl Zones {
-    pub fn new(app: &AppHandle) -> Self {
-        let settings_path = settings::path(app);
-        let picked_zone_id = settings_path
-            .as_deref()
-            .map(settings::load)
-            .and_then(|s| s.selected_zone_id);
-        Self {
-            inner: Mutex::new(Inner {
-                picked_zone_id,
-                ..Default::default()
-            }),
-            settings_path,
-            app: app.clone(),
+    pub fn init(&self, app: &AppHandle) {
+        let _ = self.app.set(app.clone());
+        if let Some(path) = settings::path(app) {
+            let picked = settings::load(&path).selected_zone_id;
+            self.inner.lock().unwrap().picked_zone_id = picked;
+            let _ = self.settings_path.set(path);
         }
     }
 
@@ -252,7 +250,14 @@ impl Zones {
             change(&mut inner);
             Self::payload(&inner)
         };
-        let _ = self.app.emit("roon-zones", &payload);
+        if let Some(app) = self.app.get() {
+            let _ = app.emit("roon-zones", &payload);
+        }
+    }
+
+    /// The connected Core, if any (used by browse.rs).
+    pub fn core(&self) -> Option<Core> {
+        self.inner.lock().unwrap().core.clone()
     }
 
     fn transport(&self) -> Result<Transport, String> {
@@ -353,7 +358,7 @@ pub fn roon_zones(zones: State<'_, Zones>) -> ZonesPayload {
 /// Makes a zone the one the Toaster controls, and remembers it.
 #[tauri::command]
 pub fn roon_select_zone(zones: State<'_, Zones>, zone_id: String) -> Result<(), String> {
-    if let Some(path) = &zones.settings_path {
+    if let Some(path) = zones.settings_path.get() {
         let mut saved = settings::load(path);
         saved.selected_zone_id = Some(zone_id.clone());
         settings::save(path, &saved).map_err(|e| format!("Couldn't save the zone: {e}"))?;

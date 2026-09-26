@@ -15,8 +15,12 @@ see LICENSE-APACHE).
    matching RoonLabs' official node-roon-api-transport. The published version
    wraps them in a `"settings"` object, which Roon ignores, so shuffle, repeat
    and Roon Radio changes silently did nothing.
-2. `Cargo.toml`: removed the example, test and dev-dependency entries, since
+2. `src/browse.rs`: added fields Roon sends but the published structs dropped:
+   `BrowseList.subtitle`, and `BrowseResult.message` / `BrowseResult.is_error`
+   (the text Roon returns when an action answers with a message, e.g. an error).
+3. `Cargo.toml`: removed the example, test and dev-dependency entries, since
    those files aren't included here.
 
-If a future roon-api release fixes change_settings, remove this folder and the
-`[patch.crates-io]` entry and go back to the published crate.
+If a future roon-api release includes these fixes (and anything added below),
+remove this folder and the `[patch.crates-io]` entry and go back to the
+published crate.

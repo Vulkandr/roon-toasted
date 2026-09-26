@@ -52,6 +52,12 @@ pub struct BrowseResult {
     pub list: Option<BrowseList>,
     #[serde(default)]
     pub item: Option<BrowseItem>,
+    /// Vulkandr addition: text Roon returns with action "message".
+    #[serde(default)]
+    pub message: Option<String>,
+    /// Vulkandr addition: whether that message is an error.
+    #[serde(default)]
+    pub is_error: Option<bool>,
 }
 
 /// A list within the browse hierarchy.
@@ -59,6 +65,9 @@ pub struct BrowseResult {
 pub struct BrowseList {
     #[serde(default)]
     pub title: String,
+    /// Vulkandr addition: e.g. an album list's artist line.
+    #[serde(default)]
+    pub subtitle: Option<String>,
     #[serde(default)]
     pub count: u32,
     #[serde(default)]
