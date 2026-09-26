@@ -25,7 +25,7 @@ serde_json = "1"
 # Roon connection: discovery, pairing, transport, browse (MIT/Apache-2.0, github.com/shin1ohno/roon-rs)
 roon-api = "0.5.3"
 roon-sood = "0.5.3"
-tokio = { version = "1", features = ["sync", "rt", "macros"] }
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
 # Prints library warnings to the terminal in dev builds
 tracing-subscriber = "0.3"
 

@@ -93,7 +93,11 @@ pub fn run() {
                 }
             }
         })
-        .invoke_handler(tauri::generate_handler![greet])
+        .invoke_handler(tauri::generate_handler![
+            greet,
+            roon::roon_status,
+            roon::switch_core
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
