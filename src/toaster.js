@@ -28,12 +28,18 @@ const outputName = $("#output-name");
 const muteBtn = $("#mute");
 const volume = $("#volume");
 const volumeValue = $("#volume-value");
+const zoneButton = $("#zone-button");
+const outputZone = $("#output-zone");
+const zoneMenu = $("#zone-menu");
+const searchInput = $("#search-input");
 
 // What the page currently knows
 let zone = null; // the selected zone's data, from Rust
 let artKey = null; // image key currently shown, so art only reloads on change
 let draggingSeek = false;
 let draggingVolume = false;
+let zoneList = []; // every zone, for the zone picker
+let lastSearch = ""; // what was last searched (the Search tab uses this later)
 
 // ===== 2. Helpers =========================================================
 
@@ -69,22 +75,42 @@ function showTab(name) {
 }
 
 document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => showTab(tab.dataset.tab));
+  tab.addEventListener("click", () => {
+    showTab(tab.dataset.tab);
+    // Search tab with nothing searched yet: ready to type right away
+    if (tab.dataset.tab === "search" && !lastSearch) searchInput.focus();
+  });
 });
 
 // ===== 4. Toaster modes, Escape, settings cog =============================
 
-// Rust tells us how the Toaster was opened: "player" or "search"
+// Rust tells us how the Toaster was opened: "player" or "search".
+// Search mode: Search tab, bar focused, old text selected so typing replaces it.
 listen("toaster-open", (event) => {
   if (event.payload === "search") {
-    showTab("browse");
-    // The search box arrives with the Browse tab; this focuses it once it exists
-    $("#search-input")?.focus();
+    showTab("search");
+    searchInput.focus();
+    searchInput.select();
   }
 });
 
+// Enter in the search bar opens the Search tab (results come in a later step)
+searchInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  const text = searchInput.value.trim();
+  if (!text) return;
+  lastSearch = text;
+  showTab("search");
+});
+
+// Escape closes the zone picker if it's open, otherwise hides the Toaster
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") send("hide_window");
+  if (event.key !== "Escape") return;
+  if (!zoneMenu.hidden) {
+    closeZoneMenu();
+  } else {
+    send("hide_window");
+  }
 });
 
 $("#open-settings").addEventListener("click", () => {
@@ -94,6 +120,7 @@ $("#open-settings").addEventListener("click", () => {
 // ===== 5. Rendering =======================================================
 
 function render(payload) {
+      zoneList = payload.zones;
   zone = payload.zones.find((z) => z.zoneId === payload.selectedZoneId) ?? null;
 
   if (!zone) {
@@ -249,6 +276,85 @@ volume.addEventListener("change", () => {
   sendVolume();
   draggingVolume = false;
 });
+
+// ===== 8. Zone picker =====================================================
+
+// Checkmark next to the zone you're on (Lucide "check")
+const CHECK_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+let zoneMenuButton = null; // which button opened the menu
+
+// One row per zone; clicking a row switches to that zone
+function fillZoneMenu() {
+  zoneMenu.replaceChildren();
+  for (const z of zoneList) {
+    const option = document.createElement("button");
+    option.className = "zone-option";
+    const name = document.createElement("span");
+    name.textContent = z.name;
+    option.append(name);
+
+    if (z.zoneId === zone?.zoneId) {
+      option.classList.add("selected");
+      option.insertAdjacentHTML("beforeend", CHECK_ICON);
+    }
+
+    option.addEventListener("click", () => {
+      closeZoneMenu();
+      if (z.zoneId !== zone?.zoneId) send("roon_select_zone", { zoneId: z.zoneId });
+    });
+    zoneMenu.append(option);
+  }
+}
+
+// Opens under the header button, or above the footer button
+function openZoneMenu(button) {
+  if (zoneList.length === 0) return;
+  fillZoneMenu();
+  zoneMenu.hidden = false;
+  zoneMenuButton = button;
+
+  const rect = button.getBoundingClientRect();
+  const left = Math.min(rect.left, window.innerWidth - zoneMenu.offsetWidth - 12);
+  zoneMenu.style.left = `${Math.max(12, left)}px`;
+
+  if (button === outputZone) {
+    zoneMenu.style.top = "";
+    zoneMenu.style.bottom = `${window.innerHeight - rect.top + 6}px`;
+  } else {
+    zoneMenu.style.bottom = "";
+    zoneMenu.style.top = `${rect.bottom + 6}px`;
+  }
+
+  // Long list: scroll so the current zone is visible
+  zoneMenu.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+}
+
+function closeZoneMenu() {
+  zoneMenu.hidden = true;
+  zoneMenuButton = null;
+}
+
+// Same button again closes it; the other zone button moves it there
+function toggleZoneMenu(button) {
+  const wasOpenHere = !zoneMenu.hidden && zoneMenuButton === button;
+  closeZoneMenu();
+  if (!wasOpenHere) openZoneMenu(button);
+}
+
+zoneButton.addEventListener("click", () => toggleZoneMenu(zoneButton));
+outputZone.addEventListener("click", () => toggleZoneMenu(outputZone));
+
+// Clicking anywhere else, resizing, or leaving the window closes it
+document.addEventListener("pointerdown", (event) => {
+  if (zoneMenu.hidden) return;
+  if (zoneMenu.contains(event.target)) return;
+  if (zoneButton.contains(event.target) || outputZone.contains(event.target)) return;
+  closeZoneMenu();
+});
+window.addEventListener("resize", closeZoneMenu);
+window.addEventListener("blur", closeZoneMenu);
 
 // ===== 8. Start ===========================================================
 
