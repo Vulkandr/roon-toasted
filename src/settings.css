@@ -47,6 +47,7 @@ h2 {
   font-size: 15px;
   font-weight: 600;
   margin: 0 0 12px;
+  text-align: center;
 }
 
 /* Small gray section labels, like "AVAILABLE CORES" */
@@ -144,4 +145,123 @@ button:disabled {
   font-size: 12px;
   min-height: 1em;
   margin: 8px 0 0;
+}
+
+/* Space between cards */
+.card + .card {
+  margin-top: 16px;
+}
+
+/* A row of settings side by side; wraps onto new lines when full */
+.setting-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 40px;
+}
+
+/* One setting: a 3-column grid, with the name centered over the switch
+   (left label | switch | right label) */
+.setting {
+  display: grid;
+  grid-template-columns: auto auto auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 8px;
+}
+
+/* Let the labels and switch sit directly in the setting's grid */
+.switch-group {
+  display: contents;
+}
+
+/* Name in the middle column above the switch; zero width so it doesn't
+   widen that column, and the text overflows evenly to both sides */
+.setting-name {
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
+  width: 0;
+  display: flex;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.label-off {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.switch {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.label-on {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.switch-label {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Highlight whichever side is active */
+.switch-group:not(:has(input:checked)) .label-off,
+.switch-group:has(input:checked) .label-on {
+  color: var(--text);
+}
+
+/* The switch itself: the real checkbox is invisible (but still clickable),
+   and the slider is drawn in its place */
+.switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+/* The knob */
+.slider::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.switch input:checked + .slider {
+  background: var(--accent);
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
+.switch input:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

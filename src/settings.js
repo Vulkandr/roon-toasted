@@ -83,3 +83,34 @@ async function switchTo(core) {
 // Load the current status once, then stay live with updates from Rust
 invoke("roon_status").then(render);
 listen("roon-status", (event) => render(event.payload));
+// ===== Toaster window size ================================================
+
+const toasterWindow = document.querySelector("#toaster-window");
+
+// Switch on = "remember" (Last Position), off = "default"
+function showSettings(settings) {
+  toasterWindow.checked = settings.toasterWindow === "remember";
+}
+
+async function setToasterWindow(remember) {
+  toasterWindow.checked = remember;
+  try {
+    await invoke("update_settings", {
+      changes: { toasterWindow: remember ? "remember" : "default" },
+    });
+  } catch (err) {
+    // Saving failed: put the switch back to what's actually saved
+    console.error(err);
+    showSettings(await invoke("get_settings"));
+  }
+}
+
+toasterWindow.addEventListener("change", () => setToasterWindow(toasterWindow.checked));
+
+// Clicking either side's label picks that side
+document.querySelector(".label-off").addEventListener("click", () => setToasterWindow(false));
+document.querySelector(".label-on").addEventListener("click", () => setToasterWindow(true));
+
+// Load the saved settings, then stay in sync with any changes
+invoke("get_settings").then(showSettings);
+listen("settings-changed", (event) => showSettings(event.payload));

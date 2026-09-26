@@ -52,9 +52,38 @@ enum ToasterMode {
     Search,
 }
 
+/// Puts a hidden Toaster back to its default size (from tauri.conf.json),
+/// centered and not maximized. Skipped if it's already on screen, so opening
+/// it again (e.g. the search hotkey) never makes an open window jump.
+fn reset_toaster_size(app: &AppHandle) {
+    let Some(window) = app.get_webview_window(TOASTER_WINDOW) else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let default = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == TOASTER_WINDOW)
+        .map(|w| (w.width, w.height));
+    let _ = window.unmaximize();
+    if let Some((width, height)) = default {
+        let _ = window.set_size(tauri::LogicalSize::new(width, height));
+    }
+    let _ = window.center();
+}
+
 /// Shows the Toaster and tells its page which mode it was opened in, via the
 /// `toaster-open` event (payload "player" or "search").
 fn open_toaster(app: &AppHandle, mode: ToasterMode) {
+    // "Default" window size means every opening, not just the first one.
+    let saved = settings::get_settings(app.clone());
+    if saved.toaster_window == settings::ToasterWindow::Default {
+        reset_toaster_size(app);
+    }
     show(app, TOASTER_WINDOW);
     let mode = match mode {
         ToasterMode::Player => "player",
