@@ -3,17 +3,14 @@
 //! Finds Roon Cores on the network, connects to exactly one of them, and keeps
 //! a live status (connected Core + every Core on the network) that the UI can
 //! read with the `roon_status` command or follow with the `roon-status` event.
-//! Zones and track changes are still only printed to the dev terminal for now.
+//! Zones and playback live in zones.rs, which this hands each connection to.
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use roon_api::{
-    ApiError, Core, FileStateStore, RoonClient, RoonClientBuilder, RoonEvent, StateStore, Zone,
-    ZoneEvent,
-};
+use roon_api::{ApiError, FileStateStore, RoonClient, RoonClientBuilder, RoonEvent, StateStore};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::broadcast::error::RecvError;
@@ -259,10 +256,11 @@ async fn run(app: AppHandle, state_path: PathBuf) -> Result<(), ApiError> {
                         });
                     });
                     // Each (re)connection gets its own zone watcher; the old one ends with its connection.
-                    tauri::async_runtime::spawn(watch_zones(core));
+                    crate::zones::attach(&events_app, core);
                 }
                 Ok(RoonEvent::CoreLost { .. }) => {
                     roon.update(|inner| inner.state = ConnectionState::Reconnecting);
+                    crate::zones::detach(&events_app);
                 }
                 Ok(_) => {}
                 // Fell behind on events; skip ahead rather than stop.
@@ -380,67 +378,5 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                 attempts.insert(core.core_id.clone(), task);
             }
         }
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Zones (dev terminal only for now)
-// ---------------------------------------------------------------------------
-
-/// Prints every zone once, then any track or play/pause change.
-async fn watch_zones(core: Core) {
-    let transport = core.transport();
-    let mut zone_events = match transport.subscribe_zones().await {
-        Ok(rx) => rx,
-        Err(e) => {
-            eprintln!("[roon] couldn't subscribe to zones: {e}");
-            return;
-        }
-    };
-
-    // Last printed status per zone, so repeated updates don't spam the terminal.
-    let mut last_status: HashMap<String, String> = HashMap::new();
-
-    while let Some(event) = zone_events.recv().await {
-        match event {
-            ZoneEvent::Initial(zones) => {
-                println!("[roon] {} zone(s):", zones.len());
-                for zone in &zones {
-                    let status = zone_status(zone);
-                    println!("[roon]   {}: {}", zone.display_name, status);
-                    last_status.insert(zone.zone_id.clone(), status);
-                }
-            }
-            ZoneEvent::Added(zones) | ZoneEvent::Changed(zones) => {
-                for zone in &zones {
-                    let status = zone_status(zone);
-                    if last_status.get(&zone.zone_id) != Some(&status) {
-                        println!("[roon] {}: {}", zone.display_name, status);
-                        last_status.insert(zone.zone_id.clone(), status);
-                    }
-                }
-            }
-            ZoneEvent::Removed(zone_ids) => {
-                for id in zone_ids {
-                    last_status.remove(&id);
-                    println!("[roon] a zone was removed ({id})");
-                }
-            }
-            // Playback position ticks roughly every second; ignored for now.
-            ZoneEvent::Seeked(_) => {}
-        }
-    }
-}
-
-/// One-line summary, e.g. "Playing | Song - Artist [has album art]".
-fn zone_status(zone: &Zone) -> String {
-    match &zone.now_playing {
-        Some(np) => format!(
-            "{:?} | {}{}",
-            zone.state,
-            np.one_line.line1,
-            if np.image_key.is_some() { " [has album art]" } else { "" }
-        ),
-        None => format!("{:?} | nothing loaded", zone.state),
     }
 }
