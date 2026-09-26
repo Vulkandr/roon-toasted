@@ -51,6 +51,9 @@ pub enum ConnectionState {
 #[serde(rename_all = "camelCase")]
 pub struct RoonStatus {
     pub state: ConnectionState,
+    /// The Core this app is set to use (remembered from the last pairing), even
+    /// before it's been found on the network. None until the first pairing.
+    pub paired_core_id: Option<String>,
     /// The Core this app is paired with (filled in once it's been seen).
     pub connected: Option<CoreInfo>,
     /// Every Core currently answering on the network, including the connected one.
@@ -59,6 +62,7 @@ pub struct RoonStatus {
 
 struct Inner {
     state: ConnectionState,
+    paired_core_id: Option<String>,
     connected: Option<CoreInfo>,
     seen: HashMap<String, (CoreInfo, Instant)>,
     last_sent: Option<RoonStatus>,
@@ -77,6 +81,7 @@ impl Roon {
         available.sort_by_key(|c| c.name.to_lowercase());
         RoonStatus {
             state: inner.state,
+            paired_core_id: inner.paired_core_id.clone(),
             connected: inner.connected.clone(),
             available,
         }
@@ -124,7 +129,7 @@ fn print_status(status: &RoonStatus) {
     let others: Vec<&str> = status
         .available
         .iter()
-        .filter(|c| status.connected.as_ref().is_none_or(|cur| cur.core_id != c.core_id))
+        .filter(|c| status.paired_core_id.as_ref() != Some(&c.core_id))
         .map(|c| c.name.as_str())
         .collect();
     if others.is_empty() {
@@ -185,6 +190,7 @@ pub fn start(app: &AppHandle) {
     app.manage(Roon {
         inner: Mutex::new(Inner {
             state: ConnectionState::Searching,
+            paired_core_id: None,
             connected: None,
             seen: HashMap::new(),
             last_sent: None,
@@ -241,6 +247,7 @@ async fn run(app: AppHandle, state_path: PathBuf) -> Result<(), ApiError> {
                     let fallback_name = core.display_name().to_string();
                     roon.update(|inner| {
                         inner.state = ConnectionState::Connected;
+                        inner.paired_core_id = Some(core_id.clone());
                         inner.connected = Some(match inner.seen.get(&core_id) {
                             Some((info, _)) => info.clone(),
                             None => CoreInfo {
@@ -283,6 +290,7 @@ async fn run(app: AppHandle, state_path: PathBuf) -> Result<(), ApiError> {
 async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Result<(), ApiError> {
     let roon = app.state::<Roon>();
     let paired = client.pairing().paired_core_id().await;
+    roon.update(|inner| inner.paired_core_id = paired.clone());
     match &paired {
         Some(id) => println!("[roon] looking for the paired Core ({id})..."),
         None => println!("[roon] searching the network for a Roon Core..."),

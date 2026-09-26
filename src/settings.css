@@ -1,0 +1,147 @@
+/* All colors in one place. Light theme first; the dark block below overrides it. */
+:root {
+  --bg: #f4f4f6;
+  --card: #ffffff;
+  --text: #1c1c1f;
+  --muted: #6b6b76;
+  --border: #e2e2e8;
+  --accent: #7b5fc7;
+  --ok: #3fb950;
+  --warn: #d29922;
+  --error: #e5484d;
+
+  font-family: "Segoe UI", system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+/* Follows the Windows light/dark setting automatically */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1f;
+    --card: #26262b;
+    --text: #ececf1;
+    --muted: #9a9aa6;
+    --border: #36363d;
+  }
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 24px;
+}
+
+h1 {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 16px;
+}
+
+h2 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+/* Small gray section labels, like "AVAILABLE CORES" */
+h3 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin: 20px 0 8px;
+}
+
+/* The rounded panel each settings section sits in */
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 16px 18px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+/* "Connected to" row: status dot + name/details */
+.current {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex-shrink: 0;
+}
+
+.dot.connected {
+  background: var(--ok);
+}
+
+.dot.searching,
+.dot.reconnecting {
+  background: var(--warn);
+}
+
+/* Available Cores list: one row per Core, Switch button on the right */
+#core-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#core-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border);
+}
+
+#core-list li:first-child {
+  border-top: none;
+}
+
+button {
+  font: inherit;
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+}
+
+button:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+button:disabled {
+  border-color: var(--border);
+  color: var(--muted);
+  background: transparent;
+  cursor: default;
+}
+
+.error {
+  color: var(--error);
+  font-size: 12px;
+  min-height: 1em;
+  margin: 8px 0 0;
+}

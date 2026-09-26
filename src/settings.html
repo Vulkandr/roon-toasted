@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roon: Toasted Settings</title>
+    <link rel="stylesheet" href="settings.css" />
+    <script type="module" src="/settings.js" defer></script>
+  </head>
+
+  <body>
+    <main>
+      <h1>Settings</h1>
+
+      <section class="card">
+        <h2>Roon Core</h2>
+
+        <div class="current">
+          <span id="status-dot" class="dot"></span>
+          <div>
+            <div id="core-name">Looking for your Roon Core...</div>
+            <div id="core-detail" class="muted"></div>
+          </div>
+        </div>
+
+        <h3>Available Cores</h3>
+        <ul id="core-list"></ul>
+        <p id="core-error" class="error"></p>
+      </section>
+    </main>
+  </body>
+</html>
