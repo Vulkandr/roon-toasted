@@ -32,7 +32,13 @@ tracing-subscriber = "0.3"
 # Desktop-only plugins
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
 
+
+# Use the local copy of roon-api in vendor/roon-api, which fixes shuffle/repeat/
+# Roon Radio changes (see vendor/roon-api/VENDORED.md).
+[patch.crates-io]
+roon-api = { path = "vendor/roon-api" }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

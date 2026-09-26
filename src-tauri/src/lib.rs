@@ -13,6 +13,26 @@ mod zones;
 const TOASTER_WINDOW: &str = "toaster";
 const SETTINGS_WINDOW: &str = "settings";
 
+/// What gets saved and restored for the Toaster when "remember size" is on.
+/// (Not visibility: the Toaster should never pop open on its own at launch.)
+#[cfg(desktop)]
+const WINDOW_STATE: tauri_plugin_window_state::StateFlags =
+    tauri_plugin_window_state::StateFlags::SIZE
+        .union(tauri_plugin_window_state::StateFlags::POSITION)
+        .union(tauri_plugin_window_state::StateFlags::MAXIMIZED);
+
+/// Saves the Toaster's current size/position right away (the plugin also saves
+/// when the app exits), so it isn't lost if the app is ever force-closed.
+fn save_window_state(app: &AppHandle) {
+    #[cfg(desktop)]
+    {
+        use tauri_plugin_window_state::AppHandleExt;
+        let _ = app.save_window_state(WINDOW_STATE);
+    }
+    #[cfg(not(desktop))]
+    let _ = app;
+}
+
 /// Brings a window to the front, un-hiding and un-minimizing it if needed.
 fn show(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
@@ -60,6 +80,7 @@ fn open_window(app: AppHandle, window: String) -> Result<(), String> {
 #[tauri::command]
 fn hide_window(window: WebviewWindow) {
     let _ = window.hide();
+    save_window_state(window.app_handle());
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -90,6 +111,17 @@ pub fn run() {
             };
             open_toaster(app, mode);
         }));
+
+        // Tracks the Toaster's size/position so it can reopen where it was left.
+        // Restoring is done in setup() (only when the setting says "remember"),
+        // and the Settings window isn't tracked at all: it always opens centered.
+        builder = builder.plugin(
+            tauri_plugin_window_state::Builder::new()
+                .with_state_flags(WINDOW_STATE)
+                .with_denylist(&[SETTINGS_WINDOW])
+                .skip_initial_state(TOASTER_WINDOW)
+                .build(),
+        );
     }
 
     builder
@@ -136,6 +168,18 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            // Reopen the Toaster at its last size/position if the user chose that.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_window_state::WindowExt;
+                let saved = settings::get_settings(app.handle().clone());
+                if saved.toaster_window == settings::ToasterWindow::Remember {
+                    if let Some(toaster) = app.get_webview_window(TOASTER_WINDOW) {
+                        let _ = toaster.restore_state(WINDOW_STATE);
+                    }
+                }
+            }
+
             // Zone state has to exist before the Roon connection starts feeding it.
             app.manage(zones::Zones::new(app.handle()));
             // Connect to Roon in the background.
@@ -149,11 +193,14 @@ pub fn run() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                save_window_state(window.app_handle());
             }
         })
         .invoke_handler(tauri::generate_handler![
             open_window,
             hide_window,
+            settings::get_settings,
+            settings::update_settings,
             roon::roon_status,
             roon::switch_core,
             zones::roon_zones,

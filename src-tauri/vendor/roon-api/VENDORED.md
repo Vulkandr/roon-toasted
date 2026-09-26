@@ -1,0 +1,22 @@
+# Vendored copy of roon-api
+
+This folder is a local copy of the `roon-api` crate, version 0.5.3, from
+https://github.com/shin1ohno/roon-rs (Copyright (c) 2026 shin1ohno), used under
+the MIT license (see LICENSE-MIT; the crate is dual-licensed MIT OR Apache-2.0,
+see LICENSE-APACHE).
+
+`src-tauri/Cargo.toml` swaps it in for the crates.io version with a
+`[patch.crates-io]` entry.
+
+## Changes from the published 0.5.3
+
+1. `src/transport.rs`, `change_settings()`: the settings (shuffle, loop,
+   auto_radio) are now sent as top-level fields next to `zone_or_output_id`,
+   matching RoonLabs' official node-roon-api-transport. The published version
+   wraps them in a `"settings"` object, which Roon ignores, so shuffle, repeat
+   and Roon Radio changes silently did nothing.
+2. `Cargo.toml`: removed the example, test and dev-dependency entries, since
+   those files aren't included here.
+
+If a future roon-api release fixes change_settings, remove this folder and the
+`[patch.crates-io]` entry and go back to the published crate.

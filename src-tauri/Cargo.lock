@@ -3069,8 +3069,6 @@ dependencies = [
 [[package]]
 name = "roon-api"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "42c370d32f273fe591b93f015e1e1b579c9204699ff97d08ae587a3cc5bd7e35"
 dependencies = [
  "reqwest 0.12.28",
  "roon-moo",
@@ -3124,6 +3122,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
+ "tauri-plugin-window-state",
  "tokio",
  "tracing-subscriber",
 ]
@@ -3948,6 +3947,21 @@ dependencies = [
  "tracing",
  "windows-sys 0.60.2",
  "zbus",
+]
+
+[[package]]
+name = "tauri-plugin-window-state"
+version = "2.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73736611e14142408d15353e21e3cca2f12a3cfb523ad0ce85999b6d2ef1a704"
+dependencies = [
+ "bitflags 2.13.2",
+ "log",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-plugin",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
