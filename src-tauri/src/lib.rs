@@ -4,6 +4,8 @@ use tauri::{
     AppHandle, Manager, WindowEvent,
 };
 
+mod roon;
+
 // Label of the settings window, as set in tauri.conf.json.
 const SETTINGS_WINDOW: &str = "settings";
 
@@ -24,6 +26,12 @@ fn show_settings(app: &AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Dev builds: print warnings from libraries (like roon-api) to the terminal.
+    #[cfg(debug_assertions)]
+    let _ = tracing_subscriber::fmt()
+        .with_max_level(tracing_subscriber::filter::LevelFilter::WARN)
+        .try_init();
+
     let mut builder = tauri::Builder::default();
 
     // Only one copy of the app may run at a time. Launching it again just
@@ -69,6 +77,9 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Connect to Roon in the background.
+            roon::start(app.handle());
 
             Ok(())
         })
