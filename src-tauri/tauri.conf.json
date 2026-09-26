@@ -10,9 +10,12 @@
     "withGlobalTauri": true,
     "windows": [
       {
-        "title": "roon-toasted",
+        "label": "settings",
+        "title": "Roon: Toasted",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "center": true,
+        "visible": false
       }
     ],
     "security": {
