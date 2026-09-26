@@ -10,6 +10,15 @@
     "withGlobalTauri": true,
     "windows": [
       {
+        "label": "toaster",
+        "url": "toaster.html",
+        "title": "Roon: Toasted",
+        "width": 420,
+        "height": 640,
+        "center": true,
+        "visible": false
+      },
+      {
         "label": "settings",
         "url": "settings.html",
         "title": "Roon: Toasted Settings",
