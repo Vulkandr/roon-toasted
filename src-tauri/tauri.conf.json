@@ -15,11 +15,15 @@
         "url": "toaster.html",
         "title": "Roon: Toasted",
         "width": 460,
-        "height": 900,
+        "height": 935,
         "minWidth": 400,
-        "minHeight": 837,
+        "minHeight": 872,
         "center": true,
-        "visible": false
+        "visible": false,
+        "decorations": false,
+        "shadow": true,
+        "skipTaskbar": true,
+        "minimizable": false
       },
       {
         "label": "settings",
@@ -27,7 +31,7 @@
         "url": "settings.html",
         "title": "Roon: Toasted Settings",
         "width": 800,
-        "height": 735,
+        "height": 915,
         "center": true,
         "visible": false
       }

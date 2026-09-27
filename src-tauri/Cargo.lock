@@ -3125,6 +3125,7 @@ dependencies = [
  "tauri-plugin-window-state",
  "tokio",
  "tracing-subscriber",
+ "windows",
 ]
 
 [[package]]

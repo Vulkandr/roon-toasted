@@ -108,6 +108,61 @@ fn open_window(app: AppHandle, window: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Hides the Toaster (and Settings with it) once neither of them has focus,
+/// if the "Hide on Click Away" setting is on. The two count as one group:
+/// moving between them hides nothing. Settings opened on its own (with the
+/// Toaster closed) stays open, e.g. while enabling the extension in Roon.
+/// Waits a moment and checks again, so a brief focus flicker (a window being
+/// shown, or focus passing from one to the other) doesn't hide anything.
+fn hide_if_app_unfocused(app: AppHandle) {
+    if !settings::get_settings(app.clone()).hide_on_blur {
+        return;
+    }
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        let toaster = app.get_webview_window(TOASTER_WINDOW);
+        let settings = app.get_webview_window(SETTINGS_WINDOW);
+        let focused =
+            |w: &Option<WebviewWindow>| w.as_ref().is_some_and(|w| w.is_focused().unwrap_or(false));
+        if focused(&toaster) || focused(&settings) {
+            return;
+        }
+        let Some(toaster) = toaster else {
+            return;
+        };
+        if !toaster.is_visible().unwrap_or(false) {
+            return;
+        }
+        let _ = toaster.hide();
+        if let Some(settings) = settings {
+            let _ = settings.hide();
+        }
+        save_window_state(&app);
+    });
+}
+
+/// Asks Windows 11 for rounded corners on the frameless Toaster (Windows
+/// doesn't round frameless windows on its own; maximized windows stay square).
+/// Does nothing on Windows 10, which has no rounded corners.
+#[cfg(windows)]
+fn round_corners(window: &WebviewWindow) {
+    use windows::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    if let Ok(hwnd) = window.hwnd() {
+        let preference = DWMWCP_ROUND;
+        // SAFETY: a valid window handle, and a pointer to a value of the size given.
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                &preference as *const _ as *const core::ffi::c_void,
+                std::mem::size_of_val(&preference) as u32,
+            );
+        }
+    }
+}
+
 /// Hides the window that calls it, e.g. when Escape is pressed.
 #[tauri::command]
 fn hide_window(window: WebviewWindow) {
@@ -213,6 +268,11 @@ pub fn run() {
                 })
                 .build(app)?;
 
+            #[cfg(windows)]
+            if let Some(toaster) = app.get_webview_window(TOASTER_WINDOW) {
+                round_corners(&toaster);
+            }
+
             // Reopen the Toaster at its last size/position if the user chose that.
             #[cfg(desktop)]
             {
@@ -232,14 +292,31 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|window, event| match event {
             // Closing any window hides it instead of quitting.
             // The app keeps running in the tray until "Quit" is chosen.
-            if let WindowEvent::CloseRequested { api, .. } = event {
+            WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();
                 save_window_state(window.app_handle());
+                // Closing Settings goes back to the Toaster if it's open, so
+                // focus doesn't land elsewhere and hide it too.
+                if window.label() == SETTINGS_WINDOW {
+                    if let Some(toaster) = window.app_handle().get_webview_window(TOASTER_WINDOW) {
+                        if toaster.is_visible().unwrap_or(false) {
+                            let _ = toaster.set_focus();
+                        }
+                    }
+                }
             }
+            // Clicking outside the Toaster and Settings sends them back to the
+            // tray (a setting, on by default).
+            WindowEvent::Focused(false)
+                if matches!(window.label(), TOASTER_WINDOW | SETTINGS_WINDOW) =>
+            {
+                hide_if_app_unfocused(window.app_handle().clone());
+            }
+            _ => {}
         })
         .invoke_handler(tauri::generate_handler![
             open_window,

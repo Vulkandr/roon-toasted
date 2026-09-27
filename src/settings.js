@@ -150,3 +150,56 @@ zoomReset.addEventListener("click", () => saveZoomSetting({ zoom: 1 }));
 
 invoke("get_settings").then(showZoom);
 listen("settings-changed", (event) => showZoom(event.payload));
+
+// ===== Hide on click away =================================================
+
+const hideOnBlur = document.querySelector("#hide-on-blur");
+const blurGroup = document.querySelector("#blur-group");
+
+function showHideOnBlur(settings) {
+  hideOnBlur.checked = settings.hideOnBlur;
+}
+
+async function setHideOnBlur(on) {
+  hideOnBlur.checked = on;
+  try {
+    await invoke("update_settings", { changes: { hideOnBlur: on } });
+  } catch (err) {
+    console.error(err);
+    showHideOnBlur(await invoke("get_settings"));
+  }
+}
+
+hideOnBlur.addEventListener("change", () => setHideOnBlur(hideOnBlur.checked));
+blurGroup.querySelector(".label-off").addEventListener("click", () => setHideOnBlur(false));
+blurGroup.querySelector(".label-on").addEventListener("click", () => setHideOnBlur(true));
+
+invoke("get_settings").then(showHideOnBlur);
+listen("settings-changed", (event) => showHideOnBlur(event.payload));
+
+// ===== Toaster colors =====================================================
+
+const toasterColors = document.querySelector("#toaster-colors");
+const colorsGroup = document.querySelector("#colors-group");
+
+// Switch on = "album" (Album Art), off = "default"
+function showColors(settings) {
+  toasterColors.checked = settings.toasterColors === "album";
+}
+
+async function setColors(album) {
+  toasterColors.checked = album;
+  try {
+    await invoke("update_settings", { changes: { toasterColors: album ? "album" : "default" } });
+  } catch (err) {
+    console.error(err);
+    showColors(await invoke("get_settings"));
+  }
+}
+
+toasterColors.addEventListener("change", () => setColors(toasterColors.checked));
+colorsGroup.querySelector(".label-off").addEventListener("click", () => setColors(false));
+colorsGroup.querySelector(".label-on").addEventListener("click", () => setColors(true));
+
+invoke("get_settings").then(showColors);
+listen("settings-changed", (event) => showColors(event.payload));

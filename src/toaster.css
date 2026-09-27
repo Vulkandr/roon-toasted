@@ -1,3 +1,35 @@
+/* The colors that album colors change, registered so they can fade
+   smoothly from one album to the next (see "Album colors" in toaster.js) */
+@property --accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #7b5fc7;
+}
+
+@property --bg {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #1b1b1f;
+}
+
+@property --card {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #26262b;
+}
+
+@property --track {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #3a3a42;
+}
+
+@property --border {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #36363d;
+}
+
 /* Same palette as Settings so the two windows match.
    Light theme first; the dark block below overrides it. */
 :root {
@@ -14,6 +46,12 @@
   font-size: 14px;
   color: var(--text);
   background: var(--bg);
+  transition:
+    --accent 0.6s ease,
+    --bg 0.6s ease,
+    --card 0.6s ease,
+    --track 0.6s ease,
+    --border 0.6s ease;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1329,4 +1367,74 @@ input[type="range"]:disabled {
   white-space: nowrap;
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
   pointer-events: none;
+}
+
+/* Window bar: replaces the Windows title bar (drag to move, double-click to
+   maximize; the corners are rounded by Windows 11 itself) */
+.titlebar {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 32px;
+  padding-left: 12px;
+}
+
+.titlebar-logo {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  background: var(--text);
+  -webkit-mask: url("assets/logo-mask.png") center / contain no-repeat;
+  mask: url("assets/logo-mask.png") center / contain no-repeat;
+}
+
+.titlebar-title {
+  flex: 1;
+  margin-left: 8px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Maximize and Close, sized like Windows' own buttons */
+.win-btn {
+  width: 46px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  color: var(--text);
+}
+
+.win-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.win-btn:hover {
+  background: var(--hover);
+}
+
+.win-btn.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+/* Square when normal, two squares ("restore") when maximized */
+#win-maximize .icon-restore,
+#win-maximize.maximized .icon-maximize {
+  display: none;
+}
+
+#win-maximize.maximized .icon-restore {
+  display: block;
+}
+
+/* Album colors: a soft glow of the album's color behind the art */
+.album-colors #tab-playing.active {
+  background: radial-gradient(
+    ellipse 90% 60% at 50% 35%,
+    color-mix(in srgb, var(--accent) 20%, transparent),
+    transparent 75%
+  );
 }

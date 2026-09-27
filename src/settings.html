@@ -54,6 +54,28 @@
               <span class="switch-label label-on">On</span>
             </div>
           </div>
+          <div class="setting">
+            <span class="setting-name">Hide on Click Away</span>
+            <div class="switch-group" id="blur-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="hide-on-blur" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting">
+            <span class="setting-name">Colors</span>
+            <div class="switch-group" id="colors-group">
+              <span class="switch-label label-off">Default</span>
+              <label class="switch">
+                <input type="checkbox" id="toaster-colors" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Album Art</span>
+            </div>
+          </div>
         </div>
       </section>
 
@@ -70,6 +92,17 @@
           the Toaster bigger or smaller in 5% steps, and Ctrl + Enter goes back to 100%. When
           off, those keys do nothing. Now at <span id="zoom-now">100%</span>
           <button id="zoom-reset">Reset to 100%</button>
+        </p>
+        <p>
+          <strong>Hide on Click Away:</strong> When on, clicking anywhere outside the Toaster
+          sends it back to the tray, like pressing &times;, along with Settings if it's open.
+          Moving between the two doesn't hide anything. When off, the Toaster stays open until
+          you close it or press Escape.
+        </p>
+        <p>
+          <strong>Colors:</strong> Default keeps the Toaster purple. Album Art takes its colors
+          from the album that's playing and fades to the next album's colors when the track
+          changes. Black-and-white art keeps the default colors.
         </p>
       </section>
     </main>

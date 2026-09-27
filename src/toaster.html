@@ -12,6 +12,20 @@
   <!-- Icons: Lucide (https://lucide.dev), ISC License, Copyright (c) Lucide Contributors -->
 
   <body>
+    <!-- Window bar (the Windows title bar is turned off): drag it to move the
+         window, double-click it to maximize -->
+    <div class="titlebar" data-tauri-drag-region="deep">
+      <span class="titlebar-logo"></span>
+      <span class="titlebar-title">Roon: Toasted</span>
+      <button id="win-maximize" class="win-btn" title="Maximize">
+        <svg class="icon-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+        <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="8" width="11" height="11" rx="1"/><path d="M8 8V6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-2"/></svg>
+      </button>
+      <button id="win-close" class="win-btn close" title="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+
     <!-- Header: current zone + settings -->
     <header class="top">
       <button id="zone-button" class="zone-button" title="Choose zone">

@@ -25,8 +25,12 @@ pub struct AppSettings {
     /// which is really `BASE_ZOOM`). Everything (text, spacing, art) scales
     /// together. Allowed range: `ZOOM_RANGE`.
     pub zoom: f64,
-    /// Whether Ctrl + / Ctrl - / Ctrl 0 / Ctrl + mouse wheel change the zoom.
+    /// Whether Ctrl + / Ctrl - / Ctrl + Enter / Ctrl + mouse wheel change the zoom.
     pub zoom_hotkeys: bool,
+    /// Whether the Toaster goes back to the tray when another window is clicked.
+    pub hide_on_blur: bool,
+    /// The Toaster's colors: the default purple, or taken from the album art.
+    pub toaster_colors: ToasterColors,
 }
 
 impl Default for AppSettings {
@@ -36,6 +40,8 @@ impl Default for AppSettings {
             toaster_window: ToasterWindow::default(),
             zoom: 1.0,
             zoom_hotkeys: true,
+            hide_on_blur: true,
+            toaster_colors: ToasterColors::default(),
         }
     }
 }
@@ -63,6 +69,16 @@ pub enum ToasterWindow {
     Default,
     /// Reopen at the size, position and maximized state it was last left in.
     Remember,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ToasterColors {
+    /// The purple theme.
+    #[default]
+    Default,
+    /// Accent and background tint from the album that's playing.
+    Album,
 }
 
 pub fn path(app: &AppHandle) -> Option<PathBuf> {

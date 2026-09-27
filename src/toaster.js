@@ -205,6 +205,22 @@ $("#open-settings").addEventListener("click", () => {
   send("open_window", { window: "settings" });
 });
 
+// Window bar: × hides to the tray (like Escape), □ maximizes or restores
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+const maximizeBtn = $("#win-maximize");
+
+$("#win-close").addEventListener("click", () => send("hide_window"));
+maximizeBtn.addEventListener("click", () => appWindow.toggleMaximize());
+
+// Shows the restore icon while maximized (checked whenever the size changes)
+async function updateMaximizeButton() {
+  const maximized = await appWindow.isMaximized();
+  maximizeBtn.classList.toggle("maximized", maximized);
+  maximizeBtn.title = maximized ? "Restore" : "Maximize";
+}
+window.addEventListener("resize", updateMaximizeButton);
+updateMaximizeButton();
+
 // ===== 5. Rendering =======================================================
 
 function render(payload) {
@@ -233,6 +249,7 @@ function render(payload) {
       } else {
         art.removeAttribute("src");
       }
+      applyAlbumColors();
     }
 
     title.textContent = np.title;
@@ -1207,7 +1224,155 @@ document.addEventListener(
   { passive: false },
 );
 
-// ===== 14. Start ===========================================================
+// ===== 14. Album colors ===================================================
+//
+// With Settings > Colors on "Album Art", the Toaster takes its accent color
+// and a background tint from the album that's playing, and fades to the next
+// album's colors (the fade itself is CSS: see @property in toaster.css).
+// Art without a clear color (black and white, greys) keeps the default colors.
+
+const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+const ALBUM_COLOR_PROPS = ["--accent", "--bg", "--card", "--track", "--border"];
+const albumHueCache = new Map(); // image key -> { h, s }, or null for no clear color
+let colorsMode = "default"; // "default" or "album", from Settings
+
+function hsl(h, s, l) {
+  return `hsl(${Math.round(h)} ${Math.round(s * 100)}% ${Math.round(l * 100)}%)`;
+}
+
+// [hue 0-360, saturation 0-1, lightness 0-1]
+function rgbToHsl(r, g, b) {
+  r /= 255;
+  g /= 255;
+  b /= 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let h;
+  if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+  else if (max === g) h = (b - r) / d + 2;
+  else h = (r - g) / d + 4;
+  return [h * 60, s, l];
+}
+
+// The album's main color as { h, s }, or null when the art has no clear color.
+// Colorful pixels are grouped into 24 hue slices (15° each), weighting vivid,
+// mid-brightness pixels most; the heaviest slice (counting half of each
+// neighbour, so a color on a slice edge isn't split) is the album's color.
+async function albumHue(imageKey) {
+  if (albumHueCache.has(imageKey)) return albumHueCache.get(imageKey);
+
+  const img = new Image();
+  img.crossOrigin = "anonymous"; // the art server allows reading its pixels
+  img.src = convertFileSrc(imageKey, "roonimg") + "?width=64&height=64";
+  await img.decode();
+
+  const size = 32;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, size, size);
+  const pixels = ctx.getImageData(0, 0, size, size).data;
+
+  const slices = Array.from({ length: 24 }, () => ({ weight: 0, x: 0, y: 0, s: 0 }));
+  let colorful = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    const [h, s, l] = rgbToHsl(pixels[i], pixels[i + 1], pixels[i + 2]);
+    if (s < 0.25 || l < 0.12 || l > 0.9) continue;
+    const weight = s * (1 - Math.abs(l - 0.5));
+    const slice = slices[Math.floor(h / 15) % 24];
+    slice.weight += weight;
+    // Hue averaged as an angle, so 355° and 5° average to 0°, not 180°
+    slice.x += Math.cos((h * Math.PI) / 180) * weight;
+    slice.y += Math.sin((h * Math.PI) / 180) * weight;
+    slice.s += s * weight;
+    colorful++;
+  }
+
+  let result = null;
+  if (colorful >= size * size * 0.04) {
+    const score = (i) =>
+      slices[i].weight + 0.5 * (slices[(i + 23) % 24].weight + slices[(i + 1) % 24].weight);
+    let best = 0;
+    for (let i = 1; i < 24; i++) if (score(i) > score(best)) best = i;
+    const slice = slices[best];
+    if (slice.weight > 0) {
+      const h = ((Math.atan2(slice.y, slice.x) * 180) / Math.PI + 360) % 360;
+      result = { h, s: slice.s / slice.weight };
+    }
+  }
+  albumHueCache.set(imageKey, result);
+  return result;
+}
+
+// The Toaster's colors for an album color, in dark or light mode
+function albumPalette({ h, s }, dark) {
+  const vivid = Math.min(0.85, Math.max(0.5, s));
+  const tint = Math.min(0.3, s * 0.5);
+  // Light hues (yellows, greens, cyans) get a darker accent so white icons on
+  // it (the play button) stay readable
+  const lightHue = h >= 40 && h <= 190;
+  if (dark) {
+    return {
+      "--accent": hsl(h, vivid, lightHue ? 0.45 : 0.58),
+      "--bg": hsl(h, tint, 0.1),
+      "--card": hsl(h, tint, 0.15),
+      "--track": hsl(h, tint, 0.25),
+      "--border": hsl(h, tint, 0.21),
+    };
+  }
+  return {
+    "--accent": hsl(h, vivid, lightHue ? 0.36 : 0.44),
+    "--bg": hsl(h, tint, 0.95),
+    "--card": hsl(h, tint * 0.6, 0.99),
+    "--track": hsl(h, tint, 0.84),
+    "--border": hsl(h, tint, 0.88),
+  };
+}
+
+// Sets the colors for the current album (or back to default)
+async function applyAlbumColors() {
+  const root = document.documentElement;
+  const key = artKey;
+  root.classList.toggle("album-colors", colorsMode === "album");
+
+  let hue = null;
+  if (colorsMode === "album" && key) {
+    try {
+      hue = await albumHue(key);
+    } catch (err) {
+      console.warn("album colors", err);
+    }
+    if (key !== artKey) return; // the art changed meanwhile; that call wins
+  }
+
+  if (hue) {
+    for (const [name, value] of Object.entries(albumPalette(hue, darkScheme.matches))) {
+      root.style.setProperty(name, value);
+    }
+  } else {
+    for (const name of ALBUM_COLOR_PROPS) root.style.removeProperty(name);
+  }
+}
+
+// Follow the Colors setting, and Windows switching between light and dark
+invoke("get_settings").then((settings) => {
+  colorsMode = settings.toasterColors;
+  applyAlbumColors();
+});
+listen("settings-changed", (event) => {
+  if (event.payload.toasterColors !== colorsMode) {
+    colorsMode = event.payload.toasterColors;
+    applyAlbumColors();
+  }
+});
+darkScheme.addEventListener("change", applyAlbumColors);
+
+// ===== 15. Start ===========================================================
 
 // Load the current state once, then follow live updates from Rust
 invoke("roon_zones").then(render);
