@@ -10,7 +10,10 @@
 //!   free space; the height follows the taskbar's.
 //! - Clicking the taskbar raises it above the widget, so the widget puts
 //!   itself back on top whenever another window comes to the front, and once
-//!   a second in case that was missed.
+//!   a second checks whether the taskbar is above it, or whether Windows
+//!   moved it (screen changes, e.g. switching HDR on or off, can do that).
+//! - Every 30 seconds it's also put back in place and on top from scratch,
+//!   so anything the checks miss sorts itself out.
 //! - It hides while the taskbar is hidden (auto-hide), sideways (docked left
 //!   or right), or while a full-screen app or game is running.
 //! - Once a second it also follows the taskbar if it moves or changes size
@@ -93,9 +96,15 @@ mod windows_widget {
         let app = app.clone();
         tauri::async_runtime::spawn(async move {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
+            let mut seconds: u32 = 0;
             loop {
                 tick.tick().await;
-                update(&app);
+                seconds = seconds.wrapping_add(1);
+                if seconds % 30 == 0 {
+                    reset(&app);
+                } else {
+                    update(&app);
+                }
             }
         });
     }
@@ -108,6 +117,16 @@ mod windows_widget {
     /// Shows the widget where it belongs, or hides it when it's off or
     /// shouldn't be showing right now.
     pub fn update(app: &AppHandle) {
+        place_or_hide(app, false);
+    }
+
+    /// Like `update`, but puts the widget back in place and on top from
+    /// scratch even if it looks fine (every 30 seconds, as a safety net).
+    fn reset(app: &AppHandle) {
+        place_or_hide(app, true);
+    }
+
+    fn place_or_hide(app: &AppHandle, from_scratch: bool) {
         let Some(hwnd) = widget_hwnd() else {
             return;
         };
@@ -123,11 +142,76 @@ mod windows_widget {
         let before = std::mem::replace(&mut *PLACED.lock().unwrap(), target);
         SHOWING.store(target.is_some(), Ordering::Relaxed);
         match target {
-            Some(rect) if before != Some(rect) => place(hwnd, rect),
-            // Already there: just make sure it's still above the taskbar
+            Some(rect) if from_scratch => {
+                drop_from_top(hwnd);
+                place(hwnd, rect);
+            }
+            // Not where it should be (or not showing): Windows may have moved
+            // it, e.g. when the screen was reset for HDR
+            Some(rect) if before != Some(rect) || current_rect(hwnd) != Some(rect) => {
+                place(hwnd, rect)
+            }
+            // In place: just make sure it's still above the taskbar
             Some(_) => bring_to_top(hwnd),
             None if before.is_some() => hide(hwnd),
             None => {}
+        }
+    }
+
+    /// Where the widget actually is (x, y, width, height), if it's showing.
+    fn current_rect(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, IsWindowVisible};
+        let mut rect = RECT::default();
+        // SAFETY: a valid window handle and out-pointer.
+        unsafe {
+            if !IsWindowVisible(hwnd).as_bool() {
+                return None;
+            }
+            GetWindowRect(hwnd, &mut rect).ok()?;
+        }
+        Some((rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top))
+    }
+
+    /// Whether the taskbar is above the widget (it can raise itself over
+    /// other always-on-top windows when clicked, or after a screen change).
+    fn taskbar_above(hwnd: HWND) -> bool {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetWindow, GW_HWNDPREV};
+        // SAFETY: plain window queries.
+        unsafe {
+            let Ok(taskbar) = FindWindowW(w!("Shell_TrayWnd"), None) else {
+                return false;
+            };
+            // Walk up from the widget through the windows above it
+            let mut window = hwnd;
+            for _ in 0..1000 {
+                match GetWindow(window, GW_HWNDPREV) {
+                    Ok(above) if above == taskbar => return true,
+                    Ok(above) if !above.is_invalid() => window = above,
+                    _ => return false,
+                }
+            }
+            false
+        }
+    }
+
+    /// Takes the widget out of the always-on-top group for a moment, so
+    /// putting it back makes Windows sort it to the very top again.
+    fn drop_from_top(hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, HWND_NOTOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        };
+        // SAFETY: a valid window handle.
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                Some(HWND_NOTOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -222,7 +306,18 @@ mod windows_widget {
         }
     }
 
+    /// Puts the widget above other windows again; if the taskbar is still
+    /// above it after that, takes it out of the always-on-top group and back
+    /// in, which Windows can't ignore.
     fn bring_to_top(hwnd: HWND) {
+        raise(hwnd);
+        if taskbar_above(hwnd) {
+            drop_from_top(hwnd);
+            raise(hwnd);
+        }
+    }
+
+    fn raise(hwnd: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
             SetWindowPos, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         };
