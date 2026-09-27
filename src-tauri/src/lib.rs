@@ -1,6 +1,4 @@
 use tauri::{
-    menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
     webview::PageLoadEvent,
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
@@ -12,12 +10,13 @@ mod queue;
 mod roon;
 mod settings;
 mod toast;
+mod tray;
 mod zones;
 
 // Window labels, as set in tauri.conf.json.
 /// The Toaster: the app's main screen (now playing, queue, browse/search, zones).
 pub(crate) const TOASTER_WINDOW: &str = "toaster";
-const SETTINGS_WINDOW: &str = "settings";
+pub(crate) const SETTINGS_WINDOW: &str = "settings";
 
 /// What gets saved and restored for the Toaster when "remember size" is on.
 /// (Not visibility: the Toaster should never pop open on its own at launch.)
@@ -40,7 +39,7 @@ fn save_window_state(app: &AppHandle) {
 }
 
 /// Brings a window to the front, un-hiding and un-minimizing it if needed.
-fn show(app: &AppHandle, label: &str) {
+pub(crate) fn show(app: &AppHandle, label: &str) {
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.unminimize();
         let _ = window.show();
@@ -125,12 +124,12 @@ fn open_window(app: AppHandle, window: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Hides the Toaster (and Settings with it) once neither of them has focus,
-/// if the "Hide on Click Away" setting is on. The two count as one group:
-/// moving between them hides nothing. Settings opened on its own (with the
-/// Toaster closed) stays open, e.g. while enabling the extension in Roon.
-/// Waits a moment and checks again, so a brief focus flicker (a window being
-/// shown, or focus passing from one to the other) doesn't hide anything.
+/// Hides the Toaster and Settings once neither of them has focus, if the
+/// "Auto-Hide" setting is on. The two count as one group: moving
+/// between them hides nothing. Settings opened on its own (Toaster closed)
+/// hides the same way. Waits a moment and checks again, so a brief focus
+/// flicker (a window being shown, or focus passing from one to the other)
+/// doesn't hide anything.
 fn hide_if_app_unfocused(app: AppHandle) {
     if !settings::get_settings(app.clone()).hide_on_blur {
         return;
@@ -144,15 +143,10 @@ fn hide_if_app_unfocused(app: AppHandle) {
         if focused(&toaster) || focused(&settings) {
             return;
         }
-        let Some(toaster) = toaster else {
-            return;
-        };
-        if !toaster.is_visible().unwrap_or(false) {
-            return;
-        }
-        let _ = toaster.hide();
-        if let Some(settings) = settings {
-            let _ = settings.hide();
+        for window in [toaster, settings].into_iter().flatten() {
+            if window.is_visible().unwrap_or(false) {
+                let _ = window.hide();
+            }
         }
         save_window_state(&app);
     });
@@ -255,42 +249,8 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // Tray right-click menu
-            let open_toaster_item =
-                MenuItem::with_id(app, "open_toaster", "Open Toaster", true, None::<&str>)?;
-            let settings_item =
-                MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
-            let separator = PredefinedMenuItem::separator(app)?;
-            let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(
-                app,
-                &[&open_toaster_item, &settings_item, &separator, &quit],
-            )?;
-
-            TrayIconBuilder::with_id("tray")
-                .icon(app.default_window_icon().unwrap().clone())
-                .tooltip("Roon: Toasted")
-                .menu(&menu)
-                // Left click shouldn't pop the menu; that's reserved for double-click.
-                .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
-                    "open_toaster" => open_toaster(app, ToasterMode::Player),
-                    "settings" => show(app, SETTINGS_WINDOW),
-                    "quit" => app.exit(0),
-                    _ => {}
-                })
-                .on_tray_icon_event(|tray, event| {
-                    // Double-click opens the Toaster. Windows and Mac only; Linux trays
-                    // don't report clicks, so the menu's "Open Toaster" covers it there.
-                    if let TrayIconEvent::DoubleClick {
-                        button: MouseButton::Left,
-                        ..
-                    } = event
-                    {
-                        open_toaster(tray.app_handle(), ToasterMode::Player);
-                    }
-                })
-                .build(app)?;
+            // Tray icon and its right-click menu (see tray.rs)
+            tray::build(app)?;
 
             #[cfg(windows)]
             for label in [TOASTER_WINDOW, SETTINGS_WINDOW, toast::TOAST_WINDOW] {
@@ -310,6 +270,9 @@ pub fn run() {
                     }
                 }
             }
+
+            // Taskbar buttons only when "Auto-Hide" is off
+            settings::apply_taskbar(app.handle());
 
             // The global hotkeys from Settings
             #[cfg(desktop)]

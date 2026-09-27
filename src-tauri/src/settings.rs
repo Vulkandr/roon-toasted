@@ -27,7 +27,9 @@ pub struct AppSettings {
     pub zoom: f64,
     /// Whether Ctrl + / Ctrl - / Ctrl + Enter / Ctrl + mouse wheel change the zoom.
     pub zoom_hotkeys: bool,
-    /// Whether the Toaster goes back to the tray when another window is clicked.
+    /// Auto-Hide: whether the Toaster (and Settings) go back to the tray when
+    /// another window is clicked.
+    /// When off, it gets a taskbar button instead (see `apply_taskbar`).
     pub hide_on_blur: bool,
     /// The Toaster's colors: the default purple, or taken from the album art.
     pub toaster_colors: ToasterColors,
@@ -88,6 +90,20 @@ pub fn apply_zoom(app: &AppHandle) {
     for label in [crate::TOASTER_WINDOW, crate::toast::TOAST_WINDOW] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.set_zoom(zoom);
+        }
+    }
+}
+
+/// Gives the Toaster and Settings taskbar buttons (and places in Alt+Tab)
+/// when "Auto-Hide" is off: they then stay open behind other windows,
+/// and without a button there'd be no way back except the tray or a hotkey.
+/// With the setting on they live in the tray only (applied at startup and
+/// when it changes).
+pub fn apply_taskbar(app: &AppHandle) {
+    let in_tray_only = get_settings(app.clone()).hide_on_blur;
+    for label in [crate::TOASTER_WINDOW, crate::SETTINGS_WINDOW] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.set_skip_taskbar(in_tray_only);
         }
     }
 }
@@ -194,9 +210,13 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     if updated.zoom != before.zoom {
         apply_zoom(&app);
     }
+    if updated.hide_on_blur != before.hide_on_blur {
+        apply_taskbar(&app);
+    }
     if updated.hotkeys_enabled != before.hotkeys_enabled {
         crate::hotkeys::register_saved(&app);
     }
+    crate::tray::sync(&app, &updated);
     let _ = app.emit("settings-changed", &updated);
     Ok(updated)
 }

@@ -151,7 +151,7 @@ zoomReset.addEventListener("click", () => saveZoomSetting({ zoom: 1 }));
 invoke("get_settings").then(showZoom);
 listen("settings-changed", (event) => showZoom(event.payload));
 
-// ===== Hide on click away =================================================
+// ===== Auto-Hide (hides on click away) ====================================
 
 const hideOnBlur = document.querySelector("#hide-on-blur");
 const blurGroup = document.querySelector("#blur-group");

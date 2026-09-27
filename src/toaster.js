@@ -26,6 +26,7 @@ const nextBtn = $("#next");
 const repeatBtn = $("#repeat");
 const radioBtn = $("#radio");
 const queueText = $("#queue-text");
+const queueChip = $("#queue-chip");
 const outputBar = $("#output-bar");
 const outputName = $("#output-name");
 const muteBtn = $("#mute");
@@ -280,6 +281,8 @@ function render(payload) {
   repeatBtn.classList.toggle("on", zone.loopMode !== "disabled");
   repeatBtn.classList.toggle("one", zone.loopMode === "loop_one");
   radioBtn.classList.toggle("on", zone.autoRadio);
+  // Queue chip lit like Roon Radio, except on Repeat One (the queue won't move on)
+  queueChip.classList.toggle("on", zone.loopMode !== "loop_one");
   queueShuffleBtn.classList.toggle("on", zone.shuffle);
   queueRepeatBtn.classList.toggle("on", zone.loopMode !== "disabled");
   queueRepeatBtn.classList.toggle("one", zone.loopMode === "loop_one");
@@ -366,6 +369,9 @@ repeatBtn.addEventListener("click", () => {
 radioBtn.addEventListener("click", () => {
   if (zone) send("roon_zone_settings", { zoneId: zone.zoneId, autoRadio: !zone.autoRadio });
 });
+
+// The "N in queue" chip opens the Queue tab
+queueChip.addEventListener("click", () => showTab("queue"));
 
 muteBtn.addEventListener("click", () => {
   const output = zone?.outputs[0];

@@ -135,10 +135,40 @@ pub struct Step {
     pub title: String,
 }
 
+/// Roon marks up names in subtitles as links, like "[[17431674|Kiefer]]"
+/// (its own apps show "Kiefer" as a link to the artist). Keeps just the names:
+/// "[[1|Tinashe]], [[2|Kiefer]]" -> "Tinashe, Kiefer". Only used for subtitles:
+/// titles have to stay exactly as Roon sends them, since paths match on them.
+fn plain_text(text: &str) -> String {
+    let mut plain = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("[[") {
+        plain.push_str(&rest[..start]);
+        let link = &rest[start + 2..];
+        let Some(end) = link.find("]]") else {
+            // Not really a link: keep it as it is
+            plain.push_str(&rest[start..]);
+            rest = "";
+            break;
+        };
+        let inside = &link[..end];
+        plain.push_str(inside.split_once('|').map_or(inside, |(_, name)| name));
+        rest = &link[end + 2..];
+    }
+    plain.push_str(rest);
+    plain
+}
+
+fn subtitle_text(subtitle: Option<String>) -> Option<String> {
+    subtitle
+        .map(|s| plain_text(&s))
+        .filter(|s| !s.is_empty())
+}
+
 fn item_view(item: BrowseItem) -> ItemView {
     ItemView {
         title: item.title,
-        subtitle: item.subtitle.filter(|s| !s.is_empty()),
+        subtitle: subtitle_text(item.subtitle),
         item_key: item.item_key,
         image_key: item.image_key,
         hint: item.hint,
@@ -433,7 +463,7 @@ async fn load_page(
     let result = nav.load(offset, count).await?;
     let list = result.list.map(|l| ListView {
         title: l.title,
-        subtitle: l.subtitle.filter(|s| !s.is_empty()),
+        subtitle: subtitle_text(l.subtitle),
         count: l.count,
         level: l.level,
         image_key: l.image_key,
@@ -719,4 +749,19 @@ pub async fn roon_browse_more(
         is_error: false,
         item: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::plain_text;
+
+    #[test]
+    fn roon_links_become_names() {
+        assert_eq!(plain_text("[[17431674|Kiefer]]"), "Kiefer");
+        assert_eq!(plain_text("[[1|Tinashe]], [[2|Kiefer]]"), "Tinashe, Kiefer");
+        assert_eq!(plain_text("by [[5|Harry Connick, Jr.]] (2019)"), "by Harry Connick, Jr. (2019)");
+        assert_eq!(plain_text("Plain Artist"), "Plain Artist");
+        assert_eq!(plain_text("odd [[text"), "odd [[text");
+        assert_eq!(plain_text("[[no id]]"), "no id");
+    }
 }

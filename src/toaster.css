@@ -468,11 +468,13 @@ input[type="range"]:disabled {
   height: 14px;
 }
 
-.chip.toggle:hover {
+.chip.toggle:hover,
+.chip.link:hover {
   color: var(--text);
 }
 
-.chip.toggle.on {
+.chip.toggle.on,
+.chip.link.on {
   color: var(--accent);
   border-color: var(--accent);
 }
