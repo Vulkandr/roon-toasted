@@ -161,6 +161,7 @@ pub fn run() {
         .manage(zones::Zones::default())
         .manage(queue::Queue::default())
         .manage(roon::Roon::default())
+        .manage(browse::BrowseState::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
@@ -248,6 +249,8 @@ pub fn run() {
             zones::roon_mute,
             browse::roon_browse,
             browse::roon_browse_more,
+            browse::roon_browse_path,
+            browse::roon_search,
             queue::roon_queue,
             queue::roon_play_from_here
         ])

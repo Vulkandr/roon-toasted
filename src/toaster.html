@@ -143,6 +143,29 @@
           </div>
         </div>
       </section>
+
+            <section id="tab-browse" class="page">
+        <div class="empty">Browse coming soon.</div>
+      </section>
+
+      <section id="tab-search" class="page">
+        <!-- Back / forward like Roon's (mouse side buttons work too) -->
+        <div class="nav-bar">
+          <button id="search-back" class="icon-btn" title="Back" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <button id="search-forward" class="icon-btn" title="Forward" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+          <span id="search-nav-title" class="nav-title"></span>
+        </div>
+
+        <div id="search-hint" class="empty">Type in the search bar above and press Enter.</div>
+        <div id="search-status" class="empty" hidden></div>
+
+        <!-- Filled by toaster.js: the search results, or a page opened from them -->
+        <div id="search-view"></div>
+      </section>
     </main>
 
     <!-- Footer: the zone's output and its volume -->
@@ -160,5 +183,7 @@
     </footer>
         <!-- Zone picker dropdown: filled and positioned by toaster.js -->
       <div id="zone-menu" class="zone-menu" hidden></div>
+          <!-- Play Now / Add Next / Queue menu: filled and positioned by toaster.js -->
+    <div id="action-menu" class="action-menu" hidden></div>
   </body>
-</html>
+</html>

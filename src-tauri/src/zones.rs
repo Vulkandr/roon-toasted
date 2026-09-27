@@ -297,6 +297,8 @@ pub fn attach(app: &AppHandle, core: Core) {
     // The zones were just cleared, so the queue stopped following; forget which
     // zone it followed so the first zone update re-subscribes on the new connection.
     zones.inner.lock().unwrap().queue_zone_id = None;
+    // A new connection starts Roon's browse sessions fresh.
+    app.state::<crate::browse::BrowseState>().reset();
     tauri::async_runtime::spawn(watch(app.clone(), core));
 }
 
