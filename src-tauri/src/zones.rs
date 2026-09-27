@@ -265,6 +265,7 @@ impl Zones {
         };
         if let Some(app) = self.app.get() {
             let _ = app.emit("roon-zones", &payload);
+            crate::toast::zones_updated(app, &payload);
             if let Some((core, zone_id)) = queue_change {
                 crate::queue::follow(app, core, zone_id);
             }

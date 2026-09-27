@@ -7,9 +7,11 @@ use tauri::{
 
 mod browse;
 mod hotkeys;
+mod monitors;
 mod queue;
 mod roon;
 mod settings;
+mod toast;
 mod zones;
 
 // Window labels, as set in tauri.conf.json.
@@ -215,12 +217,13 @@ pub fn run() {
         }));
 
         // Tracks the Toaster's size/position so it can reopen where it was left.
-        // Restoring is done in setup() (only when the setting says "remember"),
-        // and the Settings window isn't tracked at all: it always opens centered.
+        // Restoring is done in setup() (only when the setting says "remember").
+        // Settings always opens centered and the toast places itself (toast.rs),
+        // so neither is tracked.
         builder = builder.plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE)
-                .with_denylist(&[SETTINGS_WINDOW])
+                .with_denylist(&[SETTINGS_WINDOW, toast::TOAST_WINDOW])
                 .skip_initial_state(TOASTER_WINDOW)
                 .build(),
         );
@@ -237,15 +240,17 @@ pub fn run() {
         .manage(roon::Roon::default())
         .manage(browse::BrowseState::default())
         .manage(hotkeys::HotkeyState::default())
+        .manage(toast::ToastState::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
             zones::image_request(ctx.app_handle(), request, responder)
         })
-        // The Toaster's zoom (a setting) is applied each time its page loads,
-        // including dev-mode reloads.
+        // The zoom setting (the Toaster's, which the toast follows) is applied
+        // each time their pages load, including dev-mode reloads.
         .on_page_load(|webview, payload| {
-            if webview.label() == TOASTER_WINDOW && payload.event() == PageLoadEvent::Started {
+            let zoomed = matches!(webview.label(), TOASTER_WINDOW | toast::TOAST_WINDOW);
+            if zoomed && payload.event() == PageLoadEvent::Started {
                 settings::apply_zoom(webview.app_handle());
             }
         })
@@ -288,7 +293,7 @@ pub fn run() {
                 .build(app)?;
 
             #[cfg(windows)]
-            for label in [TOASTER_WINDOW, SETTINGS_WINDOW] {
+            for label in [TOASTER_WINDOW, SETTINGS_WINDOW, toast::TOAST_WINDOW] {
                 if let Some(window) = app.get_webview_window(label) {
                     round_corners(&window);
                 }
@@ -365,7 +370,11 @@ pub fn run() {
             hotkeys::set_hotkey,
             hotkeys::pause_hotkeys,
             queue::roon_queue,
-            queue::roon_play_from_here
+            queue::roon_play_from_here,
+            toast::toast_present,
+            toast::toast_hide,
+            toast::toast_test,
+            monitors::list_monitors
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

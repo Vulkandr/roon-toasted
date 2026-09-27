@@ -39,6 +39,16 @@ pub struct AppSettings {
     pub hotkey_player: Option<String>,
     /// Global hotkey that opens the Toaster in search mode; None = off.
     pub hotkey_search: Option<String>,
+    /// Whether a now-playing toast pops up when the track changes (see toast.rs).
+    pub toasts_enabled: bool,
+    /// Which corner of the screen toasts appear in.
+    pub toast_position: ToastPosition,
+    /// Which screen toasts appear on (an id from `list_monitors`, see
+    /// monitors.rs); None = whichever is the main display.
+    pub toast_monitor: Option<String>,
+    /// How long a toast stays, in seconds (it waits while the mouse is on it).
+    /// Allowed range: `TOAST_SECONDS`.
+    pub toast_seconds: u32,
 }
 
 impl Default for AppSettings {
@@ -53,6 +63,10 @@ impl Default for AppSettings {
             hotkeys_enabled: true,
             hotkey_player: Some("Ctrl+Alt+Z".into()),
             hotkey_search: Some("Ctrl+Alt+S".into()),
+            toasts_enabled: true,
+            toast_position: ToastPosition::default(),
+            toast_monitor: None,
+            toast_seconds: 8,
         }
     }
 }
@@ -64,11 +78,17 @@ pub const BASE_ZOOM: f64 = 1.1;
 /// Smallest and largest zoom, as the user sees it.
 pub const ZOOM_RANGE: std::ops::RangeInclusive<f64> = 0.5..=1.8;
 
-/// Applies the saved zoom to the Toaster (at page load and when it changes).
+/// Shortest and longest a toast can stay, in seconds.
+pub const TOAST_SECONDS: std::ops::RangeInclusive<u32> = 2..=30;
+
+/// Applies the saved zoom to the Toaster and the toast, so the toast's text
+/// is the same size as the Toaster's (at page load and when it changes).
 pub fn apply_zoom(app: &AppHandle) {
     let zoom = get_settings(app.clone()).zoom * BASE_ZOOM;
-    if let Some(toaster) = app.get_webview_window(crate::TOASTER_WINDOW) {
-        let _ = toaster.set_zoom(zoom);
+    for label in [crate::TOASTER_WINDOW, crate::toast::TOAST_WINDOW] {
+        if let Some(window) = app.get_webview_window(label) {
+            let _ = window.set_zoom(zoom);
+        }
     }
 }
 
@@ -90,6 +110,17 @@ pub enum ToasterColors {
     Default,
     /// Accent and background tint from the album that's playing.
     Album,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToastPosition {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    /// Where Windows shows its own notifications.
+    #[default]
+    BottomRight,
 }
 
 pub fn path(app: &AppHandle) -> Option<PathBuf> {
@@ -150,6 +181,13 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
             "Zoom must be between {} and {}.",
             ZOOM_RANGE.start(),
             ZOOM_RANGE.end()
+        ));
+    }
+    if !TOAST_SECONDS.contains(&updated.toast_seconds) {
+        return Err(format!(
+            "Toasts must stay between {} and {} seconds.",
+            TOAST_SECONDS.start(),
+            TOAST_SECONDS.end()
         ));
     }
     save(&path, &updated)?;

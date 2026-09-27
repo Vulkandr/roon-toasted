@@ -29,6 +29,8 @@
     <main>
       <h1>Settings</h1>
 
+      <!-- Left column -->
+      <div class="column">
       <section class="card core-card">
         <h2>Roon Core</h2>
 
@@ -120,6 +122,56 @@
         </div>
         <p id="hotkey-error" class="error"></p>
       </section>
+      </div>
+
+      <!-- Right column -->
+      <div class="column">
+
+      <section class="card toasts-card">
+        <h2>Toasts</h2>
+
+        <div class="toast-row">
+          <div class="setting">
+            <span class="setting-name">Show Toasts</span>
+            <div class="switch-group" id="toasts-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="toasts-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+
+          <!-- Dimmed and locked while toasts are off -->
+          <div id="toast-options" class="toast-options">
+            <div class="toast-option">
+              <span class="option-name">Position</span>
+              <!-- A little screen: click the corner the toast should appear in -->
+              <div class="screen">
+                <button class="corner" data-corner="top-left" title="Top left"></button>
+                <button class="corner" data-corner="top-right" title="Top right"></button>
+                <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
+                <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
+              </div>
+            </div>
+            <div class="toast-option">
+              <span class="option-name">Time on Screen</span>
+              <div class="time-row">
+                <input type="range" id="toast-seconds" min="2" max="30" step="1" />
+                <span id="toast-seconds-value">8 s</span>
+              </div>
+              <button id="toast-test">Test</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Which screen (names as Windows shows them in Display settings) -->
+        <div id="monitor-row" class="monitor-row">
+          <span class="option-name">Monitor</span>
+          <select id="toast-monitor"></select>
+        </div>
+      </section>
 
       <!-- What each setting does -->
       <section class="card legend">
@@ -131,30 +183,32 @@
         </p>
         <p>
           <strong>Zoom:</strong> When on, Ctrl + and Ctrl &minus; (or Ctrl + mouse wheel) make
-          the Toaster bigger or smaller in 5% steps, and Ctrl + Enter goes back to 100%. When
-          off, those keys do nothing. Now at <span id="zoom-now">100%</span>
+          the Toaster text bigger or smaller in 5% steps, and Ctrl + Enter resets to 100%. Now
+          at <span id="zoom-now">100%</span>
           <button id="zoom-reset">Reset to 100%</button>
         </p>
         <p>
           <strong>Hide on Click Away:</strong> When on, clicking anywhere outside the Toaster
-          sends it back to the tray, like pressing &times;, along with Settings if it's open.
-          Moving between the two doesn't hide anything. When off, the Toaster stays open until
-          you close it or press Escape.
+          sends it back to the tray, like pressing &times;, along with Settings if open.
         </p>
         <p>
-          <strong>Colors:</strong> Default keeps the Toaster purple. Album Art takes its colors
-          from the album that's playing and fades to the next album's colors when the track
-          changes. Muted covers get a softer tint, and black-and-white covers a white accent.
+          <strong>Colors:</strong> Default keeps the Toaster's color scheme. Album Art takes its
+          colors from the album that's playing.
         </p>
         <p>
           <strong>Hotkeys:</strong> Work anywhere in Windows, even when the Toaster is closed.
-          Open Toaster opens it, or hides it if it's already in front. Search opens it on the
-          Search tab, ready to type. Click a hotkey and press a new combination with Ctrl
-          and/or Alt (Escape cancels). Clear turns one off; the Hotkeys switch turns both off,
-          e.g. if they get in the way of other apps and you open the Toaster from the Stream
-          Deck instead.
+          Open Toaster opens it, or hides it if it's currently open. Search opens it on the
+          Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
+          up the Toaster.
+        </p>
+        <p>
+          <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
+          on the monitor you pick, in the Toaster's colors. Primary Monitor follows whichever
+          one Windows has as main. Clicking the toast opens the Toaster. Mousing over it pauses
+          the timer.
         </p>
       </section>
+      </div>
     </main>
     </div>
   </body>

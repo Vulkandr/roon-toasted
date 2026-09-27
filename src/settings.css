@@ -47,8 +47,8 @@ body {
   scrollbar-color: var(--border) transparent;
 }
 
-/* Two columns: Roon Core and Toaster on the left, the Legend on the right
-   (one column when the window is narrow) */
+/* Two columns: Roon Core and Toaster on the left, Toasts and the Legend on
+   the right (one column when the window is narrow) */
 main {
   max-width: 1040px;
   margin: 0 auto;
@@ -64,36 +64,21 @@ main > h1 {
   margin: 0;
 }
 
-main > .card + .card {
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.column > .card + .card {
   margin-top: 0;
-}
-
-.core-card {
-  grid-column: 1;
-  grid-row: 2;
-}
-
-.toaster-card {
-  grid-column: 1;
-  grid-row: 3;
-}
-
-.legend {
-  grid-column: 2;
-  grid-row: 2 / span 2;
 }
 
 @media (max-width: 900px) {
   main {
     grid-template-columns: 1fr;
     max-width: 640px;
-  }
-
-  .core-card,
-  .toaster-card,
-  .legend {
-    grid-column: 1;
-    grid-row: auto;
   }
 }
 
@@ -469,4 +454,132 @@ button:disabled {
 #hotkey-list.disabled {
   opacity: 0.45;
   pointer-events: none;
+}
+
+/* Toasts: the switch, Position and Time on Screen side by side */
+.toast-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px 28px;
+  flex-wrap: wrap;
+}
+
+.toast-options {
+  display: flex;
+  gap: 28px;
+}
+
+/* Switched off: the options are dimmed and locked (like Hotkeys) */
+.toast-options.disabled,
+.monitor-row.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.toast-option {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Same place and look as a switch's name */
+.option-name {
+  white-space: nowrap;
+}
+
+/* The corner picker: a little screen with a spot in each corner */
+.screen {
+  position: relative;
+  width: 112px;
+  height: 70px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.corner,
+.corner:hover {
+  position: absolute;
+  width: 36px;
+  height: 14px;
+  padding: 0;
+  border-radius: 4px;
+  border: 1px dashed var(--muted);
+  background: transparent;
+}
+
+.corner:hover {
+  border: 1px solid var(--accent);
+}
+
+.corner.selected {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+}
+
+.corner[data-corner^="top"] {
+  top: 6px;
+}
+
+.corner[data-corner^="bottom"] {
+  bottom: 6px;
+}
+
+.corner[data-corner$="left"] {
+  left: 6px;
+}
+
+.corner[data-corner$="right"] {
+  right: 6px;
+}
+
+.time-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 22px;
+}
+
+#toast-seconds {
+  width: 120px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+#toast-seconds-value {
+  min-width: 2.6em;
+  font-size: 13px;
+}
+
+#toast-test {
+  margin-top: 6px;
+}
+
+/* Monitor: a dropdown under the other toast options */
+.monitor-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+#toast-monitor {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  color-scheme: light dark; /* dark dropdown list in dark mode */
+  cursor: pointer;
+}
+
+#toast-monitor:hover,
+#toast-monitor:focus-visible {
+  border-color: var(--accent);
+  outline: none;
 }

@@ -1,0 +1,205 @@
+/* The now-playing toast: a small card in a corner of the screen.
+   Laid out for 340 x 92 (the window's size at 100% zoom, set in toast.rs).
+   Same palette as the Toaster; with Colors on "Album Art" the accent and
+   background come from the album (see album-colors.js). */
+:root {
+  --bg: #f4f4f6;
+  --card: #ffffff;
+  --text: #1c1c1f;
+  --muted: #6b6b76;
+  --border: #e2e2e8;
+  --accent: #7b5fc7;
+  --hover: rgba(0, 0, 0, 0.06);
+  --track: #d9d9e0;
+
+  font-family: var(--font-ui); /* from fonts.css */
+  font-size: 14px;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1f;
+    --card: #26262b;
+    --text: #ececf1;
+    --muted: #9a9aa6;
+    --border: #36363d;
+    --hover: rgba(255, 255, 255, 0.08);
+    --track: #3a3a42;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  user-select: none;
+  cursor: pointer;
+}
+
+/* Fades in once it's on screen, and out before it's hidden */
+.toast {
+  position: relative;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 30px 10px 10px;
+  opacity: 0;
+  transition: opacity 0.18s ease;
+}
+
+.toast.shown {
+  opacity: 1;
+}
+
+/* Album art */
+.art-box {
+  width: 72px;
+  height: 72px;
+  flex-shrink: 0;
+}
+
+.art {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.art[hidden] {
+  display: none;
+}
+
+/* No art: the app's logo, like the Toaster's stand-in */
+.art-placeholder {
+  position: relative;
+}
+
+.art-placeholder::after {
+  content: "";
+  position: absolute;
+  inset: 22%;
+  background: var(--muted);
+  opacity: 0.5;
+  -webkit-mask: url("assets/logo-mask.png") center / contain no-repeat;
+  mask: url("assets/logo-mask.png") center / contain no-repeat;
+}
+
+/* Track details */
+.text {
+  min-width: 0;
+  flex: 1;
+}
+
+.label,
+.title,
+.artist,
+.album {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.label {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+}
+
+.title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-top: 3px;
+}
+
+.artist {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.album {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 1px;
+}
+
+/* Close (x): shows when the mouse is on the toast */
+.dismiss {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.dismiss svg {
+  width: 14px;
+  height: 14px;
+}
+
+.toast:hover .dismiss {
+  opacity: 1;
+}
+
+.dismiss:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+/* Time left: a thin accent line along the bottom that shrinks to nothing,
+   and waits while the mouse is on the toast */
+.countdown {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: var(--track);
+}
+
+.bar {
+  height: 100%;
+  background: var(--accent);
+  transform-origin: left;
+}
+
+.toast.counting .bar {
+  animation: countdown linear forwards;
+}
+
+.toast:hover .bar {
+  animation-play-state: paused;
+}
+
+@keyframes countdown {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}

@@ -351,3 +351,98 @@ hotkeysGroup.querySelector(".label-on").addEventListener("click", () => setHotke
 
 refreshHotkeys();
 listen("settings-changed", () => refreshHotkeys());
+
+// ===== Toasts =============================================================
+//
+// The now-playing toast: on/off, which corner, how long it stays, and a Test
+// button (which shows one even while the Toaster is open).
+
+const toastsEnabled = document.querySelector("#toasts-enabled");
+const toastsGroup = document.querySelector("#toasts-group");
+const toastOptions = document.querySelector("#toast-options");
+const corners = document.querySelectorAll(".corner");
+const toastSeconds = document.querySelector("#toast-seconds");
+const toastSecondsValue = document.querySelector("#toast-seconds-value");
+const monitorRow = document.querySelector("#monitor-row");
+const toastMonitor = document.querySelector("#toast-monitor");
+let savedMonitor = null; // id of the chosen monitor; null = Primary Monitor
+
+function showToasts(settings) {
+  toastsEnabled.checked = settings.toastsEnabled;
+  toastOptions.classList.toggle("disabled", !settings.toastsEnabled);
+  for (const corner of corners) {
+    corner.classList.toggle("selected", corner.dataset.corner === settings.toastPosition);
+  }
+  toastSeconds.value = settings.toastSeconds;
+  toastSecondsValue.textContent = `${settings.toastSeconds} s`;
+  monitorRow.classList.toggle("disabled", !settings.toastsEnabled);
+  savedMonitor = settings.toastMonitor;
+  selectMonitor();
+}
+
+// Picks the saved monitor in the list (reloading the list if it isn't there)
+function selectMonitor() {
+  const value = savedMonitor ?? "";
+  if ([...toastMonitor.options].some((option) => option.value === value)) {
+    toastMonitor.value = value;
+  } else {
+    loadMonitors();
+  }
+}
+
+// Fills the Monitor list: Primary Monitor first, then each monitor left to
+// right, as "DELL U2720Q, 2560 x 1440 (primary)"
+async function loadMonitors() {
+  const monitors = await invoke("list_monitors");
+  const options = [new Option("Primary Monitor", "")];
+  for (const monitor of monitors) {
+    const primary = monitor.primary ? " (primary)" : "";
+    const label = `${monitor.name}, ${monitor.width} x ${monitor.height}${primary}`;
+    options.push(new Option(label, monitor.id));
+  }
+  // The chosen monitor is unplugged: say so (toasts use the primary meanwhile)
+  if (savedMonitor && !monitors.some((monitor) => monitor.id === savedMonitor)) {
+    options.push(new Option("Not connected (using the primary monitor)", savedMonitor));
+  }
+  toastMonitor.replaceChildren(...options);
+  toastMonitor.value = savedMonitor ?? "";
+}
+
+async function saveToasts(changes) {
+  try {
+    await invoke("update_settings", { changes });
+  } catch (err) {
+    // Saving failed: show what's actually saved
+    console.error(err);
+    showToasts(await invoke("get_settings"));
+  }
+}
+
+function setToastsEnabled(on) {
+  toastsEnabled.checked = on;
+  saveToasts({ toastsEnabled: on });
+}
+
+toastsEnabled.addEventListener("change", () => setToastsEnabled(toastsEnabled.checked));
+toastsGroup.querySelector(".label-off").addEventListener("click", () => setToastsEnabled(false));
+toastsGroup.querySelector(".label-on").addEventListener("click", () => setToastsEnabled(true));
+
+for (const corner of corners) {
+  corner.addEventListener("click", () => saveToasts({ toastPosition: corner.dataset.corner }));
+}
+
+// The number follows the slider while dragging; it's saved on release
+toastSeconds.addEventListener("input", () => {
+  toastSecondsValue.textContent = `${toastSeconds.value} s`;
+});
+toastSeconds.addEventListener("change", () => saveToasts({ toastSeconds: Number(toastSeconds.value) }));
+
+toastMonitor.addEventListener("change", () => saveToasts({ toastMonitor: toastMonitor.value || null }));
+
+// Monitors may have been plugged in or out while Settings was closed
+window.addEventListener("focus", loadMonitors);
+
+document.querySelector("#toast-test").addEventListener("click", () => invoke("toast_test"));
+
+invoke("get_settings").then(showToasts);
+listen("settings-changed", (event) => showToasts(event.payload));
