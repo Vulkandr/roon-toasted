@@ -1242,8 +1242,8 @@ document.addEventListener(
 // Art without a clear color (black and white, greys) keeps the default colors.
 
 const darkScheme = matchMedia("(prefers-color-scheme: dark)");
-const ALBUM_COLOR_PROPS = ["--accent", "--bg", "--card", "--track", "--border"];
-const albumHueCache = new Map(); // image key -> { h, s }, or null for no clear color
+const ALBUM_COLOR_PROPS = ["--accent", "--bg", "--card", "--track", "--border", "--on-accent"];
+const albumHueCache = new Map(); // image key -> { h, s, muted } or { mono: true }
 let colorsMode = "default"; // "default" or "album", from Settings
 
 function hsl(h, s, l) {
@@ -1299,8 +1299,9 @@ function strongestHue(pixelsHsl, weigh) {
   };
 }
 
-// The album's main color as { h, s, muted }, or null when the art has no
-// clear color. Vivid color wins; covers without any (dark, washed-out art)
+// The album's main color as { h, s, muted }, or { mono: true } for art with
+// no clear color (black and white). Vivid color wins, even a small accent
+// like a logo if it's all one hue; covers without any (dark, washed-out art)
 // get a muted color instead, if enough of the cover shares one hue.
 async function albumHue(imageKey) {
   if (albumHueCache.has(imageKey)) return albumHueCache.get(imageKey);
@@ -1323,13 +1324,14 @@ async function albumHue(imageKey) {
 
   let result = null;
 
-  // 1. Vivid color: at least 4% of the cover, weighting vivid, mid-brightness
-  //    pixels most
+  // 1. Vivid color, weighting vivid, mid-brightness pixels most: at least 4%
+  //    of the cover, or 2% (a small logo or lettering) if it's mostly one hue
   const isVivid = (s, l) => s >= 0.25 && l >= 0.12 && l <= 0.9;
   const vividCount = pixelsHsl.filter(([, s, l]) => isVivid(s, l)).length;
-  if (vividCount >= count * 0.04) {
+  if (vividCount >= count * 0.02) {
     const hue = strongestHue(pixelsHsl, (s, l) => (isVivid(s, l) ? s * (1 - Math.abs(l - 0.5)) : 0));
-    if (hue) result = { h: hue.h, s: hue.s, muted: false };
+    const enough = vividCount >= count * 0.04 || (hue && hue.share >= 0.5);
+    if (hue && enough) result = { h: hue.h, s: hue.s, muted: false };
   }
 
   // 2. Muted color: at least 20% of the cover faintly colored, and most of it
@@ -1343,12 +1345,23 @@ async function albumHue(imageKey) {
     }
   }
 
+  // 3. No clear color: black and white, which gets a white accent
+  if (!result) result = { mono: true };
+
   albumHueCache.set(imageKey, result);
   return result;
 }
 
-// The Toaster's colors for an album color, in dark or light mode
-function albumPalette({ h, s, muted }, dark) {
+// The Toaster's colors for an album color, in dark or light mode. Colors not
+// listed stay at their defaults.
+function albumPalette({ h, s, muted, mono }, dark) {
+  // Black and white: a white accent with dark icons on it (graphite with white
+  // icons in light mode), on the normal background
+  if (mono) {
+    return dark
+      ? { "--accent": "hsl(240 5% 88%)", "--on-accent": "hsl(240 7% 11%)" }
+      : { "--accent": "hsl(240 5% 22%)" };
+  }
   // Muted covers get a softer accent and a lighter tint
   const vivid = muted ? Math.min(0.5, Math.max(0.3, s * 1.5)) : Math.min(0.85, Math.max(0.5, s));
   const tint = muted ? Math.min(0.18, s * 0.8) : Math.min(0.3, s * 0.5);
@@ -1389,12 +1402,10 @@ async function applyAlbumColors() {
     if (key !== artKey) return; // the art changed meanwhile; that call wins
   }
 
-  if (hue) {
-    for (const [name, value] of Object.entries(albumPalette(hue, darkScheme.matches))) {
-      root.style.setProperty(name, value);
-    }
-  } else {
-    for (const name of ALBUM_COLOR_PROPS) root.style.removeProperty(name);
+  const palette = hue ? albumPalette(hue, darkScheme.matches) : {};
+  for (const name of ALBUM_COLOR_PROPS) {
+    if (palette[name]) root.style.setProperty(name, palette[name]);
+    else root.style.removeProperty(name);
   }
 }
 

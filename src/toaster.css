@@ -30,6 +30,14 @@
   initial-value: #36363d;
 }
 
+/* Text and icons that sit on the accent color (the play button, menus):
+   white, or dark when a black-and-white album makes the accent white */
+@property --on-accent {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: #fff;
+}
+
 /* Same palette as Settings so the two windows match.
    Light theme first; the dark block below overrides it. */
 :root {
@@ -51,7 +59,8 @@
     --bg 0.6s ease,
     --card 0.6s ease,
     --track 0.6s ease,
-    --border 0.6s ease;
+    --border 0.6s ease,
+    --on-accent 0.6s ease;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -402,7 +411,7 @@ input[type="range"]:disabled {
   place-items: center;
   border-radius: 50%;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 
 .play svg {
@@ -811,6 +820,7 @@ input[type="range"]:disabled {
 
 .switch input:checked + .slider::before {
   transform: translateX(18px);
+  background: var(--on-accent);
 }
 
 .switch input:focus-visible + .slider {
@@ -1122,7 +1132,7 @@ input[type="range"]:disabled {
   padding: 8px 16px;
   border-radius: 999px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   font-size: 13px;
   font-weight: 600;
 }
@@ -1145,7 +1155,7 @@ input[type="range"]:disabled {
   padding: 6px 0;
   border-radius: 8px;
   background: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
@@ -1161,7 +1171,7 @@ input[type="range"]:disabled {
 }
 
 .action-option:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
 }
 
 /* Fixed-width icon column so the names line up */
@@ -1197,12 +1207,12 @@ input[type="range"]:disabled {
   display: grid;
   place-items: center;
   padding: 0 10px;
-  color: #fff;
-  border-left: 1px solid rgba(255, 255, 255, 0.3);
+  color: var(--on-accent);
+  border-left: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
 }
 
 .play-more:hover {
-  background: rgba(255, 255, 255, 0.14);
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
 }
 
 .play-more svg {
