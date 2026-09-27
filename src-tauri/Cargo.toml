@@ -36,10 +36,10 @@ tauri-plugin-window-state = "2"
 tauri-plugin-global-shortcut = "~2.3"
 
 # Windows only: rounded corners for the frameless windows, showing the toast
-# without taking focus, and screen names for the toast's Monitor setting
-# (same version Tauri uses)
+# without taking focus, screen names for the toast's Monitor setting, and
+# registering roon-toasted:// links (same version Tauri uses)
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry"] }
 
 
 # Use the local copy of roon-api in vendor/roon-api, which fixes shuffle/repeat/

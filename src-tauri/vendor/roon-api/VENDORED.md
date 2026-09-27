@@ -24,6 +24,12 @@ see LICENSE-APACHE).
    following RoonLabs' node-roon-api-transport.
 4. `Cargo.toml`: removed the example, test and dev-dependency entries, since
    those files aren't included here.
+5. `src/client.rs` and `src/connection.rs`: the automatic reconnect after
+   `connect()` can be pointed at a new address with the new
+   `RoonClient::set_core_address(host, port)`. The published version keeps
+   retrying the address it first connected to forever, so a Core that got a
+   new IP address (DHCP, a router change) was never found again until the app
+   restarted. A waiting reconnect tries a new address right away.
 
 If a future roon-api release includes these fixes (and anything added below),
 remove this folder and the `[patch.crates-io]` entry and go back to the

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use tokio::sync::{Mutex, broadcast};
+use tokio::sync::{Mutex, broadcast, watch};
 
 use crate::connection::ConnectionManager;
 use crate::core::Core;
@@ -95,6 +95,7 @@ impl RoonClientBuilder {
         let pairing = PairingState::new(&*store);
         let (event_tx, _) = broadcast::channel::<RoonEvent>(32);
         let conn_manager = ConnectionManager::new();
+        let (core_url, _) = watch::channel(String::new());
 
         Ok(RoonClient {
             info: ExtensionInfo {
@@ -112,6 +113,7 @@ impl RoonClientBuilder {
             pairing,
             event_tx,
             conn_manager,
+            core_url,
         })
     }
 }
@@ -123,6 +125,9 @@ pub struct RoonClient {
     pairing: PairingState,
     event_tx: broadcast::Sender<RoonEvent>,
     conn_manager: ConnectionManager,
+    /// Where `connect()`'s automatic reconnect goes (Roon: Toasted addition,
+    /// see `set_core_address`).
+    core_url: watch::Sender<String>,
 }
 
 impl RoonClient {
@@ -234,6 +239,8 @@ impl RoonClient {
         let pairing = self.pairing.clone();
         let event_tx = self.event_tx.clone();
         let initial_core = core.clone();
+        self.core_url.send_replace(url);
+        let core_url = self.core_url.subscribe();
 
         let manager = ConnectionManager::new();
         manager.set_connected();
@@ -248,11 +255,27 @@ impl RoonClient {
 
             // Run reconnection lifecycle
             manager
-                .run_direct(url, info, store, pairing, event_tx)
+                .run_direct(core_url, info, store, pairing, event_tx)
                 .await;
         });
 
         Ok(core)
+    }
+
+    /// Changes the address `connect()`'s automatic reconnect uses, e.g. when
+    /// discovery finds the Core at a new IP address. A reconnect that's
+    /// waiting tries the new address right away. Does nothing if the address
+    /// is the same. (Roon: Toasted addition.)
+    pub fn set_core_address(&self, host: &str, port: u16) {
+        let url = format!("ws://{}:{}/api", host, port);
+        self.core_url.send_if_modified(|current| {
+            if *current == url {
+                return false;
+            }
+            tracing::info!("Core address changed to {}", url);
+            *current = url;
+            true
+        });
     }
 
     /// Connect using a one-time token (skips discovery and info request).

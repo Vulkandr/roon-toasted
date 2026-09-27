@@ -302,7 +302,9 @@ async fn run(app: AppHandle, state_path: PathBuf) -> Result<(), ApiError> {
 ///   user enables "Roon: Toasted" on first becomes the paired Core.
 ///
 /// Once connected, roon-api's own reconnect (with backoff) keeps that one
-/// connection alive; discovery only keeps the list up to date.
+/// connection alive, and discovery keeps the list up to date. If the Core
+/// turns up at a new address (it got a new IP), the reconnect is pointed there
+/// (`set_core_address`, added in our copy of roon-api).
 async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Result<(), ApiError> {
     let roon = app.state::<Roon>();
     let paired = client.pairing().paired_core_id().await;
@@ -317,7 +319,8 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
     let (connected_tx, mut connected_rx) = tokio::sync::mpsc::channel::<String>(1);
     let mut attempts: HashMap<String, JoinHandle<()>> = HashMap::new();
     let mut ignored: HashSet<String> = HashSet::new();
-    let mut connected = false;
+    // The Core connected to, once there is one
+    let mut connected: Option<String> = None;
     let mut prune = tokio::time::interval(Duration::from_secs(30));
 
     loop {
@@ -329,7 +332,7 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                         task.abort();
                     }
                 }
-                connected = true;
+                connected = Some(connected_id);
             }
 
             _ = prune.tick() => roon.remove_stale_cores(),
@@ -341,6 +344,12 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                     Err(RecvError::Closed) => return Err(ApiError::ConnectionClosed),
                 };
                 let name = core.name.clone().unwrap_or_else(|| "Roon Core".into());
+                // Where the connected Core was last seen, to notice it moving
+                let last_host = roon
+                    .status()
+                    .connected
+                    .filter(|c| c.core_id == core.core_id && !c.host.is_empty())
+                    .map(|c| c.host);
                 roon.core_seen(CoreInfo {
                     core_id: core.core_id.clone(),
                     name: name.clone(),
@@ -348,8 +357,16 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                     port: core.http_port,
                 });
 
-                // From here on it's only about connecting.
-                if connected {
+                // Connected: just keep the reconnect address current (does
+                // nothing unless the Core's address changed)
+                if let Some(connected_id) = &connected {
+                    if *connected_id == core.core_id {
+                        let host = core.host.to_string();
+                        if last_host.is_some_and(|last| last != host) {
+                            println!("[roon] \"{name}\" is now at {host}, reconnecting there");
+                        }
+                        client.set_core_address(&host, core.http_port);
+                    }
                     continue;
                 }
 

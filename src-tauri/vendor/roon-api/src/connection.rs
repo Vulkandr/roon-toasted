@@ -71,9 +71,12 @@ impl ConnectionManager {
     }
 
     /// Run the direct-connection lifecycle: connect → monitor → reconnect loop.
+    ///
+    /// `core_url` is the address to reconnect to; it can change while this
+    /// runs (`RoonClient::set_core_address`), and a change skips the wait.
     pub(crate) async fn run_direct(
         &self,
-        url: String,
+        mut core_url: watch::Receiver<String>,
         info: ExtensionInfo,
         store: Arc<dyn StateStore>,
         pairing: PairingState,
@@ -84,7 +87,12 @@ impl ConnectionManager {
 
         loop {
             self.set_state(ConnectionState::Reconnecting { attempt });
-            tokio::time::sleep(backoff).await;
+            tokio::select! {
+                _ = tokio::time::sleep(backoff) => {}
+                // The Core moved: try the new address now
+                Ok(()) = core_url.changed() => backoff = BACKOFF_INITIAL,
+            }
+            let url = core_url.borrow_and_update().clone();
 
             self.set_state(ConnectionState::Connecting);
             self.set_state(ConnectionState::Registering);

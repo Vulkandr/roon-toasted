@@ -5,6 +5,7 @@ use tauri::{
 
 mod browse;
 mod hotkeys;
+mod launch;
 mod monitors;
 mod queue;
 mod roon;
@@ -191,23 +192,17 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default();
 
-    // Only one copy of the app may run at a time. Launching it again opens the
-    // Toaster of the copy that's already running: in search mode when launched
-    // with --search (or a roon-toasted://search link, once that's registered),
-    // otherwise as the player.
+    // Only one copy of the app may run at a time. Launching it again (or a
+    // roon-toasted:// link) goes to the copy that's already running, which
+    // opens the Toaster as asked (see launch.rs); a plain launch opens it as
+    // the player.
     // This has to be the first plugin registered.
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let search = args
-                .iter()
-                .any(|a| a == "--search" || a.starts_with("roon-toasted://search"));
-            let mode = if search {
-                ToasterMode::Search
-            } else {
-                ToasterMode::Player
-            };
-            open_toaster(app, mode);
+            let request = launch::request(&args)
+                .unwrap_or(launch::Request::Open(ToasterMode::Player));
+            launch::handle(app, request);
         }));
 
         // Tracks the Toaster's size/position so it can reopen where it was left.
@@ -235,6 +230,7 @@ pub fn run() {
         .manage(browse::BrowseState::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(toast::ToastState::default())
+        .manage(launch::StartupMode::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
@@ -277,6 +273,10 @@ pub fn run() {
             // The global hotkeys from Settings
             #[cfg(desktop)]
             hotkeys::register_saved(app.handle());
+
+            // roon-toasted:// links, and opening the Toaster if a link or
+            // --search started the app (see launch.rs)
+            launch::startup(app.handle());
 
             // Connect the zone state to the app, then connect to Roon in the background.
             app.state::<zones::Zones>().init(app.handle());
@@ -337,7 +337,8 @@ pub fn run() {
             toast::toast_present,
             toast::toast_hide,
             toast::toast_test,
-            monitors::list_monitors
+            monitors::list_monitors,
+            launch::take_startup_mode
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

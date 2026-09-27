@@ -168,14 +168,22 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // Player mode (Player hotkey, tray, launching the app again): the Playing tab.
 // Search mode: Search tab, bar focused, old text selected so typing replaces it.
 // Either way, search results and other tabs' pages are kept as they were.
-listen("toaster-open", (event) => {
-  if (event.payload === "search") {
+function onToasterOpen(mode) {
+  if (mode === "search") {
     showTab("search");
     searchInput.focus();
     searchInput.select();
   } else {
     showTab("playing");
   }
+}
+
+listen("toaster-open", (event) => onToasterOpen(event.payload));
+
+// Started by a roon-toasted:// link or --search: the Toaster may have opened
+// before this page was listening, so ask once
+invoke("take_startup_mode").then((mode) => {
+  if (mode) onToasterOpen(mode);
 });
 
 // Enter in the search bar runs the search (results show in the Search tab)
