@@ -94,12 +94,48 @@ function el(tag, className, text) {
 }
 
 // A picture from Roon at a given size; lazy, so it loads when scrolled into view
-function roonImage(imageKey, size, className) {
+// If it can't be loaded (Roon has no picture: the Core answers with an error),
+// it's swapped for `fallback()`, or the logo stand-in when none is given.
+function roonImage(imageKey, size, className, fallback) {
   const img = el("img", className);
   img.src = convertFileSrc(imageKey, "roonimg") + `?width=${size}&height=${size}`;
   img.loading = "lazy";
   img.alt = "";
+  const replacement = fallback ?? (() => artPlaceholder(className));
+  img.addEventListener("error", () => img.replaceWith(replacement()), { once: true });
   return img;
+}
+
+// Stand-in for missing art: the app's logo, tinted to suit light or dark mode
+function artPlaceholder(className) {
+  return el("div", className ? `${className} art-placeholder` : "art-placeholder");
+}
+
+// Stand-in for an artist without a picture: initials in a circle, like Roon
+// (the logo stand-in when the name has no letters or digits, e.g. "†††")
+function initialsArt(name, className) {
+  const initials = initialsOf(name);
+  if (!initials) return artPlaceholder(className);
+  return el("div", className ? `${className} art-initials` : "art-initials", initials);
+}
+
+// Roon-style initials: first letters of the first and last word ("Abhay
+// Chauhan" -> AC), skipping A/An/The ("A Very Old Ghost Behind the Farm" -> VF);
+// digits and letters count as separate words ("3FORCE" -> 3F); a single word
+// gives its first and last letter ("Abort" -> AT)
+function initialsOf(name) {
+  const words = name
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+|(?<=\p{N})(?=\p{L})|(?<=\p{L})(?=\p{N})/u)
+    .filter(Boolean);
+  const kept = words.filter((word) => !["a", "an", "the"].includes(word.toLowerCase()));
+  const use = kept.length > 0 ? kept : words;
+  if (use.length === 0) return "";
+  if (use.length === 1) {
+    const letters = Array.from(use[0]);
+    return (letters[0] + (letters.length > 1 ? letters[letters.length - 1] : "")).toUpperCase();
+  }
+  return (Array.from(use[0])[0] + Array.from(use[use.length - 1])[0]).toUpperCase();
 }
 
 // ===== 3. Tabs ============================================================
@@ -430,13 +466,7 @@ function queueRow(item, isNow) {
 
   const artBox = document.createElement("div");
   artBox.className = "queue-art";
-  if (item.imageKey) {
-    const img = document.createElement("img");
-    img.src = convertFileSrc(item.imageKey, "roonimg") + "?width=96&height=96";
-    img.loading = "lazy";
-    img.alt = "";
-    artBox.append(img);
-  }
+  artBox.append(item.imageKey ? roonImage(item.imageKey, 96) : artPlaceholder());
   if (!isNow) {
     const play = document.createElement("span");
     play.className = "queue-play";
@@ -512,6 +542,25 @@ const CHEVRON_ICON =
 const ROUND_GROUPS = ["Artists", "Composers"];
 const COVER_GROUPS = ["Albums"];
 
+// Waits for a Roon request, showing the floating spinner if it takes more
+// than a moment (quick ones don't flicker). Several can overlap.
+const loadingEl = $("#loading");
+let loadingCount = 0;
+
+async function withSpinner(promise) {
+  loadingCount++;
+  const timer = setTimeout(() => {
+    if (loadingCount > 0) loadingEl.hidden = false;
+  }, 150);
+  try {
+    return await promise;
+  } finally {
+    clearTimeout(timer);
+    loadingCount--;
+    if (loadingCount === 0) loadingEl.hidden = true;
+  }
+}
+
 // --- Moving between pages ---
 
 // Goes to a new page (and drops any "forward" pages, like a browser)
@@ -564,23 +613,25 @@ async function navShow(nav) {
       // Results are kept, so going back to them doesn't search again
       if (!entry.data) {
         showStatus(nav, "Searching…");
-        entry.data = await invoke("roon_search", { query: entry.query });
+        entry.data = await withSpinner(invoke("roon_search", { query: entry.query }));
       }
       if (ticket !== nav.ticket) return;
       renderResults(nav, entry.data);
     } else if (entry.kind === "home") {
       // The Browse home list is kept too
-      if (!entry.data) entry.data = await loadHome(nav);
+      if (!entry.data) entry.data = await withSpinner(loadHome(nav));
       if (ticket !== nav.ticket) return;
       renderHome(nav, entry.data);
     } else {
-      const page = await invoke("roon_browse_path", {
-        session: nav.session,
-        hierarchy: nav.hierarchy,
-        input: entry.input,
-        path: entry.path,
-        zoneId: zone?.zoneId ?? null,
-      });
+      const page = await withSpinner(
+        invoke("roon_browse_path", {
+          session: nav.session,
+          hierarchy: nav.hierarchy,
+          input: entry.input,
+          path: entry.path,
+          zoneId: zone?.zoneId ?? null,
+        }),
+      );
       if (ticket !== nav.ticket) return;
       renderPage(nav, entry, page);
     }
@@ -618,14 +669,18 @@ function itemNode(nav, input, basePath, item, index, look) {
 function tileNode(item, round) {
   const tile = el("button", round ? "tile round" : "tile");
   const artBox = el("div", "tile-art");
-  if (item.imageKey) artBox.append(roonImage(item.imageKey, 300));
+  // Artists without a picture get initials; anything else gets the logo stand-in
+  const fallback = round ? () => initialsArt(item.title) : () => artPlaceholder();
+  artBox.append(item.imageKey ? roonImage(item.imageKey, 400, undefined, fallback) : fallback());
   tile.append(artBox, el("div", "tile-title", item.title), el("div", "tile-sub", item.subtitle ?? ""));
   return tile;
 }
 
 function rowNode(item, showArt) {
   const row = el("li", "row");
-  if (showArt && item.imageKey) row.append(roonImage(item.imageKey, 88, "row-art"));
+  if (showArt) {
+    row.append(item.imageKey ? roonImage(item.imageKey, 88, "row-art") : artPlaceholder("row-art"));
+  }
   const text = el("div", "row-text");
   text.append(el("div", "row-title", item.title));
   if (item.subtitle) text.append(el("div", "row-sub", item.subtitle));
@@ -659,10 +714,10 @@ function renderResults(nav, data) {
 // Roon's top hit as a bigger card (round picture for an artist, e.g. "12 Albums")
 function topHitCard(nav, query, hit) {
   const card = el("button", "top-hit");
-  if (hit.imageKey) {
-    const isArtist = /\d+ Albums?$/.test(hit.subtitle ?? "");
-    card.append(roonImage(hit.imageKey, 200, isArtist ? "top-hit-art round" : "top-hit-art"));
-  }
+  const isArtist = /\d+ Albums?$/.test(hit.subtitle ?? "");
+  const artClass = isArtist ? "top-hit-art round" : "top-hit-art";
+  const fallback = isArtist ? () => initialsArt(hit.title, artClass) : () => artPlaceholder(artClass);
+  card.append(hit.imageKey ? roonImage(hit.imageKey, 200, artClass, fallback) : fallback());
   const text = el("div", "top-hit-text");
   text.append(el("div", "top-hit-label", "Top result"), el("div", "top-hit-title", hit.title));
   if (hit.subtitle) text.append(el("div", "top-hit-sub", hit.subtitle));
@@ -687,7 +742,8 @@ function resultGroup(nav, query, section) {
   if (ROUND_GROUPS.includes(section.title)) shape = "round";
   if (COVER_GROUPS.includes(section.title)) shape = "square";
   const entries = section.items.map((item) => [item, item.index]);
-  group.append(head, itemsBlock(nav, query, [groupStep], entries, { shape, art: true }));
+  const art = section.items.some((item) => item.imageKey);
+  group.append(head, itemsBlock(nav, query, [groupStep], entries, { shape, art }));
   return group;
 }
 
@@ -708,14 +764,21 @@ function renderPage(nav, entry, page) {
   const isPerson = /^Play (Artist|Composer)/.test(first?.title ?? "");
 
   const parts = [];
-  if (list.imageKey || play) parts.push(pageHead(nav, entry, list, play, isPerson));
+  if (list.imageKey || play) {
+    parts.push(pageHead(nav, entry, list, play, isPerson));
+  } else {
+    parts.push(listHead(list));
+  }
 
-  // Albums and artists (pictures that open pages) as tiles, the rest as rows.
-  // Rows skip pictures on pages with their own (an album's tracks share its cover).
-  const tiles = entries.length > 0 && entries.every(([item]) => item.hint === "list" && item.imageKey);
+  // Albums and artists (mostly pictures, opening pages) as tiles like Roon's
+  // grid, the rest as rows. Rows skip pictures on pages with their own (an
+  // album's tracks share its cover). Missing pictures get the stand-in.
+  const withArt = entries.filter(([item]) => item.imageKey).length;
+  const tiles =
+    entries.length > 0 && entries.every(([item]) => item.hint === "list") && withArt >= entries.length / 2;
   const look = {
     shape: tiles ? (ROUND_GROUPS.includes(list.title) ? "round" : "square") : "row",
-    art: !list.imageKey,
+    art: !list.imageKey && entries.some(([item]) => item.imageKey),
   };
   const block = itemsBlock(nav, entry.input, entry.path, entries, look);
   parts.push(block);
@@ -725,12 +788,25 @@ function renderPage(nav, entry, page) {
   nav.page = { entry, block, look, loaded: page.offset + page.items.length, total: list.count };
 }
 
+// The top of a list page without art, like Roon's "My Artists / 1959 artists"
+const COUNT_NOUNS = ["Artists", "Albums", "Tracks", "Composers", "Tags", "Playlists", "Genres"];
+
+function listHead(list) {
+  const head = el("div", "list-head");
+  head.append(el("div", "list-title", list.title));
+  const noun = COUNT_NOUNS.includes(list.title) ? list.title.toLowerCase() : "items";
+  head.append(el("div", "list-count", list.subtitle ?? `${list.count.toLocaleString()} ${noun}`));
+  return head;
+}
+
 // The top of an album or artist page: art, title, subtitle, and Roon's split
 // Play button ("Play now", with ▾ for the rest of Roon's options)
 function pageHead(nav, entry, list, play, isPerson) {
   const head = el("div", "page-head");
   if (list.imageKey) {
-    head.append(roonImage(list.imageKey, 400, isPerson ? "page-art round" : "page-art"));
+    const artClass = isPerson ? "page-art round" : "page-art";
+    const fallback = isPerson ? () => initialsArt(list.title, artClass) : undefined;
+    head.append(roonImage(list.imageKey, 400, artClass, fallback));
   }
   const info = el("div", "page-info");
   info.append(el("div", "page-title", list.title));
@@ -799,7 +875,7 @@ async function fetchActions(nav, input, path) {
 async function showActions(nav, input, path, event) {
   let actions;
   try {
-    actions = await fetchActions(nav, input, path);
+    actions = await withSpinner(fetchActions(nav, input, path));
   } catch (err) {
     console.error("actions", err);
     return;
@@ -864,7 +940,7 @@ async function runAction(nav, input, path) {
 // there isn't one)
 async function playNow(nav, input, path, event) {
   try {
-    const actions = await fetchActions(nav, input, path);
+    const actions = await withSpinner(fetchActions(nav, input, path));
     const found = actions.find(([item]) => item.title.toLowerCase() === "play now");
     if (found) {
       const [item, index] = found;
@@ -893,14 +969,16 @@ async function loadMore(nav) {
 
   page.busy = true;
   try {
-    const more = await invoke("roon_browse_path", {
-      session: nav.session,
-      hierarchy: nav.hierarchy,
-      input: page.entry.input,
-      path: page.entry.path,
-      zoneId: zone?.zoneId ?? null,
-      offset: page.loaded,
-    });
+    const more = await withSpinner(
+      invoke("roon_browse_path", {
+        session: nav.session,
+        hierarchy: nav.hierarchy,
+        input: page.entry.input,
+        path: page.entry.path,
+        zoneId: zone?.zoneId ?? null,
+        offset: page.loaded,
+      }),
+    );
     if (nav.page !== page) return; // moved to another page meanwhile
     more.items.forEach((item, i) => {
       const node = itemNode(nav, page.entry.input, page.entry.path, item, more.offset + i, page.look);

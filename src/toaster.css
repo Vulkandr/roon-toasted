@@ -897,7 +897,9 @@ input[type="range"]:disabled {
 /* Tiles: album covers (square) and artists (round) */
 .tile-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  /* Tiles at least 104px (3 across at the default size), growing with the
+     window up to 170px before another column is added */
+  grid-template-columns: repeat(auto-fill, minmax(clamp(104px, 18vw, 170px), 1fr));
   gap: 16px 12px;
 }
 
@@ -1207,4 +1209,107 @@ input[type="range"]:disabled {
 
 .home-row:hover .home-icon {
   color: var(--accent);
+}
+
+/* Floating loading spinner in the middle of the window */
+.loading {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 20;
+  transform: translate(-50%, -50%);
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--card);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.spinner {
+  width: 28px;
+  height: 28px;
+  border: 3px solid var(--track);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Stand-in for missing art: the app logo, tinted to suit light or dark mode */
+.art-placeholder {
+  position: relative;
+  flex-shrink: 0;
+  background: var(--card);
+}
+
+.art-placeholder::after {
+  content: "";
+  position: absolute;
+  inset: 22%;
+  background: var(--muted);
+  opacity: 0.5;
+  -webkit-mask: url("assets/logo-mask.png") center / contain no-repeat;
+  mask: url("assets/logo-mask.png") center / contain no-repeat;
+}
+
+.tile-art .art-placeholder,
+.queue-art .art-placeholder {
+  width: 100%;
+  height: 100%;
+}
+
+/* Title of a list page without art, like Roon's "My Artists / 1959 artists" */
+.list-head {
+  margin: 6px 0 16px;
+}
+
+.list-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 28px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.list-count {
+  margin-top: 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+/* Artist without a picture: initials in a grey circle, like Roon */
+.art-initials {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: var(--track);
+  color: var(--text);
+  font-family: Georgia, "Times New Roman", serif;
+  line-height: 1;
+}
+
+/* In tiles the initials scale with the tile (cqw = % of the tile's width) */
+.tile-art {
+  container-type: inline-size;
+}
+
+.tile-art .art-initials {
+  width: 100%;
+  height: 100%;
+  font-size: 30cqw;
+}
+
+.top-hit-art.art-initials {
+  font-size: 30px;
+}
+
+.page-art.art-initials {
+  font-size: 44px;
 }
