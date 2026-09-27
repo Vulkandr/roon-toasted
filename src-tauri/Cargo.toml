@@ -26,6 +26,8 @@ serde_json = "1"
 roon-api = "0.5.3"
 roon-sood = "0.5.3"
 tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+# Reads the tray icon file, to pick the right size for the screen (see icon.rs)
+ico = "0.5"
 # Prints library warnings to the terminal in dev builds
 tracing-subscriber = "0.3"
 

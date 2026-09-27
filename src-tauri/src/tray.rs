@@ -59,8 +59,12 @@ pub fn build(app: &App) -> tauri::Result<()> {
         ],
     )?;
 
+    // The flat toaster, white or black to suit the taskbar (see icon.rs)
+    let icon = crate::icon::tray_icon(app.handle())
+        .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
+
     TrayIconBuilder::with_id("tray")
-        .icon(app.default_window_icon().unwrap().clone())
+        .icon(icon)
         .tooltip("Roon: Toasted")
         .menu(&menu)
         // Left click shouldn't pop the menu; that's reserved for double-click.

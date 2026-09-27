@@ -3142,6 +3142,7 @@ dependencies = [
 name = "roon-toasted"
 version = "0.1.0"
 dependencies = [
+ "ico",
  "roon-api",
  "roon-sood",
  "serde",

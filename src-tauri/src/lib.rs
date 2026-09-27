@@ -5,6 +5,7 @@ use tauri::{
 
 mod browse;
 mod hotkeys;
+mod icon;
 mod launch;
 mod monitors;
 mod queue;
@@ -259,8 +260,10 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            // Tray icon and its right-click menu (see tray.rs)
+            // Tray icon and its right-click menu (see tray.rs); the tray and
+            // taskbar-button icons follow the taskbar's light/dark mode
             tray::build(app)?;
+            icon::start(app.handle());
 
             #[cfg(windows)]
             for label in [TOASTER_WINDOW, SETTINGS_WINDOW, toast::TOAST_WINDOW] {
