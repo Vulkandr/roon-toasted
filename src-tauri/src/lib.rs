@@ -19,6 +19,10 @@ mod zones;
 pub(crate) const TOASTER_WINDOW: &str = "toaster";
 pub(crate) const SETTINGS_WINDOW: &str = "settings";
 
+/// Set by `switch_core` (roon.rs) before the app restarts itself; the new copy
+/// sees it and waits a moment before opening its windows (see `run`).
+pub(crate) const RESTARTED_ENV: &str = "ROON_TOASTED_RESTARTED";
+
 /// What gets saved and restored for the Toaster when "remember size" is on.
 /// (Not visibility: the Toaster should never pop open on its own at launch.)
 #[cfg(desktop)]
@@ -189,6 +193,15 @@ pub fn run() {
     let _ = tracing_subscriber::fmt()
         .with_max_level(tracing_subscriber::filter::LevelFilter::WARN)
         .try_init();
+
+    // Restarted (switching Cores): give the old copy's WebView2 time to finish
+    // closing first. Opening windows while it's still shutting down makes them
+    // fail ("Access is denied" / "The group or resource is not in the correct
+    // state") and leaves the app with broken windows.
+    if std::env::var_os(RESTARTED_ENV).is_some() {
+        std::env::remove_var(RESTARTED_ENV);
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
 
     let mut builder = tauri::Builder::default();
 

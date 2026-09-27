@@ -191,6 +191,8 @@ pub async fn switch_core(roon: State<'_, Roon>, core_id: String) -> Result<(), S
         .save_paired_core_id(Some(&core_id))
         .map_err(|e| format!("Couldn't save the new Core: {e}"))?;
     println!("[roon] switching to \"{}\", restarting...", core.name);
+    // The new copy waits for this one's WebView2 to close (see lib.rs)
+    std::env::set_var(crate::RESTARTED_ENV, "1");
     app.restart();
 }
 
