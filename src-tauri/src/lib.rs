@@ -1,6 +1,7 @@
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::{MouseButton, TrayIconBuilder, TrayIconEvent},
+    webview::PageLoadEvent,
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 
@@ -12,7 +13,7 @@ mod zones;
 
 // Window labels, as set in tauri.conf.json.
 /// The Toaster: the app's main screen (now playing, queue, browse/search, zones).
-const TOASTER_WINDOW: &str = "toaster";
+pub(crate) const TOASTER_WINDOW: &str = "toaster";
 const SETTINGS_WINDOW: &str = "settings";
 
 /// What gets saved and restored for the Toaster when "remember size" is on.
@@ -166,6 +167,13 @@ pub fn run() {
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
             zones::image_request(ctx.app_handle(), request, responder)
+        })
+        // The Toaster's zoom (a setting) is applied each time its page loads,
+        // including dev-mode reloads.
+        .on_page_load(|webview, payload| {
+            if webview.label() == TOASTER_WINDOW && payload.event() == PageLoadEvent::Started {
+                settings::apply_zoom(webview.app_handle());
+            }
         })
         .setup(|app| {
             // Tray right-click menu

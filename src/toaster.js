@@ -172,7 +172,7 @@ listen("toaster-open", (event) => {
 
 // Enter in the search bar runs the search (results show in the Search tab)
 searchInput.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter") return;
+  if (event.key !== "Enter" || event.ctrlKey) return; // Ctrl + Enter resets the zoom
   const text = searchInput.value.trim();
   if (text) runSearch(text);
 });
@@ -1152,7 +1152,62 @@ function openBrowse() {
 browseNav.backBtn.addEventListener("click", () => navBack(browseNav));
 browseNav.forwardBtn.addEventListener("click", () => navForward(browseNav));
 
-// ===== 13. Start ===========================================================
+// ===== 13. Zoom ===========================================================
+//
+// Ctrl + / Ctrl - (or Ctrl + mouse wheel) zoom the Toaster in 5% steps and
+// Ctrl + Enter resets it to 100%, when "Zoom Hotkeys" is on in Settings. 100% is the
+// normal size (Rust scales it by BASE_ZOOM underneath). The zoom is saved;
+// Rust applies it (everything scales together: text, spacing, art).
+
+const ZOOM_STEP = 0.05;
+const ZOOM_MIN = 0.5; // same range as ZOOM_RANGE in settings.rs
+const ZOOM_MAX = 1.8;
+const zoomToast = $("#zoom-toast");
+let appSettings = { zoom: 1, zoomHotkeys: true };
+let zoomToastTimer = 0;
+
+invoke("get_settings").then((settings) => (appSettings = settings));
+listen("settings-changed", (event) => (appSettings = event.payload));
+
+// A small pill at the bottom showing the new zoom
+function showZoomToast() {
+  zoomToast.textContent = `Zoom ${Math.round(appSettings.zoom * 100)}%`;
+  zoomToast.hidden = false;
+  clearTimeout(zoomToastTimer);
+  zoomToastTimer = setTimeout(() => (zoomToast.hidden = true), 1500);
+}
+
+// step: +0.05 / -0.05, or null to reset to 100%
+function changeZoom(step) {
+  const target = step === null ? 1 : appSettings.zoom + step;
+  const zoom = Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, target)) * 100) / 100;
+  appSettings.zoom = zoom; // right away, so quick repeated presses add up
+  send("update_settings", { changes: { zoom } });
+  showZoomToast();
+}
+
+document.addEventListener("keydown", (event) => {
+  if (!event.ctrlKey || event.altKey || !appSettings.zoomHotkeys) return;
+  let step;
+  if (event.key === "=" || event.key === "+") step = ZOOM_STEP;
+  else if (event.key === "-") step = -ZOOM_STEP;
+  else if (event.key === "Enter") step = null;
+  else return;
+  event.preventDefault();
+  changeZoom(step);
+});
+
+document.addEventListener(
+  "wheel",
+  (event) => {
+    if (!event.ctrlKey || !appSettings.zoomHotkeys) return;
+    event.preventDefault();
+    changeZoom(event.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP);
+  },
+  { passive: false },
+);
+
+// ===== 14. Start ===========================================================
 
 // Load the current state once, then follow live updates from Rust
 invoke("roon_zones").then(render);

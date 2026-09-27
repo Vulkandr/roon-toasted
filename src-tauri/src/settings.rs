@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
     /// The zone the Toaster controls, when the user has picked one.
@@ -21,6 +21,38 @@ pub struct AppSettings {
     pub selected_zone_id: Option<String>,
     /// How the Toaster window opens.
     pub toaster_window: ToasterWindow,
+    /// The Toaster's size as the user sees it: 1.0 = 100% (the normal size,
+    /// which is really `BASE_ZOOM`). Everything (text, spacing, art) scales
+    /// together. Allowed range: `ZOOM_RANGE`.
+    pub zoom: f64,
+    /// Whether Ctrl + / Ctrl - / Ctrl 0 / Ctrl + mouse wheel change the zoom.
+    pub zoom_hotkeys: bool,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            selected_zone_id: None,
+            toaster_window: ToasterWindow::default(),
+            zoom: 1.0,
+            zoom_hotkeys: true,
+        }
+    }
+}
+
+/// What the app calls 100%: the Toaster is designed at this real zoom, so the
+/// user's 100% is 110% underneath (picked by Vulk as the ideal size).
+pub const BASE_ZOOM: f64 = 1.1;
+
+/// Smallest and largest zoom, as the user sees it.
+pub const ZOOM_RANGE: std::ops::RangeInclusive<f64> = 0.5..=1.8;
+
+/// Applies the saved zoom to the Toaster (at page load and when it changes).
+pub fn apply_zoom(app: &AppHandle) {
+    let zoom = get_settings(app.clone()).zoom * BASE_ZOOM;
+    if let Some(toaster) = app.get_webview_window(crate::TOASTER_WINDOW) {
+        let _ = toaster.set_zoom(zoom);
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -68,7 +100,8 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         return Err("Settings changes must be an object.".into());
     };
 
-    let mut current = serde_json::to_value(load(&path)).map_err(|e| e.to_string())?;
+    let before = load(&path);
+    let mut current = serde_json::to_value(&before).map_err(|e| e.to_string())?;
     let fields = current.as_object_mut().expect("settings serialize to an object");
     for (name, value) in changes {
         if name == "selectedZoneId" {
@@ -82,7 +115,17 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
 
     let updated: AppSettings =
         serde_json::from_value(current).map_err(|e| format!("Invalid setting value: {e}"))?;
+    if !ZOOM_RANGE.contains(&updated.zoom) {
+        return Err(format!(
+            "Zoom must be between {} and {}.",
+            ZOOM_RANGE.start(),
+            ZOOM_RANGE.end()
+        ));
+    }
     save(&path, &updated)?;
+    if updated.zoom != before.zoom {
+        apply_zoom(&app);
+    }
     let _ = app.emit("settings-changed", &updated);
     Ok(updated)
 }

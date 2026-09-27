@@ -10,7 +10,7 @@
   --hover: rgba(0, 0, 0, 0.06);
   --track: #d9d9e0;
 
-  font-family: "Segoe UI", system-ui, sans-serif;
+  font-family: var(--font-ui); /* from fonts.css */
   font-size: 14px;
   color: var(--text);
   background: var(--bg);
@@ -583,7 +583,7 @@ input[type="range"]:disabled {
 }
 
 .queue-title {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-title);
   font-size: 24px;
 }
 
@@ -710,7 +710,7 @@ input[type="range"]:disabled {
 }
 
 .queue-radio-title {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-title);
   font-size: 18px;
 }
 
@@ -879,7 +879,7 @@ input[type="range"]:disabled {
 
 .group-title {
   margin: 0;
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-title);
   font-size: 20px;
   font-weight: normal;
 }
@@ -1059,7 +1059,7 @@ input[type="range"]:disabled {
 }
 
 .page-title {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-title);
   font-size: 22px;
   line-height: 1.2;
   overflow-wrap: anywhere;
@@ -1272,7 +1272,7 @@ input[type="range"]:disabled {
 }
 
 .list-title {
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-title);
   font-size: 28px;
   line-height: 1.2;
   overflow-wrap: anywhere;
@@ -1291,7 +1291,7 @@ input[type="range"]:disabled {
   flex-shrink: 0;
   background: var(--track);
   color: var(--text);
-  font-family: Georgia, "Times New Roman", serif;
+  font-family: var(--font-title);
   line-height: 1;
 }
 
@@ -1312,4 +1312,21 @@ input[type="range"]:disabled {
 
 .page-art.art-initials {
   font-size: 44px;
+}
+
+/* Zoom level pill at the bottom of the window */
+.zoom-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 64px;
+  z-index: 20;
+  transform: translateX(-50%);
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
 }

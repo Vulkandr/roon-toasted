@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Roon: Toasted Settings</title>
+    <link rel="stylesheet" href="fonts.css" />
     <link rel="stylesheet" href="settings.css" />
     <script type="module" src="/settings.js" defer></script>
   </head>
@@ -42,7 +43,24 @@
       <span class="switch-label label-on">Last Position</span>
     </div>
   </div>
+  <div class="setting">
+    <span class="setting-name">Zoom Hotkeys</span>
+    <div class="switch-group" id="zoom-group">
+      <span class="switch-label label-off">Off</span>
+      <label class="switch">
+        <input type="checkbox" id="zoom-hotkeys" />
+        <span class="slider"></span>
+      </label>
+      <span class="switch-label label-on">On</span>
+    </div>
+  </div>
 </div>
+<p class="setting-note">
+  Ctrl + and Ctrl &minus; (or Ctrl + mouse wheel) zoom the Toaster in 5% steps,
+  Ctrl + Enter resets.
+  Now at <span id="zoom-now">100%</span>
+  <button id="zoom-reset">Reset to 100%</button>
+</p>
 </section>
     </main>
   </body>

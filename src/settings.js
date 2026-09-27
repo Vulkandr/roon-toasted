@@ -114,3 +114,39 @@ document.querySelector(".label-on").addEventListener("click", () => setToasterWi
 // Load the saved settings, then stay in sync with any changes
 invoke("get_settings").then(showSettings);
 listen("settings-changed", (event) => showSettings(event.payload));
+
+// ===== Toaster zoom =======================================================
+
+const zoomHotkeys = document.querySelector("#zoom-hotkeys");
+const zoomGroup = document.querySelector("#zoom-group");
+const zoomNow = document.querySelector("#zoom-now");
+const zoomReset = document.querySelector("#zoom-reset");
+
+function showZoom(settings) {
+  zoomHotkeys.checked = settings.zoomHotkeys;
+  zoomNow.textContent = `${Math.round(settings.zoom * 100)}%`;
+  zoomReset.disabled = settings.zoom === 1;
+}
+
+async function saveZoomSetting(changes) {
+  try {
+    await invoke("update_settings", { changes });
+  } catch (err) {
+    // Saving failed: show what's actually saved
+    console.error(err);
+    showZoom(await invoke("get_settings"));
+  }
+}
+
+function setZoomHotkeys(on) {
+  zoomHotkeys.checked = on;
+  saveZoomSetting({ zoomHotkeys: on });
+}
+
+zoomHotkeys.addEventListener("change", () => setZoomHotkeys(zoomHotkeys.checked));
+zoomGroup.querySelector(".label-off").addEventListener("click", () => setZoomHotkeys(false));
+zoomGroup.querySelector(".label-on").addEventListener("click", () => setZoomHotkeys(true));
+zoomReset.addEventListener("click", () => saveZoomSetting({ zoom: 1 }));
+
+invoke("get_settings").then(showZoom);
+listen("settings-changed", (event) => showZoom(event.payload));

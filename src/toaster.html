@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>The Toaster</title>
+    <link rel="stylesheet" href="fonts.css" />
     <link rel="stylesheet" href="toaster.css" />
     <script type="module" src="/toaster.js" defer></script>
   </head>
@@ -202,5 +203,8 @@
 
     <!-- Loading spinner: shown by toaster.js while Roon takes a moment -->
     <div id="loading" class="loading" hidden><div class="spinner"></div></div>
+
+    <!-- Zoom level pill: shown briefly by toaster.js when zooming -->
+    <div id="zoom-toast" class="zoom-toast" hidden></div>
   </body>
 </html>

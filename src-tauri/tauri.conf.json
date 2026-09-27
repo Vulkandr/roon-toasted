@@ -11,17 +11,19 @@
     "windows": [
       {
         "label": "toaster",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
         "url": "toaster.html",
         "title": "Roon: Toasted",
-        "width": 400,
-        "height": 720,
+        "width": 460,
+        "height": 900,
         "minWidth": 400,
-        "minHeight": 720,
+        "minHeight": 837,
         "center": true,
         "visible": false
       },
       {
         "label": "settings",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
         "url": "settings.html",
         "title": "Roon: Toasted Settings",
         "width": 800,
