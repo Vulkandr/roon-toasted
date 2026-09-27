@@ -6,6 +6,7 @@ use tauri::{
 };
 
 mod browse;
+mod hotkeys;
 mod queue;
 mod roon;
 mod settings;
@@ -48,7 +49,7 @@ fn show(app: &AppHandle, label: &str) {
 /// How the Toaster was opened. Every way of opening it (tray, launching the
 /// app again, and later hotkeys and the Stream Deck) goes through here.
 #[derive(Clone, Copy)]
-enum ToasterMode {
+pub(crate) enum ToasterMode {
     /// Open as the player, as it was last left.
     Player,
     /// Open straight to Browse with the search box focused, ready to type.
@@ -81,7 +82,7 @@ fn reset_toaster_size(app: &AppHandle) {
 
 /// Shows the Toaster and tells its page which mode it was opened in, via the
 /// `toaster-open` event (payload "player" or "search").
-fn open_toaster(app: &AppHandle, mode: ToasterMode) {
+pub(crate) fn open_toaster(app: &AppHandle, mode: ToasterMode) {
     // "Default" window size means every opening, not just the first one.
     let saved = settings::get_settings(app.clone());
     if saved.toaster_window == settings::ToasterWindow::Default {
@@ -93,6 +94,20 @@ fn open_toaster(app: &AppHandle, mode: ToasterMode) {
         ToasterMode::Search => "search",
     };
     let _ = app.emit_to(TOASTER_WINDOW, "toaster-open", mode);
+}
+
+/// The Player hotkey: hides the Toaster when it's open and in front,
+/// otherwise opens it as the player.
+pub(crate) fn toggle_toaster(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(TOASTER_WINDOW) {
+        let in_front = window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false);
+        if in_front {
+            let _ = window.hide();
+            save_window_state(app);
+            return;
+        }
+    }
+    open_toaster(app, ToasterMode::Player);
 }
 
 /// Lets a page open another window, e.g. the Toaster's settings cog
@@ -209,6 +224,9 @@ pub fn run() {
                 .skip_initial_state(TOASTER_WINDOW)
                 .build(),
         );
+
+        // Global hotkeys (see hotkeys.rs); registered in setup()
+        builder = builder.plugin(hotkeys::plugin());
     }
 
     builder
@@ -218,6 +236,7 @@ pub fn run() {
         .manage(queue::Queue::default())
         .manage(roon::Roon::default())
         .manage(browse::BrowseState::default())
+        .manage(hotkeys::HotkeyState::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
@@ -287,6 +306,10 @@ pub fn run() {
                 }
             }
 
+            // The global hotkeys from Settings
+            #[cfg(desktop)]
+            hotkeys::register_saved(app.handle());
+
             // Connect the zone state to the app, then connect to Roon in the background.
             app.state::<zones::Zones>().init(app.handle());
             app.state::<queue::Queue>().init(app.handle());
@@ -338,6 +361,9 @@ pub fn run() {
             browse::roon_browse_more,
             browse::roon_browse_path,
             browse::roon_search,
+            hotkeys::hotkey_status,
+            hotkeys::set_hotkey,
+            hotkeys::pause_hotkeys,
             queue::roon_queue,
             queue::roon_play_from_here
         ])

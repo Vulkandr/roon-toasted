@@ -162,12 +162,16 @@ document.querySelectorAll(".tab").forEach((tab) => {
 // ===== 4. Toaster modes, Escape, settings cog =============================
 
 // Rust tells us how the Toaster was opened: "player" or "search".
+// Player mode (Player hotkey, tray, launching the app again): the Playing tab.
 // Search mode: Search tab, bar focused, old text selected so typing replaces it.
+// Either way, search results and other tabs' pages are kept as they were.
 listen("toaster-open", (event) => {
   if (event.payload === "search") {
     showTab("search");
     searchInput.focus();
     searchInput.select();
+  } else {
+    showTab("playing");
   }
 });
 

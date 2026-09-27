@@ -31,6 +31,14 @@ pub struct AppSettings {
     pub hide_on_blur: bool,
     /// The Toaster's colors: the default purple, or taken from the album art.
     pub toaster_colors: ToasterColors,
+    /// Whether the global hotkeys are on at all (off: both released, e.g. for
+    /// people who only open the Toaster from the Stream Deck).
+    pub hotkeys_enabled: bool,
+    /// Global hotkey that opens (or hides) the Toaster, e.g. "Ctrl+Alt+Z";
+    /// None = off. Changed through `set_hotkey` (hotkeys.rs), not `update_settings`.
+    pub hotkey_player: Option<String>,
+    /// Global hotkey that opens the Toaster in search mode; None = off.
+    pub hotkey_search: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -42,6 +50,9 @@ impl Default for AppSettings {
             zoom_hotkeys: true,
             hide_on_blur: true,
             toaster_colors: ToasterColors::default(),
+            hotkeys_enabled: true,
+            hotkey_player: Some("Ctrl+Alt+Z".into()),
+            hotkey_search: Some("Ctrl+Alt+S".into()),
         }
     }
 }
@@ -123,6 +134,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         if name == "selectedZoneId" {
             return Err("Use roon_select_zone to change the zone.".into());
         }
+        if name == "hotkeyPlayer" || name == "hotkeySearch" {
+            return Err("Use set_hotkey to change a hotkey.".into());
+        }
         if !fields.contains_key(name) {
             return Err(format!("Unknown setting: {name}"));
         }
@@ -141,6 +155,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     save(&path, &updated)?;
     if updated.zoom != before.zoom {
         apply_zoom(&app);
+    }
+    if updated.hotkeys_enabled != before.hotkeys_enabled {
+        crate::hotkeys::register_saved(&app);
     }
     let _ = app.emit("settings-changed", &updated);
     Ok(updated)

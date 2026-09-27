@@ -29,7 +29,7 @@
     <main>
       <h1>Settings</h1>
 
-      <section class="card">
+      <section class="card core-card">
         <h2>Roon Core</h2>
 
         <div class="current">
@@ -44,7 +44,7 @@
         <ul id="core-list"></ul>
         <p id="core-error" class="error"></p>
       </section>
-      <section class="card">
+      <section class="card toaster-card">
         <h2>Toaster</h2>
 
         <div class="setting-row">
@@ -92,7 +92,33 @@
               <span class="switch-label label-on">Album Art</span>
             </div>
           </div>
+          <div class="setting">
+            <span class="setting-name">Hotkeys</span>
+            <div class="switch-group" id="hotkeys-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="hotkeys-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
         </div>
+
+        <h3>Hotkeys</h3>
+        <div id="hotkey-list">
+        <div class="hotkey-row">
+          <span class="hotkey-name">Open Toaster</span>
+          <button id="hotkey-player" class="hotkey" data-which="player"></button>
+          <button class="hotkey-clear" data-which="player">Clear</button>
+        </div>
+        <div class="hotkey-row">
+          <span class="hotkey-name">Search</span>
+          <button id="hotkey-search" class="hotkey" data-which="search"></button>
+          <button class="hotkey-clear" data-which="search">Clear</button>
+        </div>
+        </div>
+        <p id="hotkey-error" class="error"></p>
       </section>
 
       <!-- What each setting does -->
@@ -119,6 +145,14 @@
           <strong>Colors:</strong> Default keeps the Toaster purple. Album Art takes its colors
           from the album that's playing and fades to the next album's colors when the track
           changes. Muted covers get a softer tint, and black-and-white covers a white accent.
+        </p>
+        <p>
+          <strong>Hotkeys:</strong> Work anywhere in Windows, even when the Toaster is closed.
+          Open Toaster opens it, or hides it if it's already in front. Search opens it on the
+          Search tab, ready to type. Click a hotkey and press a new combination with Ctrl
+          and/or Alt (Escape cancels). Clear turns one off; the Hotkeys switch turns both off,
+          e.g. if they get in the way of other apps and you open the Toaster from the Stream
+          Deck instead.
         </p>
       </section>
     </main>

@@ -47,10 +47,54 @@ body {
   scrollbar-color: var(--border) transparent;
 }
 
+/* Two columns: Roon Core and Toaster on the left, the Legend on the right
+   (one column when the window is narrow) */
 main {
-  max-width: 640px;
+  max-width: 1040px;
   margin: 0 auto;
   padding: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+main > h1 {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+main > .card + .card {
+  margin-top: 0;
+}
+
+.core-card {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.toaster-card {
+  grid-column: 1;
+  grid-row: 3;
+}
+
+.legend {
+  grid-column: 2;
+  grid-row: 2 / span 2;
+}
+
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+    max-width: 640px;
+  }
+
+  .core-card,
+  .toaster-card,
+  .legend {
+    grid-column: 1;
+    grid-row: auto;
+  }
 }
 
 h1 {
@@ -379,4 +423,50 @@ button:disabled {
 
 #win-maximize.maximized .icon-restore {
   display: block;
+}
+
+/* Hotkeys: name, the combination (click to record a new one), Clear */
+.hotkey-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.hotkey-name {
+  width: 110px;
+}
+
+.hotkey,
+.hotkey:hover {
+  min-width: 170px;
+  text-align: left;
+  color: var(--text);
+  background: transparent;
+  border-color: var(--border);
+}
+
+.hotkey:hover {
+  border-color: var(--accent);
+}
+
+.hotkey.off {
+  color: var(--muted);
+}
+
+/* Waiting for keys */
+.hotkey.recording {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.hotkey-clear {
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+/* Hotkeys switched off: the combinations are kept, but dimmed and locked */
+#hotkey-list.disabled {
+  opacity: 0.45;
+  pointer-events: none;
 }

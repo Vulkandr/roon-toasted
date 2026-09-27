@@ -221,3 +221,133 @@ async function updateMaximizeButton() {
 }
 window.addEventListener("resize", updateMaximizeButton);
 updateMaximizeButton();
+
+// ===== Hotkeys ============================================================
+//
+// Click a hotkey, then press the new combination: it needs Ctrl and/or Alt
+// plus a key. While recording, all hotkeys are paused, so pressing the current
+// one doesn't open or hide the Toaster. Escape or clicking elsewhere cancels.
+
+const hotkeyButtons = {
+  player: document.querySelector("#hotkey-player"),
+  search: document.querySelector("#hotkey-search"),
+};
+const hotkeyError = document.querySelector("#hotkey-error");
+const hotkeysEnabled = document.querySelector("#hotkeys-enabled");
+const hotkeysGroup = document.querySelector("#hotkeys-group");
+let recording = null; // "player" or "search" while waiting for keys
+
+// "Ctrl+Alt+R" -> "Ctrl + Alt + R"
+function prettyHotkey(text) {
+  if (!text) return "Off";
+  return text
+    .split("+")
+    .map((part) => ({ Super: "Win", ArrowUp: "Up", ArrowDown: "Down", ArrowLeft: "Left", ArrowRight: "Right" })[part] ?? part)
+    .join(" + ");
+}
+
+function showHotkeys(status) {
+  hotkeysEnabled.checked = status.enabled;
+  document.querySelector("#hotkey-list").classList.toggle("disabled", !status.enabled);
+  for (const which of ["player", "search"]) {
+    const button = hotkeyButtons[which];
+    if (recording === which) continue;
+    button.textContent = prettyHotkey(status[which]);
+    button.classList.toggle("off", !status[which]);
+  }
+  hotkeyError.textContent = [status.playerError, status.searchError].filter(Boolean).join(" ");
+}
+
+async function refreshHotkeys() {
+  showHotkeys(await invoke("hotkey_status"));
+}
+
+async function startRecording(which) {
+  if (recording) await stopRecording();
+  recording = which;
+  hotkeyError.textContent = "";
+  hotkeyButtons[which].textContent = "Press keys…";
+  hotkeyButtons[which].classList.add("recording");
+  await invoke("pause_hotkeys", { paused: true });
+}
+
+async function stopRecording() {
+  const which = recording;
+  recording = null;
+  if (which) hotkeyButtons[which].classList.remove("recording");
+  await invoke("pause_hotkeys", { paused: false });
+  await refreshHotkeys();
+}
+
+// The key's name as the app stores it: KeyR -> R, Digit5 -> 5, others as is
+// (F5, Space, ArrowUp, Numpad1, ...)
+function keyName(code) {
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  return code;
+}
+
+async function saveHotkey(which, shortcut) {
+  try {
+    showHotkeys(await invoke("set_hotkey", { which, shortcut }));
+  } catch (err) {
+    await refreshHotkeys();
+    hotkeyError.textContent = err;
+  }
+}
+
+document.addEventListener("keydown", async (event) => {
+  if (!recording) return;
+  event.preventDefault();
+  if (event.key === "Escape") {
+    await stopRecording();
+    return;
+  }
+  // Wait for the main key after the modifiers
+  if (["Control", "Alt", "Shift", "Meta", "AltGraph"].includes(event.key)) return;
+  if (!event.ctrlKey && !event.altKey) {
+    hotkeyError.textContent = "Use Ctrl and/or Alt with the key, so normal typing isn't affected.";
+    return;
+  }
+  const parts = [];
+  if (event.ctrlKey) parts.push("Ctrl");
+  if (event.altKey) parts.push("Alt");
+  if (event.shiftKey) parts.push("Shift");
+  if (event.metaKey) parts.push("Super");
+  parts.push(keyName(event.code));
+
+  const which = recording;
+  recording = null;
+  hotkeyButtons[which].classList.remove("recording");
+  await saveHotkey(which, parts.join("+"));
+});
+
+for (const [which, button] of Object.entries(hotkeyButtons)) {
+  button.addEventListener("click", () => startRecording(which));
+  // Clicking elsewhere cancels
+  button.addEventListener("blur", () => {
+    if (recording === which) stopRecording();
+  });
+}
+
+document.querySelectorAll(".hotkey-clear").forEach((button) => {
+  button.addEventListener("click", () => saveHotkey(button.dataset.which, null));
+});
+
+// The Hotkeys switch: off releases both combinations (they're kept for later)
+async function setHotkeysEnabled(on) {
+  hotkeysEnabled.checked = on;
+  try {
+    await invoke("update_settings", { changes: { hotkeysEnabled: on } });
+  } catch (err) {
+    console.error(err);
+  }
+  await refreshHotkeys();
+}
+
+hotkeysEnabled.addEventListener("change", () => setHotkeysEnabled(hotkeysEnabled.checked));
+hotkeysGroup.querySelector(".label-off").addEventListener("click", () => setHotkeysEnabled(false));
+hotkeysGroup.querySelector(".label-on").addEventListener("click", () => setHotkeysEnabled(true));
+
+refreshHotkeys();
+listen("settings-changed", () => refreshHotkeys());
