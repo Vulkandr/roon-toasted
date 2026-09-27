@@ -31,7 +31,7 @@
         "url": "settings.html",
         "title": "Roon: Toasted Settings",
         "width": 1100,
-        "height": 850,
+        "height": 945,
         "center": true,
         "visible": false,
         "decorations": false,
@@ -55,6 +55,25 @@
         "minimizable": false,
         "decorations": false,
         "shadow": true
+      },
+      {
+        "label": "widget",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
+        "url": "widget.html",
+        "title": "Roon: Toasted",
+        "width": 320,
+        "height": 38,
+        "visible": false,
+        "focus": false,
+        "focusable": false,
+        "alwaysOnTop": true,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true
       }
     ],
     "security": {

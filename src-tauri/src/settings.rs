@@ -48,6 +48,16 @@ pub struct AppSettings {
     /// Which screen toasts appear on (an id from `list_monitors`, see
     /// monitors.rs); None = whichever is the main display.
     pub toast_monitor: Option<String>,
+    /// Taskbar widget (experimental, see widget.rs): on or off.
+    pub widget_enabled: bool,
+    /// Which end of the taskbar the widget is measured from.
+    pub widget_side: WidgetSide,
+    /// Distance from that end, in logical pixels (`WIDGET_POSITION`).
+    pub widget_position: u32,
+    /// Width in logical pixels (`WIDGET_WIDTH`).
+    pub widget_width: u32,
+    /// Title and artist on one line (small taskbars) or two.
+    pub widget_lines: WidgetLines,
     /// How long a toast stays, in seconds (it waits while the mouse is on it).
     /// Allowed range: `TOAST_SECONDS`.
     pub toast_seconds: u32,
@@ -68,6 +78,11 @@ impl Default for AppSettings {
             toasts_enabled: true,
             toast_position: ToastPosition::default(),
             toast_monitor: None,
+            widget_enabled: false,
+            widget_side: WidgetSide::default(),
+            widget_position: 12,
+            widget_width: 320,
+            widget_lines: WidgetLines::default(),
             toast_seconds: 8,
         }
     }
@@ -79,6 +94,11 @@ pub const BASE_ZOOM: f64 = 1.1;
 
 /// Smallest and largest zoom, as the user sees it.
 pub const ZOOM_RANGE: std::ops::RangeInclusive<f64> = 0.5..=1.8;
+
+/// How far the taskbar widget can be from its end of the taskbar, and how
+/// wide it can be (logical pixels).
+pub const WIDGET_POSITION: std::ops::RangeInclusive<u32> = 0..=2000;
+pub const WIDGET_WIDTH: std::ops::RangeInclusive<u32> = 160..=700;
 
 /// Shortest and longest a toast can stay, in seconds.
 pub const TOAST_SECONDS: std::ops::RangeInclusive<u32> = 2..=30;
@@ -137,6 +157,22 @@ pub enum ToastPosition {
     /// Where Windows shows its own notifications.
     #[default]
     BottomRight,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WidgetSide {
+    #[default]
+    Left,
+    Right,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WidgetLines {
+    One,
+    #[default]
+    Two,
 }
 
 pub fn path(app: &AppHandle) -> Option<PathBuf> {
@@ -206,7 +242,14 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
             TOAST_SECONDS.end()
         ));
     }
+    if !WIDGET_POSITION.contains(&updated.widget_position) || !WIDGET_WIDTH.contains(&updated.widget_width)
+    {
+        return Err("The widget's position or width is out of range.".into());
+    }
     save(&path, &updated)?;
+    if crate::widget::settings_changed(&before, &updated) {
+        crate::widget::refresh(&app);
+    }
     if updated.zoom != before.zoom {
         apply_zoom(&app);
     }

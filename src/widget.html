@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roon: Toasted</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="widget.css" />
+    <script type="module" src="/widget.js" defer></script>
+  </head>
+
+  <body>
+    <!-- The taskbar widget (experimental, see widget.rs). Clicking the art or
+         text opens the Toaster; the buttons control playback. -->
+    <div id="widget" class="widget two-lines">
+      <div id="info" class="info" title="Open the Toaster">
+        <div class="art-box">
+          <img id="art" class="art" alt="" />
+          <div id="art-missing" class="art art-placeholder" hidden></div>
+        </div>
+        <div class="text">
+          <div id="title" class="title">Roon: Toasted</div>
+          <div id="artist" class="artist"></div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="previous" class="btn" title="Previous">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/></svg>
+        </button>
+        <button id="play-pause" class="btn play" title="Play / Pause">
+          <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
+          <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>
+        </button>
+        <button id="next" class="btn" title="Next">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg>
+        </button>
+      </div>
+    </div>
+  </body>
+</html>

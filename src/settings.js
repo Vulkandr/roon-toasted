@@ -446,3 +446,121 @@ document.querySelector("#toast-test").addEventListener("click", () => invoke("to
 
 invoke("get_settings").then(showToasts);
 listen("settings-changed", (event) => showToasts(event.payload));
+
+// ===== Taskbar widget (experimental) ======================================
+//
+// On/off, side (left or right end of the taskbar), one or two lines of text,
+// and Position / Width sliders that move the widget live while dragging.
+
+const widgetEnabled = document.querySelector("#widget-enabled");
+const widgetSide = document.querySelector("#widget-side");
+const widgetLines = document.querySelector("#widget-lines");
+const widgetPosition = document.querySelector("#widget-position");
+const widgetWidth = document.querySelector("#widget-width");
+const widgetPositionValue = document.querySelector("#widget-position-value");
+const widgetWidthValue = document.querySelector("#widget-width-value");
+
+function showWidget(settings) {
+  widgetEnabled.checked = settings.widgetEnabled;
+  widgetSide.checked = settings.widgetSide === "right";
+  widgetLines.checked = settings.widgetLines === "two";
+  document.querySelectorAll(".widget-option").forEach((option) => {
+    option.classList.toggle("disabled", !settings.widgetEnabled);
+  });
+  // Don't fight the slider being dragged
+  if (!dragging) {
+    widgetPosition.value = settings.widgetPosition;
+    widgetWidth.value = settings.widgetWidth;
+  }
+  widgetPositionValue.textContent = `${widgetPosition.value} px`;
+  widgetWidthValue.textContent = `${widgetWidth.value} px`;
+}
+
+async function saveWidget(changes) {
+  try {
+    await invoke("update_settings", { changes });
+  } catch (err) {
+    console.error(err);
+    showWidget(await invoke("get_settings"));
+  }
+}
+
+// Switches (the side labels pick that side, like the others)
+function widgetSwitch(input, group, change) {
+  input.addEventListener("change", () => saveWidget(change(input.checked)));
+  const labels = document.querySelector(group);
+  labels.querySelector(".label-off").addEventListener("click", () => saveWidget(change(false)));
+  labels.querySelector(".label-on").addEventListener("click", () => saveWidget(change(true)));
+}
+widgetSwitch(widgetEnabled, "#widget-group", (on) => ({ widgetEnabled: on }));
+widgetSwitch(widgetSide, "#side-group", (right) => ({ widgetSide: right ? "right" : "left" }));
+widgetSwitch(widgetLines, "#lines-group", (two) => ({ widgetLines: two ? "two" : "one" }));
+
+// Sliders: save (and so move the widget) at most every 50 ms while dragging
+let dragging = false;
+let pending = null;
+let saveTimer = null;
+
+function saveSoon(changes) {
+  pending = { ...pending, ...changes };
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    const changes = pending;
+    pending = null;
+    saveTimer = null;
+    saveWidget(changes);
+  }, 50);
+}
+
+for (const [slider, name, label] of [
+  [widgetPosition, "widgetPosition", widgetPositionValue],
+  [widgetWidth, "widgetWidth", widgetWidthValue],
+]) {
+  slider.addEventListener("input", () => {
+    dragging = true;
+    label.textContent = `${slider.value} px`;
+    saveSoon({ [name]: Number(slider.value) });
+  });
+  slider.addEventListener("change", () => {
+    dragging = false;
+    saveSoon({ [name]: Number(slider.value) });
+  });
+}
+
+invoke("get_settings").then(showWidget);
+listen("settings-changed", (event) => showWidget(event.payload));
+
+// ===== Reset on slider numbers ============================================
+//
+// The number next to a slider (e.g. "59 px"): hovering it shows a red
+// "Reset" when the slider isn't at its default, and clicking puts the
+// default back. Each number says which slider and setting it belongs to.
+
+document.querySelectorAll(".reset-value").forEach((button) => {
+  const slider = document.querySelector(button.dataset.slider);
+  const atDefault = () => Number(slider.value) === Number(button.dataset.default);
+  const showNumber = () => {
+    button.classList.remove("reset");
+    button.textContent = `${slider.value} ${button.dataset.unit}`;
+  };
+
+  button.addEventListener("mouseenter", () => {
+    if (atDefault()) return;
+    button.classList.add("reset");
+    button.textContent = "Reset";
+  });
+  button.addEventListener("mouseleave", showNumber);
+  button.addEventListener("click", async () => {
+    if (atDefault()) return;
+    slider.value = button.dataset.default;
+    showNumber();
+    try {
+      await invoke("update_settings", {
+        changes: { [button.dataset.setting]: Number(button.dataset.default) },
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  });
+});
+

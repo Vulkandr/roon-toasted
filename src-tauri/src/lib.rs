@@ -12,6 +12,7 @@ mod roon;
 mod settings;
 mod toast;
 mod tray;
+mod widget;
 mod zones;
 
 // Window labels, as set in tauri.conf.json.
@@ -220,12 +221,12 @@ pub fn run() {
 
         // Tracks the Toaster's size/position so it can reopen where it was left.
         // Restoring is done in setup() (only when the setting says "remember").
-        // Settings always opens centered and the toast places itself (toast.rs),
-        // so neither is tracked.
+        // Settings always opens centered, and the toast and the taskbar widget
+        // place themselves (toast.rs, widget.rs), so none of those are tracked.
         builder = builder.plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE)
-                .with_denylist(&[SETTINGS_WINDOW, toast::TOAST_WINDOW])
+                .with_denylist(&[SETTINGS_WINDOW, toast::TOAST_WINDOW, widget::WIDGET_WINDOW])
                 .skip_initial_state(TOASTER_WINDOW)
                 .build(),
         );
@@ -286,6 +287,9 @@ pub fn run() {
             // The global hotkeys from Settings
             #[cfg(desktop)]
             hotkeys::register_saved(app.handle());
+
+            // The taskbar widget, if it's switched on (see widget.rs)
+            widget::start(app.handle());
 
             // roon-toasted:// links, and opening the Toaster if a link or
             // --search started the app (see launch.rs)

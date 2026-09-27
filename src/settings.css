@@ -456,6 +456,52 @@ button:disabled {
   pointer-events: none;
 }
 
+/* Taskbar Widget */
+.badge {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  vertical-align: middle;
+  padding: 2px 7px;
+  margin-left: 6px;
+  border-radius: 999px;
+  color: var(--warn);
+  border: 1px solid var(--warn);
+}
+
+/* Switched off: its options are dimmed and locked */
+.widget-option.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.range-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 14px;
+}
+
+.range-name {
+  width: 70px;
+}
+
+.range-row input {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.range-value {
+  min-width: 4.5em;
+  text-align: right;
+  font-size: 13px;
+  color: var(--muted);
+}
+
 /* Toasts: the switch, Position and Time on Screen side by side */
 .toast-row {
   display: flex;
@@ -549,8 +595,25 @@ button:disabled {
 }
 
 #toast-seconds-value {
-  min-width: 2.6em;
+  min-width: 3.2em;
+  text-align: left;
+}
+
+/* A slider's number: hovering shows a red "Reset" (unless it's already at
+   the default), clicking puts the default back */
+.reset-value,
+.reset-value:hover {
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
   font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.reset-value.reset {
+  color: var(--error);
 }
 
 #toast-test {

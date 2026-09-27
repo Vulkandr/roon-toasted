@@ -122,6 +122,60 @@
         </div>
         <p id="hotkey-error" class="error"></p>
       </section>
+
+      <section class="card widget-card">
+        <h2>Taskbar Widget <span class="badge">Experimental</span></h2>
+
+        <div class="setting-row">
+          <div class="setting">
+            <span class="setting-name">Show Widget</span>
+            <div class="switch-group" id="widget-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="widget-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting widget-option">
+            <span class="setting-name">Side</span>
+            <div class="switch-group" id="side-group">
+              <span class="switch-label label-off">Left</span>
+              <label class="switch">
+                <input type="checkbox" id="widget-side" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Right</span>
+            </div>
+          </div>
+          <div class="setting widget-option">
+            <span class="setting-name">Text</span>
+            <div class="switch-group" id="lines-group">
+              <span class="switch-label label-off">One Line</span>
+              <label class="switch">
+                <input type="checkbox" id="widget-lines" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Two Lines</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Moves and resizes the widget live while dragging -->
+        <div class="widget-option">
+          <div class="range-row">
+            <span class="range-name">Position</span>
+            <input type="range" id="widget-position" min="0" max="2000" step="1" />
+            <button id="widget-position-value" class="range-value reset-value" data-slider="#widget-position" data-setting="widgetPosition" data-default="12" data-unit="px"></button>
+          </div>
+          <div class="range-row">
+            <span class="range-name">Width</span>
+            <input type="range" id="widget-width" min="160" max="700" step="1" />
+            <button id="widget-width-value" class="range-value reset-value" data-slider="#widget-width" data-setting="widgetWidth" data-default="320" data-unit="px"></button>
+          </div>
+        </div>
+      </section>
       </div>
 
       <!-- Right column -->
@@ -159,7 +213,7 @@
               <span class="option-name">Time on Screen</span>
               <div class="time-row">
                 <input type="range" id="toast-seconds" min="2" max="30" step="1" />
-                <span id="toast-seconds-value">8 s</span>
+                <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
               </div>
               <button id="toast-test">Test</button>
             </div>
@@ -201,6 +255,11 @@
           Open Toaster opens it, or hides it if it's currently open. Search opens it on the
           Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
           up the Toaster.
+        </p>
+        <p>
+          <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
+          then slide Position and Width until it sits in a free spot; One Line suits small
+          taskbars. Windows doesn't officially allow this, so it may misbehave.
         </p>
         <p>
           <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
