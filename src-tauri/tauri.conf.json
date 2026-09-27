@@ -31,9 +31,11 @@
         "url": "settings.html",
         "title": "Roon: Toasted Settings",
         "width": 800,
-        "height": 915,
+        "height": 947,
         "center": true,
-        "visible": false
+        "visible": false,
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {

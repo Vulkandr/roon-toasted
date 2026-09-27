@@ -141,8 +141,8 @@ fn hide_if_app_unfocused(app: AppHandle) {
     });
 }
 
-/// Asks Windows 11 for rounded corners on the frameless Toaster (Windows
-/// doesn't round frameless windows on its own; maximized windows stay square).
+/// Asks Windows 11 for rounded corners on a frameless window (Windows doesn't
+/// round frameless windows on its own; maximized windows stay square).
 /// Does nothing on Windows 10, which has no rounded corners.
 #[cfg(windows)]
 fn round_corners(window: &WebviewWindow) {
@@ -269,8 +269,10 @@ pub fn run() {
                 .build(app)?;
 
             #[cfg(windows)]
-            if let Some(toaster) = app.get_webview_window(TOASTER_WINDOW) {
-                round_corners(&toaster);
+            for label in [TOASTER_WINDOW, SETTINGS_WINDOW] {
+                if let Some(window) = app.get_webview_window(label) {
+                    round_corners(&window);
+                }
             }
 
             // Reopen the Toaster at its last size/position if the user chose that.

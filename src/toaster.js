@@ -10,6 +10,7 @@ const zoneName = $("#zone-name");
 const nothingPlaying = $("#nothing-playing");
 const nowPlaying = $("#now-playing");
 const art = $("#art");
+const artMissing = $("#art-missing");
 const title = $("#title");
 const artist = $("#artist");
 const album = $("#album");
@@ -248,6 +249,7 @@ function render(payload) {
         art.src = convertFileSrc(artKey, "roonimg") + "?width=1200&height=1200";
       } else {
         art.removeAttribute("src");
+        showArt(false);
       }
       applyAlbumColors();
     }
@@ -287,6 +289,14 @@ function render(payload) {
 
   renderOutput(zone.outputs[0]);
 }
+
+// The album art, or the logo stand-in when there's none (or it fails to load)
+function showArt(hasArt) {
+  art.hidden = !hasArt;
+  artMissing.hidden = hasArt;
+}
+art.addEventListener("load", () => showArt(true));
+art.addEventListener("error", () => showArt(false));
 
 function updatePosition(seconds) {
   if (draggingSeek) return; // don't fight the user's drag
@@ -1258,10 +1268,40 @@ function rgbToHsl(r, g, b) {
   return [h * 60, s, l];
 }
 
-// The album's main color as { h, s }, or null when the art has no clear color.
-// Colorful pixels are grouped into 24 hue slices (15° each), weighting vivid,
-// mid-brightness pixels most; the heaviest slice (counting half of each
-// neighbour, so a color on a slice edge isn't split) is the album's color.
+// Groups pixels into 24 hue slices (15° each), weighting each pixel by
+// `weigh`; returns the heaviest slice (counting half of each neighbour, so a
+// color on a slice edge isn't split) as { h, s, share of all the weight }
+function strongestHue(pixelsHsl, weigh) {
+  const slices = Array.from({ length: 24 }, () => ({ weight: 0, x: 0, y: 0, s: 0 }));
+  let total = 0;
+  for (const [h, s, l] of pixelsHsl) {
+    const weight = weigh(s, l);
+    if (weight <= 0) continue;
+    const slice = slices[Math.floor(h / 15) % 24];
+    slice.weight += weight;
+    // Hue averaged as an angle, so 355° and 5° average to 0°, not 180°
+    slice.x += Math.cos((h * Math.PI) / 180) * weight;
+    slice.y += Math.sin((h * Math.PI) / 180) * weight;
+    slice.s += s * weight;
+    total += weight;
+  }
+  if (total === 0) return null;
+  const around = (i) =>
+    slices[i].weight + 0.5 * (slices[(i + 23) % 24].weight + slices[(i + 1) % 24].weight);
+  let best = 0;
+  for (let i = 1; i < 24; i++) if (around(i) > around(best)) best = i;
+  const slice = slices[best];
+  if (slice.weight === 0) return null;
+  return {
+    h: ((Math.atan2(slice.y, slice.x) * 180) / Math.PI + 360) % 360,
+    s: slice.s / slice.weight,
+    share: around(best) / total,
+  };
+}
+
+// The album's main color as { h, s, muted }, or null when the art has no
+// clear color. Vivid color wins; covers without any (dark, washed-out art)
+// get a muted color instead, if enough of the cover shares one hue.
 async function albumHue(imageKey) {
   if (albumHueCache.has(imageKey)) return albumHueCache.get(imageKey);
 
@@ -1276,43 +1316,42 @@ async function albumHue(imageKey) {
   canvas.height = size;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
   ctx.drawImage(img, 0, 0, size, size);
-  const pixels = ctx.getImageData(0, 0, size, size).data;
-
-  const slices = Array.from({ length: 24 }, () => ({ weight: 0, x: 0, y: 0, s: 0 }));
-  let colorful = 0;
-  for (let i = 0; i < pixels.length; i += 4) {
-    const [h, s, l] = rgbToHsl(pixels[i], pixels[i + 1], pixels[i + 2]);
-    if (s < 0.25 || l < 0.12 || l > 0.9) continue;
-    const weight = s * (1 - Math.abs(l - 0.5));
-    const slice = slices[Math.floor(h / 15) % 24];
-    slice.weight += weight;
-    // Hue averaged as an angle, so 355° and 5° average to 0°, not 180°
-    slice.x += Math.cos((h * Math.PI) / 180) * weight;
-    slice.y += Math.sin((h * Math.PI) / 180) * weight;
-    slice.s += s * weight;
-    colorful++;
-  }
+  const data = ctx.getImageData(0, 0, size, size).data;
+  const pixelsHsl = [];
+  for (let i = 0; i < data.length; i += 4) pixelsHsl.push(rgbToHsl(data[i], data[i + 1], data[i + 2]));
+  const count = pixelsHsl.length;
 
   let result = null;
-  if (colorful >= size * size * 0.04) {
-    const score = (i) =>
-      slices[i].weight + 0.5 * (slices[(i + 23) % 24].weight + slices[(i + 1) % 24].weight);
-    let best = 0;
-    for (let i = 1; i < 24; i++) if (score(i) > score(best)) best = i;
-    const slice = slices[best];
-    if (slice.weight > 0) {
-      const h = ((Math.atan2(slice.y, slice.x) * 180) / Math.PI + 360) % 360;
-      result = { h, s: slice.s / slice.weight };
+
+  // 1. Vivid color: at least 4% of the cover, weighting vivid, mid-brightness
+  //    pixels most
+  const isVivid = (s, l) => s >= 0.25 && l >= 0.12 && l <= 0.9;
+  const vividCount = pixelsHsl.filter(([, s, l]) => isVivid(s, l)).length;
+  if (vividCount >= count * 0.04) {
+    const hue = strongestHue(pixelsHsl, (s, l) => (isVivid(s, l) ? s * (1 - Math.abs(l - 0.5)) : 0));
+    if (hue) result = { h: hue.h, s: hue.s, muted: false };
+  }
+
+  // 2. Muted color: at least 20% of the cover faintly colored, and most of it
+  //    one hue (so specks or JPEG noise on grey art don't count)
+  if (!result) {
+    const isMuted = (s, l) => s >= 0.08 && l >= 0.06 && l <= 0.92;
+    const mutedCount = pixelsHsl.filter(([, s, l]) => isMuted(s, l)).length;
+    if (mutedCount >= count * 0.2) {
+      const hue = strongestHue(pixelsHsl, (s, l) => (isMuted(s, l) ? s : 0));
+      if (hue && hue.share >= 0.5) result = { h: hue.h, s: hue.s, muted: true };
     }
   }
+
   albumHueCache.set(imageKey, result);
   return result;
 }
 
 // The Toaster's colors for an album color, in dark or light mode
-function albumPalette({ h, s }, dark) {
-  const vivid = Math.min(0.85, Math.max(0.5, s));
-  const tint = Math.min(0.3, s * 0.5);
+function albumPalette({ h, s, muted }, dark) {
+  // Muted covers get a softer accent and a lighter tint
+  const vivid = muted ? Math.min(0.5, Math.max(0.3, s * 1.5)) : Math.min(0.85, Math.max(0.5, s));
+  const tint = muted ? Math.min(0.18, s * 0.8) : Math.min(0.3, s * 0.5);
   // Light hues (yellows, greens, cyans) get a darker accent so white icons on
   // it (the play button) stay readable
   const lightHue = h >= 40 && h <= 190;

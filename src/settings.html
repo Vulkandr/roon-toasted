@@ -10,6 +10,22 @@
   </head>
 
   <body>
+    <!-- Window bar (the Windows title bar is turned off), same as the Toaster's:
+         drag it to move the window, double-click it to maximize -->
+    <div class="titlebar" data-tauri-drag-region="deep">
+      <span class="titlebar-logo"></span>
+      <span class="titlebar-title">Roon: Toasted Settings</span>
+      <button id="win-maximize" class="win-btn" title="Maximize">
+        <svg class="icon-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+        <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="8" width="11" height="11" rx="1"/><path d="M8 8V6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-2"/></svg>
+      </button>
+      <button id="win-close" class="win-btn close" title="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+
+    <!-- Everything below the bar scrolls; the bar stays put -->
+    <div class="page-scroll">
     <main>
       <h1>Settings</h1>
 
@@ -102,9 +118,10 @@
         <p>
           <strong>Colors:</strong> Default keeps the Toaster purple. Album Art takes its colors
           from the album that's playing and fades to the next album's colors when the track
-          changes. Black-and-white art keeps the default colors.
+          changes. Muted covers get a softer tint; black-and-white art keeps the default colors.
         </p>
       </section>
     </main>
+    </div>
   </body>
 </html>

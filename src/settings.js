@@ -203,3 +203,21 @@ colorsGroup.querySelector(".label-on").addEventListener("click", () => setColors
 
 invoke("get_settings").then(showColors);
 listen("settings-changed", (event) => showColors(event.payload));
+
+// ===== Window bar =========================================================
+
+// × closes Settings (back to the Toaster if it's open), □ maximizes or restores
+const appWindow = window.__TAURI__.window.getCurrentWindow();
+const maximizeBtn = document.querySelector("#win-maximize");
+
+document.querySelector("#win-close").addEventListener("click", () => appWindow.close());
+maximizeBtn.addEventListener("click", () => appWindow.toggleMaximize());
+
+// Shows the restore icon while maximized (checked whenever the size changes)
+async function updateMaximizeButton() {
+  const maximized = await appWindow.isMaximized();
+  maximizeBtn.classList.toggle("maximized", maximized);
+  maximizeBtn.title = maximized ? "Restore" : "Maximize";
+}
+window.addEventListener("resize", updateMaximizeButton);
+updateMaximizeButton();
