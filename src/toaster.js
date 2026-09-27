@@ -118,6 +118,7 @@ document.querySelectorAll(".tab").forEach((tab) => {
     showTab(tab.dataset.tab);
     // Search tab with nothing searched yet: ready to type right away
     if (tab.dataset.tab === "search" && !lastSearch) searchInput.focus();
+    if (tab.dataset.tab === "browse") openBrowse();
   });
 });
 
@@ -494,7 +495,7 @@ queueRadio.addEventListener("change", () => {
   if (zone) send("roon_zone_settings", { zoneId: zone.zoneId, autoRadio: queueRadio.checked });
 });
 
-// ===== 10. Library pages (Search now, Browse later) =======================
+// ===== 10. Library pages (Search and Browse) ==============================
 //
 // A tab that shows Roon's library has a "navigator": the pages visited (for
 // back/forward), which one is showing, and where to draw it. A page is either
@@ -567,6 +568,11 @@ async function navShow(nav) {
       }
       if (ticket !== nav.ticket) return;
       renderResults(nav, entry.data);
+    } else if (entry.kind === "home") {
+      // The Browse home list is kept too
+      if (!entry.data) entry.data = await loadHome(nav);
+      if (ticket !== nav.ticket) return;
+      renderHome(nav, entry.data);
     } else {
       const page = await invoke("roon_browse_path", {
         session: nav.session,
@@ -935,11 +941,12 @@ function runSearch(text) {
 searchNav.backBtn.addEventListener("click", () => navBack(searchNav));
 searchNav.forwardBtn.addEventListener("click", () => navForward(searchNav));
 
-// --- Shared by the library tabs (Browse joins these later) ---
+// --- Shared by the library tabs (Search and Browse) ---
 
 // The navigator of the tab that's showing, if it's a library tab
 function activeNav() {
   if ($("#tab-search").classList.contains("active")) return searchNav;
+  if ($("#tab-browse").classList.contains("active")) return browseNav;
   return null;
 }
 
@@ -960,7 +967,114 @@ main.addEventListener("scroll", () => {
   if (nav) loadMore(nav);
 });
 
-// ===== 12. Start ===========================================================
+// ===== 12. Browse tab =====================================================
+//
+// Starts on a home list like Roon's sidebar, built from what the Core lists:
+// everything inside Library (except Search), then everything else at the top
+// (except Library and Settings). Streaming services (Qobuz, TIDAL, ...) only
+// appear when they're linked in Roon.
+
+const browseNav = {
+  session: "browse",
+  hierarchy: "browse",
+  backBtn: $("#browse-back"),
+  forwardBtn: $("#browse-forward"),
+  titleEl: $("#browse-nav-title"),
+  view: $("#browse-view"),
+  status: $("#browse-status"),
+  history: [], // pages visited, for back/forward
+  position: -1, // which of them is showing
+  ticket: 0, // bumps on every navigation, so a slow old answer is ignored
+  page: null, // the Roon page showing, for loading more of long lists
+};
+
+// Roon entries left off the home list
+const HOME_SKIP = ["Library", "Settings", "Search"];
+
+// Home list icons, by Roon's name (Lucide); streaming services get a cloud
+const CLOUD_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>';
+const HOME_ICONS = {
+  artists:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>',
+  albums:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M6 12c0-1.7.7-3.2 1.8-4.2"/><circle cx="12" cy="12" r="2"/><path d="M18 12c0 1.7-.7 3.2-1.8 4.2"/></svg>',
+  tracks:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  composers:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.24 12.24a6 6 0 0 0-8.49-8.49L5 10.5V19h8.5z"/><line x1="16" x2="2" y1="8" y2="22"/><line x1="17.5" x2="9" y1="15" y2="15"/></svg>',
+  tags:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+  playlists:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>',
+  genres:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8.3 10a.7.7 0 0 1-.626-1.079L11.4 3a.7.7 0 0 1 1.198-.043L16.3 8.9a.7.7 0 0 1-.572 1.1Z"/><rect x="3" y="14" width="7" height="7" rx="1"/><circle cx="17.5" cy="17.5" r="3.5"/></svg>',
+  "my live radio":
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>',
+};
+
+// Fetches the home list: [{ title, path }] in Roon's order
+async function loadHome(nav) {
+  const call = (path) =>
+    invoke("roon_browse_path", {
+      session: nav.session,
+      hierarchy: nav.hierarchy,
+      input: null,
+      path,
+      zoneId: zone?.zoneId ?? null,
+    });
+  const skip = (item) => HOME_SKIP.includes(item.title) || item.inputPrompt || item.hint !== "list";
+
+  const top = await call([]);
+  const links = [];
+  for (const [i, item] of top.items.entries()) {
+    const step = { index: top.offset + i, title: item.title };
+    if (item.title === "Library") {
+      const library = await call([step]);
+      library.items.forEach((sub, j) => {
+        if (!skip(sub)) {
+          links.push({ title: sub.title, path: [step, { index: library.offset + j, title: sub.title }] });
+        }
+      });
+    } else if (!skip(item)) {
+      links.push({ title: item.title, path: [step] });
+    }
+  }
+  return links;
+}
+
+// Draws the home list: one row per entry, icon + name
+function renderHome(nav, links) {
+  nav.status.hidden = true;
+  const list = el("ol", "home-list");
+  for (const link of links) {
+    const row = el("li", "home-row");
+    const icon = el("span", "home-icon");
+    icon.innerHTML = HOME_ICONS[link.title.toLowerCase()] ?? CLOUD_ICON;
+    row.append(icon, el("span", null, link.title));
+    row.addEventListener("click", () => {
+      navGo(nav, { kind: "page", input: null, path: link.path, title: link.title });
+    });
+    list.append(row);
+  }
+  nav.view.replaceChildren(list);
+}
+
+// Called when the Browse tab is opened: shows home the first time, and
+// retries a home list that failed to load (e.g. before Roon was connected)
+function openBrowse() {
+  const entry = browseNav.history[browseNav.position];
+  if (!entry) {
+    navGo(browseNav, { kind: "home", title: "Browse" });
+  } else if (entry.kind === "home" && !entry.data) {
+    navShow(browseNav);
+  }
+}
+
+browseNav.backBtn.addEventListener("click", () => navBack(browseNav));
+browseNav.forwardBtn.addEventListener("click", () => navForward(browseNav));
+
+// ===== 13. Start ===========================================================
 
 // Load the current state once, then follow live updates from Rust
 invoke("roon_zones").then(render);

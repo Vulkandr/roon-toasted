@@ -780,8 +780,9 @@ input[type="range"]:disabled {
   outline-offset: 2px;
 }
 
-/* Search tab (the Browse tab will reuse these styles) */
-#tab-search {
+/* Search and Browse tabs */
+#tab-search,
+#tab-browse {
   padding: 0 16px 16px;
 }
 
@@ -1167,4 +1168,43 @@ input[type="range"]:disabled {
 .play-more svg {
   width: 16px;
   height: 16px;
+}
+
+/* Browse home list, like Roon's sidebar */
+.home-list {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+
+.home-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 11px 10px;
+  border-radius: 8px;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.home-row:hover {
+  background: var(--hover);
+}
+
+.home-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.home-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.home-row:hover .home-icon {
+  color: var(--accent);
 }

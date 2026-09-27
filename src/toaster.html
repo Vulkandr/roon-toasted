@@ -144,8 +144,22 @@
         </div>
       </section>
 
-            <section id="tab-browse" class="page">
-        <div class="empty">Browse coming soon.</div>
+      <section id="tab-browse" class="page">
+        <!-- Back / forward like Roon's (mouse side buttons work too) -->
+        <div class="nav-bar">
+          <button id="browse-back" class="icon-btn" title="Back" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <button id="browse-forward" class="icon-btn" title="Forward" disabled>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+          <span id="browse-nav-title" class="nav-title"></span>
+        </div>
+
+        <div id="browse-status" class="empty" hidden></div>
+
+        <!-- Filled by toaster.js: the home list, or a page opened from it -->
+        <div id="browse-view"></div>
       </section>
 
       <section id="tab-search" class="page">
