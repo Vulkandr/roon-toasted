@@ -109,13 +109,39 @@
       </section>
 
       <section id="tab-queue" class="page">
-        <div class="empty">Queue coming soon.</div>
-      </section>
-      <section id="tab-browse" class="page">
-        <div class="empty">Browse coming soon.</div>
-      </section>
-      <section id="tab-search" class="page">
-        <div class="empty">Type in the search bar above and press Enter.</div>
+        <!-- Top bar: totals, repeat, shuffle (pinned while scrolling) -->
+        <div class="queue-top">
+          <div class="queue-heading">
+            <span class="queue-title">Queue</span>
+            <span id="queue-summary" class="queue-summary"></span>
+          </div>
+          <button id="queue-repeat" class="icon-btn toggle" title="Repeat">
+            <svg class="icon-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+            <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>
+          </button>
+          <button id="queue-shuffle" class="icon-btn toggle" title="Shuffle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>
+          </button>
+        </div>
+
+        <div id="queue-empty" class="empty" hidden>The queue is empty.</div>
+
+        <!-- Filled by toaster.js: the playing track first, then what's up next -->
+        <div id="queue-now-label" class="queue-label">Now playing</div>
+        <ol id="queue-list" class="queue-list"></ol>
+        <div id="queue-more" class="queue-more" hidden></div>
+
+        <!-- Roon Radio, pinned to the bottom like in Roon -->
+        <div class="queue-radio">
+          <div class="queue-radio-title">Roon Radio</div>
+          <div class="queue-radio-row">
+            <span class="queue-radio-desc">Automatically pick music based on your queue</span>
+            <label class="switch">
+              <input type="checkbox" id="queue-radio" />
+              <span class="slider"></span>
+            </label>
+          </div>
+        </div>
       </section>
     </main>
 

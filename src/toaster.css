@@ -30,6 +30,8 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
 }
 
 /* Anything with the hidden attribute stays hidden, whatever else applies */
@@ -384,13 +386,16 @@ input[type="range"]:disabled {
   display: block;
 }
 
-/* Repeat: the "1" version for repeat-one */
+/* Repeat: the "1" version for repeat-one (Playing tab and Queue tab) */
 #repeat .icon-repeat-one,
-#repeat.one .icon-repeat {
+#repeat.one .icon-repeat,
+#queue-repeat .icon-repeat-one,
+#queue-repeat.one .icon-repeat {
   display: none;
 }
 
-#repeat.one .icon-repeat-one {
+#repeat.one .icon-repeat-one,
+#queue-repeat.one .icon-repeat-one {
   display: block;
 }
 
@@ -543,4 +548,234 @@ input[type="range"]:disabled {
 .zone-option.selected {
   color: var(--accent);
   font-weight: 600;
+}
+
+/* Queue tab */
+#tab-queue {
+  padding: 0 16px;
+}
+
+#tab-queue.active {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+/* Top bar, pinned while the list scrolls under it */
+.queue-top {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 14px 0 8px;
+  background: var(--bg);
+}
+
+.queue-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 8px;
+}
+
+.queue-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 24px;
+}
+
+.queue-summary {
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-label {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 4px 0 6px;
+}
+
+/* Rows */
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+
+.queue-item:hover {
+  background: var(--hover);
+}
+
+/* The playing track: highlighted like Roon, not clickable */
+.queue-item.now,
+.queue-item.now:hover {
+  background: var(--card);
+  cursor: default;
+}
+
+.queue-art {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  flex-shrink: 0;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--card);
+}
+
+.queue-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* Play icon over the art, shown when hovering an upcoming track */
+.queue-play {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.queue-item:not(.now):hover .queue-play {
+  opacity: 1;
+}
+
+.queue-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-item-title,
+.queue-item-artist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.queue-item-artist {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.queue-length {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-more {
+  font-size: 12px;
+  color: var(--muted);
+  text-align: center;
+  padding: 12px 0;
+}
+
+/* Roon Radio, pinned to the bottom */
+.queue-radio {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: auto;
+  padding: 10px 0 14px;
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.queue-radio-title {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+}
+
+.queue-radio-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 4px;
+}
+
+.queue-radio-desc {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Toggle switch (same as in Settings): the real checkbox is invisible
+   but still clickable, and the slider is drawn in its place */
+.switch {
+  position: relative;
+  width: 40px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.slider {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--border);
+  transition: background 0.15s;
+}
+
+.slider::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s;
+}
+
+.switch input:checked + .slider {
+  background: var(--accent);
+}
+
+.switch input:checked + .slider::before {
+  transform: translateX(18px);
+}
+
+.switch input:focus-visible + .slider {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

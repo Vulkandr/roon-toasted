@@ -32,6 +32,14 @@ const zoneButton = $("#zone-button");
 const outputZone = $("#output-zone");
 const zoneMenu = $("#zone-menu");
 const searchInput = $("#search-input");
+const queueSummary = $("#queue-summary");
+const queueRepeatBtn = $("#queue-repeat");
+const queueShuffleBtn = $("#queue-shuffle");
+const queueEmpty = $("#queue-empty");
+const queueNowLabel = $("#queue-now-label");
+const queueList = $("#queue-list");
+const queueMore = $("#queue-more");
+const queueRadio = $("#queue-radio");
 
 // What the page currently knows
 let zone = null; // the selected zone's data, from Rust
@@ -40,6 +48,7 @@ let draggingSeek = false;
 let draggingVolume = false;
 let zoneList = []; // every zone, for the zone picker
 let lastSearch = ""; // what was last searched (the Search tab uses this later)
+let queue = { zoneId: null, items: [] }; // the followed zone's queue (first 100), from Rust
 
 // ===== 2. Helpers =========================================================
 
@@ -48,6 +57,19 @@ function formatTime(seconds) {
   if (seconds == null || isNaN(seconds)) return "0:00";
   const s = Math.max(0, Math.floor(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+// Long durations, like Roon's queue total: 3:08, 1:04:07, 15:04:59:16 (days first)
+function formatLongTime(seconds) {
+  const s = Math.max(0, Math.floor(seconds ?? 0));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  const two = (n) => String(n).padStart(2, "0");
+  if (days > 0) return `${days}:${two(hours)}:${two(minutes)}:${two(secs)}`;
+  if (hours > 0) return `${hours}:${two(minutes)}:${two(secs)}`;
+  return `${minutes}:${two(secs)}`;
 }
 
 // Updates a slider's purple fill (the --fill variable in toaster.css)
@@ -103,14 +125,23 @@ searchInput.addEventListener("keydown", (event) => {
   showTab("search");
 });
 
-// Escape closes the zone picker if it's open, otherwise hides the Toaster
+// Escape, in order: close the zone picker if it's open, clear the search bar
+// if you're typing in it, otherwise hide the Toaster
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
+
   if (!zoneMenu.hidden) {
     closeZoneMenu();
-  } else {
-    send("hide_window");
+    return;
   }
+
+  if (document.activeElement === searchInput && searchInput.value) {
+    event.preventDefault();
+    searchInput.value = "";
+    return;
+  }
+
+  send("hide_window");
 });
 
 $("#open-settings").addEventListener("click", () => {
@@ -167,9 +198,18 @@ function render(payload) {
   repeatBtn.classList.toggle("on", zone.loopMode !== "disabled");
   repeatBtn.classList.toggle("one", zone.loopMode === "loop_one");
   radioBtn.classList.toggle("on", zone.autoRadio);
+  queueShuffleBtn.classList.toggle("on", zone.shuffle);
+  queueRepeatBtn.classList.toggle("on", zone.loopMode !== "disabled");
+  queueRepeatBtn.classList.toggle("one", zone.loopMode === "loop_one");
+  queueRadio.checked = zone.autoRadio;
 
   const queued = zone.queueItemsRemaining ?? 0;
   queueText.textContent = `${queued} in queue`;
+    const trackWord = queued === 1 ? "track" : "tracks";
+  queueSummary.textContent = queued
+    ? `${queued} ${trackWord} remaining (${formatLongTime(zone.queueTimeRemaining)})`
+    : "";
+  updateQueueMore();
 
   renderOutput(zone.outputs[0]);
 }
@@ -356,7 +396,85 @@ document.addEventListener("pointerdown", (event) => {
 window.addEventListener("resize", closeZoneMenu);
 window.addEventListener("blur", closeZoneMenu);
 
-// ===== 8. Start ===========================================================
+// ===== 9. Queue ===========================================================
+
+// Play icon over the art when hovering an upcoming track (Lucide "play")
+const PLAY_ICON =
+  '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+
+// One row: art, title and artist, length. Upcoming rows play from there on click.
+function queueRow(item, isNow) {
+  const row = document.createElement("li");
+  row.className = isNow ? "queue-item now" : "queue-item";
+
+  const artBox = document.createElement("div");
+  artBox.className = "queue-art";
+  if (item.imageKey) {
+    const img = document.createElement("img");
+    img.src = convertFileSrc(item.imageKey, "roonimg") + "?width=96&height=96";
+    img.loading = "lazy";
+    img.alt = "";
+    artBox.append(img);
+  }
+  if (!isNow) {
+    const play = document.createElement("span");
+    play.className = "queue-play";
+    play.innerHTML = PLAY_ICON;
+    artBox.append(play);
+  }
+
+  const text = document.createElement("div");
+  text.className = "queue-text";
+  const titleEl = document.createElement("div");
+  titleEl.className = "queue-item-title";
+  titleEl.textContent = item.title;
+  const artistEl = document.createElement("div");
+  artistEl.className = "queue-item-artist";
+  artistEl.textContent = item.artist;
+  text.append(titleEl, artistEl);
+
+  const lengthEl = document.createElement("span");
+  lengthEl.className = "queue-length";
+  lengthEl.textContent = item.length ? formatTime(item.length) : "";
+
+  row.append(artBox, text, lengthEl);
+
+  if (!isNow) {
+    row.addEventListener("click", () => {
+      send("roon_play_from_here", { zoneId: queue.zoneId, queueItemId: item.queueItemId });
+    });
+  }
+  return row;
+}
+
+// Rebuilds the list; the first item is the playing track
+function renderQueue(payload) {
+  queue = payload;
+  const items = payload.items;
+  queueEmpty.hidden = items.length > 0;
+  queueNowLabel.hidden = items.length === 0;
+  queueList.replaceChildren(...items.map((item, i) => queueRow(item, i === 0)));
+  updateQueueMore();
+}
+
+// "+ N more tracks not shown" when the queue is longer than the 100 shown
+function updateQueueMore() {
+  const total = zone?.queueItemsRemaining ?? 0;
+  const notShown = total - queue.items.length;
+  queueMore.hidden = notShown <= 0;
+  queueMore.textContent = `+ ${notShown.toLocaleString()} more tracks not shown`;
+}
+
+// Repeat and shuffle work exactly like the Playing tab's buttons
+queueRepeatBtn.addEventListener("click", () => repeatBtn.click());
+queueShuffleBtn.addEventListener("click", () => shuffleBtn.click());
+
+// Roon Radio switch: send the new on/off state
+queueRadio.addEventListener("change", () => {
+  if (zone) send("roon_zone_settings", { zoneId: zone.zoneId, autoRadio: queueRadio.checked });
+});
+
+// ===== 10. Start ===========================================================
 
 // Load the current state once, then follow live updates from Rust
 invoke("roon_zones").then(render);
@@ -366,3 +484,6 @@ listen("roon-seek", (event) => {
     updatePosition(event.payload.seekPosition);
   }
 });
+
+invoke("roon_queue").then(renderQueue);
+listen("roon-queue", (event) => renderQueue(event.payload));
