@@ -3127,8 +3127,6 @@ dependencies = [
 [[package]]
 name = "roon-sood"
 version = "0.5.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f666ab60b46546b33ca6821cd61dd385714a6a2bc3d19e52b5b53fd771b684c5"
 dependencies = [
  "bytes",
  "socket2 0.5.10",
@@ -3140,7 +3138,7 @@ dependencies = [
 
 [[package]]
 name = "roon-toasted"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "ico",
  "roon-api",

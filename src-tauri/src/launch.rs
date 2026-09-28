@@ -114,10 +114,10 @@ fn register_link() -> bool {
         )
 }
 
-#[cfg(windows)]
 /// Writes one text value under HKEY_CURRENT_USER, creating the key if needed
-/// (`name` None = the key's default value).
-fn set_value(path: &str, name: Option<&str>, value: &str) -> bool {
+/// (`name` None = the key's default value). Also used by autostart.rs.
+#[cfg(windows)]
+pub(crate) fn set_value(path: &str, name: Option<&str>, value: &str) -> bool {
     use windows::core::{HSTRING, PCWSTR};
     use windows::Win32::Foundation::ERROR_SUCCESS;
     use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};

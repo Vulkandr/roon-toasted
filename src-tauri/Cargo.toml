@@ -1,8 +1,8 @@
 [package]
 name = "roon-toasted"
-version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+version = "0.9.0"
+description = "Roon: Toasted, a Roon companion for Windows"
+authors = ["Vulkandr"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -45,10 +45,13 @@ tauri-plugin-global-shortcut = "~2.3"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_UI_Shell", "Win32_UI_Accessibility"] }
 
 
-# Use the local copy of roon-api in vendor/roon-api, which fixes shuffle/repeat/
-# Roon Radio changes (see vendor/roon-api/VENDORED.md).
+# Local copies of two Roon libraries with fixes: roon-api in vendor/roon-api
+# (shuffle/repeat/Roon Radio changes, queue, Core address changes) and
+# roon-sood in vendor/roon-sood (no flashing console window on Windows).
+# See VENDORED.md in each folder.
 [patch.crates-io]
 roon-api = { path = "vendor/roon-api" }
+roon-sood = { path = "vendor/roon-sood" }
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]

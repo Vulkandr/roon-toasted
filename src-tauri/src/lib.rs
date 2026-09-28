@@ -3,6 +3,7 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 
+mod autostart;
 mod browse;
 mod hotkeys;
 mod icon;
@@ -290,6 +291,9 @@ pub fn run() {
             // The global hotkeys from Settings
             #[cfg(desktop)]
             hotkeys::register_saved(app.handle());
+
+            // Windows' startup list, to match Start with Windows (autostart.rs)
+            autostart::apply(app.handle());
 
             // The taskbar widget, if it's switched on (see widget.rs)
             widget::start(app.handle());

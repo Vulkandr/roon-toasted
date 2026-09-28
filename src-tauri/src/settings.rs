@@ -58,6 +58,8 @@ pub struct AppSettings {
     pub widget_width: u32,
     /// Title and artist on one line (small taskbars) or two.
     pub widget_lines: WidgetLines,
+    /// Start in the tray when signing in to Windows (see autostart.rs).
+    pub start_with_windows: bool,
     /// How long a toast stays, in seconds (it waits while the mouse is on it).
     /// Allowed range: `TOAST_SECONDS`.
     pub toast_seconds: u32,
@@ -83,6 +85,7 @@ impl Default for AppSettings {
             widget_position: 12,
             widget_width: 320,
             widget_lines: WidgetLines::default(),
+            start_with_windows: true,
             toast_seconds: 8,
         }
     }
@@ -247,6 +250,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         return Err("The widget's position or width is out of range.".into());
     }
     save(&path, &updated)?;
+    if updated.start_with_windows != before.start_with_windows {
+        crate::autostart::apply(&app);
+    }
     if crate::widget::settings_changed(&before, &updated) {
         crate::widget::refresh(&app);
     }

@@ -564,3 +564,29 @@ document.querySelectorAll(".reset-value").forEach((button) => {
   });
 });
 
+// ===== Start with Windows =================================================
+
+const startWithWindows = document.querySelector("#start-with-windows");
+const autostartGroup = document.querySelector("#autostart-group");
+
+function showStartWithWindows(settings) {
+  startWithWindows.checked = settings.startWithWindows;
+}
+
+async function setStartWithWindows(on) {
+  startWithWindows.checked = on;
+  try {
+    await invoke("update_settings", { changes: { startWithWindows: on } });
+  } catch (err) {
+    console.error(err);
+    showStartWithWindows(await invoke("get_settings"));
+  }
+}
+
+startWithWindows.addEventListener("change", () => setStartWithWindows(startWithWindows.checked));
+autostartGroup.querySelector(".label-off").addEventListener("click", () => setStartWithWindows(false));
+autostartGroup.querySelector(".label-on").addEventListener("click", () => setStartWithWindows(true));
+
+invoke("get_settings").then(showStartWithWindows);
+listen("settings-changed", (event) => showStartWithWindows(event.payload));
+

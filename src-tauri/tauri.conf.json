@@ -1,7 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "roon-toasted",
-  "version": "0.1.0",
+  "productName": "Roon Toasted",
+  "mainBinaryName": "roon-toasted",
+  "version": "0.9.0",
   "identifier": "com.vulkan.roon-toasted",
   "build": {
     "frontendDist": "../src"
@@ -31,7 +32,7 @@
         "url": "settings.html",
         "title": "Roon: Toasted Settings",
         "width": 1100,
-        "height": 945,
+        "height": 972,
         "center": true,
         "visible": false,
         "decorations": false,
@@ -82,7 +83,19 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["nsis"],
+    "publisher": "Vulkandr",
+    "copyright": "Copyright (c) 2026 Vulkandr",
+    "category": "Music",
+    "shortDescription": "Roon: Toasted",
+    "longDescription": "A Roon companion for Windows: now playing, queue, browse and search, now-playing toasts, global hotkeys and a taskbar widget.",
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "installerIcon": "icons/icon.ico",
+        "installerHooks": "./windows/hooks.nsh"
+      }
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

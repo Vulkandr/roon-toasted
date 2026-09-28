@@ -1,5 +1,6 @@
 //! The tray icon and its right-click menu: Open Toaster, Settings, a few
-//! quick settings (Toasts, Auto-Hide, Remember Window) and Quit. Double-clicking
+//! quick settings (Toasts, Auto-Hide, Remember Window, Start with Windows)
+//! and Quit. Double-clicking
 //! the icon opens the Toaster.
 //!
 //! The quick settings change the same saved settings as the Settings window
@@ -22,6 +23,7 @@ pub struct TrayMenu {
     auto_hide: CheckMenuItem<Wry>,
     /// Settings' Window Size: checked = Last Position, unchecked = Default.
     remember_window: CheckMenuItem<Wry>,
+    start_with_windows: CheckMenuItem<Wry>,
 }
 
 /// Creates the tray icon and its menu (in setup).
@@ -43,6 +45,14 @@ pub fn build(app: &App) -> tauri::Result<()> {
         remember,
         None::<&str>,
     )?;
+    let start_with_windows = CheckMenuItem::with_id(
+        app,
+        "start_with_windows",
+        "Start with Windows",
+        true,
+        saved.start_with_windows,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -54,6 +64,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
             &toasts,
             &auto_hide,
             &remember_window,
+            &start_with_windows,
             &PredefinedMenuItem::separator(app)?,
             &quit,
         ],
@@ -87,6 +98,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
         toasts,
         auto_hide,
         remember_window,
+        start_with_windows,
     });
     Ok(())
 }
@@ -99,6 +111,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         "quit" => return app.exit(0),
         "toasts" => json!({ "toastsEnabled": !saved.toasts_enabled }),
         "auto_hide" => json!({ "hideOnBlur": !saved.hide_on_blur }),
+        "start_with_windows" => json!({ "startWithWindows": !saved.start_with_windows }),
         "remember_window" => {
             let remember = saved.toaster_window == ToasterWindow::Remember;
             json!({ "toasterWindow": if remember { "default" } else { "remember" } })
@@ -122,4 +135,5 @@ pub fn sync(app: &AppHandle, settings: &AppSettings) {
     let _ = menu
         .remember_window
         .set_checked(settings.toaster_window == ToasterWindow::Remember);
+    let _ = menu.start_with_windows.set_checked(settings.start_with_windows);
 }
