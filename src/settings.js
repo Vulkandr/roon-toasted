@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // Tauri's JavaScript API (available because withGlobalTauri is on in tauri.conf.json)
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -7,6 +11,7 @@ const dot = document.querySelector("#status-dot");
 const coreName = document.querySelector("#core-name");
 const coreDetail = document.querySelector("#core-detail");
 const coreList = document.querySelector("#core-list");
+const coreCard = document.querySelector(".core-card");
 const coreError = document.querySelector("#core-error");
 
 // Friendly wording for each connection state
@@ -20,6 +25,11 @@ const STATE_TEXT = {
 function render(status) {
   // Dot color comes from the .connected / .searching / .reconnecting CSS classes
   dot.className = `dot ${status.state}`;
+
+  // No Core paired yet: the card glows slowly, to say "start here"
+  // (the "Enable ..." line glows in step with it)
+  coreCard.classList.toggle("attention", !status.pairedCoreId);
+  coreDetail.classList.toggle("attention", !status.pairedCoreId);
 
   // The paired Core's details, if it's been seen on the network
   const paired =
@@ -62,7 +72,12 @@ function render(status) {
     const button = document.createElement("button");
     const inUse = core.coreId === status.pairedCoreId;
     button.textContent = inUse ? "In use" : status.pairedCoreId ? "Switch" : "Use";
-    button.disabled = inUse;
+    // With no Core paired and only one on the network, there is nothing to
+    // choose: it just needs enabling in Roon, so Use (which restarts the app)
+    // is greyed out
+    const onlyChoice = !status.pairedCoreId && status.available.length === 1;
+    button.disabled = inUse || onlyChoice;
+    if (onlyChoice) button.title = "Enable \"Roon: Toasted\" in Roon > Settings > Extensions instead.";
     button.addEventListener("click", () => switchTo(core));
 
     row.append(info, button);
@@ -590,3 +605,9 @@ autostartGroup.querySelector(".label-on").addEventListener("click", () => setSta
 invoke("get_settings").then(showStartWithWindows);
 listen("settings-changed", (event) => showStartWithWindows(event.payload));
 
+
+// The footer link opens in the browser, not in this window
+document.querySelector("#plugin-link").addEventListener("click", (event) => {
+  event.preventDefault();
+  invoke("plugin:opener|open_url", { url: event.currentTarget.href });
+});

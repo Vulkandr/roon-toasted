@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Now-playing toasts: a small card in a corner of the screen that shows the
 //! new track when it changes (whether or not the Toaster is open). Clicking
 //! it opens the Toaster on the Playing tab; it goes away on its own after a
@@ -106,6 +110,11 @@ pub fn zones_updated(app: &AppHandle, payload: &ZonesPayload) {
     if !saved.toasts_enabled {
         return;
     }
+    // A toast on top of an exclusive full-screen game minimizes the game, so
+    // none is shown then (borderless windowed games are fine and still get one)
+    if exclusive_full_screen() {
+        return;
+    }
     send(
         app,
         ToastPayload {
@@ -118,6 +127,28 @@ pub fn zones_updated(app: &AppHandle, payload: &ZonesPayload) {
             colors: saved.toaster_colors,
         },
     );
+}
+
+/// Whether a game is running in exclusive full-screen mode (or Windows is in
+/// presentation mode). Windows reports plain full-screen windows (borderless
+/// games, videos) as something else, and those are left alone.
+#[cfg(windows)]
+fn exclusive_full_screen() -> bool {
+    use windows::Win32::UI::Shell::{
+        SHQueryUserNotificationState, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN,
+    };
+    // SAFETY: no arguments; just asks Windows.
+    unsafe {
+        matches!(
+            SHQueryUserNotificationState(),
+            Ok(QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE)
+        )
+    }
+}
+
+#[cfg(not(windows))]
+fn exclusive_full_screen() -> bool {
+    false
 }
 
 fn send(app: &AppHandle, payload: ToastPayload) {
@@ -200,6 +231,7 @@ pub fn toast_present(app: AppHandle) -> Result<(), String> {
     };
     let _ = window.set_position(PhysicalPosition::new(x - dx, y - dy));
 
+    wake_webview(&window);
     show_without_focus(&window);
     Ok(())
 }
@@ -216,6 +248,27 @@ pub fn toast_hide(app: AppHandle) {
 // would take focus from whatever the user is doing, and it keeps its own note
 // of whether the window is showing, which would then be wrong, so its hide()
 // would do nothing.
+
+/// Tells the toast's page (WebView2) that it is about to be seen, by switching
+/// its visibility off and on again. The window is shown and hidden behind
+/// WebView2's back (see above), and after a screen change (resolution, scaling,
+/// HDR) it could come back as a blank white box until the app was restarted;
+/// this makes WebView2 start drawing again on every toast.
+#[cfg(windows)]
+fn wake_webview(window: &WebviewWindow) {
+    let _ = window.with_webview(|webview| {
+        // SAFETY: a valid WebView2 controller; with_webview runs this on the
+        // thread that owns the window.
+        unsafe {
+            let controller = webview.controller();
+            let _ = controller.SetIsVisible(false);
+            let _ = controller.SetIsVisible(true);
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn wake_webview(_window: &WebviewWindow) {}
 
 /// Shows the window on top of other windows without taking focus.
 #[cfg(windows)]

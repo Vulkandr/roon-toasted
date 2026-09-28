@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+   License, v. 2.0. If a copy of the MPL was not distributed with this
+   file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 /* The now-playing toast: a small card in a corner of the screen.
    Laid out for 340 x 92 (the window's size at 100% zoom, set in toast.rs).
    Same palette as the Toaster; with Colors on "Album Art" the accent and

@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Zones, now playing, and playback controls for the UI.
 //!
 //! While connected, every zone's state is kept here and sent to the pages:

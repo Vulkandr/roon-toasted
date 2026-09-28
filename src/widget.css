@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+   License, v. 2.0. If a copy of the MPL was not distributed with this
+   file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 /* The taskbar widget: a rounded bar the height of the taskbar (minus a small
    gap), as wide as Settings says. The window itself is see-through; only the
    bar is drawn. Same palette as the Toaster; with Colors on "Album Art" the

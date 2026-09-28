@@ -1,10 +1,14 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Status check for other apps on this PC, mainly the Roon: Dialed Up
 //! Stream Deck plugin, which shows a status light for Roon: Toasted.
 //!
 //! While the app runs it answers `GET http://127.0.0.1:58421/status` with:
 //!
 //! ```json
-//! { "app": "Roon: Toasted", "version": "0.9.0",
+//! { "app": "Roon: Toasted", "version": "1.0.0",
 //!   "roon": "connected", "core": "Roon Optimized Core Kit" }
 //! ```
 //!

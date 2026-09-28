@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Roon connection.
 //!
 //! Finds Roon Cores on the network, connects to exactly one of them, and keeps
@@ -110,19 +114,25 @@ impl Roon {
 
     /// Applies a change, then tells the UI (and the dev terminal) if anything actually changed.
     fn update(&self, change: impl FnOnce(&mut Inner)) {
-        let status = {
+        let (status, pairing_changed) = {
             let mut inner = self.inner.lock().unwrap();
+            let was_paired = inner.paired_core_id.is_some();
             change(&mut inner);
+            let pairing_changed = was_paired != inner.paired_core_id.is_some();
             let status = Self::snapshot(&inner);
             if inner.last_sent.as_ref() == Some(&status) {
                 return;
             }
             inner.last_sent = Some(status.clone());
-            status
+            (status, pairing_changed)
         };
         print_status(&status);
         if let Some(app) = self.app.get() {
             let _ = app.emit("roon-status", &status);
+            // Auto-Hide only acts once a Core is paired (see settings.rs)
+            if pairing_changed {
+                crate::settings::apply_taskbar(app);
+            }
         }
     }
 
@@ -313,7 +323,12 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
     roon.update(|inner| inner.paired_core_id = paired.clone());
     match &paired {
         Some(id) => println!("[roon] looking for the paired Core ({id})..."),
-        None => println!("[roon] searching the network for a Roon Core..."),
+        None => {
+            println!("[roon] searching the network for a Roon Core...");
+            // First run: open Settings, where the Roon Core card explains
+            // what to do (it glows until a Core is paired)
+            crate::show(app, crate::SETTINGS_WINDOW);
+        }
     }
 
     // Keep the handle: dropping it would stop discovery.

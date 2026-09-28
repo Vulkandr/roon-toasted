@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! App preferences, saved as JSON in the app data folder
 //! (%APPDATA%\com.vulkan.roon-toasted\settings.json on Windows).
 //!
@@ -122,8 +126,20 @@ pub fn apply_zoom(app: &AppHandle) {
 /// and without a button there'd be no way back except the tray or a hotkey.
 /// With the setting on they live in the tray only (applied at startup and
 /// when it changes).
+/// Auto-Hide as it actually acts: the setting must be on, and a Roon Core must
+/// be paired. Until then the Toaster and Settings stay put and keep their
+/// taskbar buttons, so setting up the Core (which means switching to Roon's own
+/// window and back) never makes them vanish. `roon.rs` calls `apply_taskbar`
+/// again when a Core gets paired.
+pub fn auto_hide_active(app: &AppHandle) -> bool {
+    get_settings(app.clone()).hide_on_blur
+        && app
+            .try_state::<crate::roon::Roon>()
+            .is_some_and(|roon| roon.status().paired_core_id.is_some())
+}
+
 pub fn apply_taskbar(app: &AppHandle) {
-    let in_tray_only = get_settings(app.clone()).hide_on_blur;
+    let in_tray_only = auto_hide_active(app);
     for label in [crate::TOASTER_WINDOW, crate::SETTINGS_WINDOW] {
         if let Some(window) = app.get_webview_window(label) {
             let _ = window.set_skip_taskbar(in_tray_only);

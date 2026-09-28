@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! The icon in the tray and on the Toaster's and Settings' taskbar buttons:
 //! Vulk's simplified toaster as a flat shape, white on a dark taskbar and
 //! black on a light one, like Windows' own tray icons. It switches when the

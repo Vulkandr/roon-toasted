@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Taskbar widget (experimental, off by default): a small player that sits
 //! on the main monitor's taskbar (album art, title and artist, previous /
 //! play-pause / next). Clicking the art or text opens the Toaster.

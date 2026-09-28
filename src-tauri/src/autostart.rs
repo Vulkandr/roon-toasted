@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! Start with Windows (setting `startWithWindows`, on by default): the app
 //! adds itself to Windows' startup list for the current user, so it's in the
 //! tray (with toasts, hotkeys and the widget ready) after signing in. It

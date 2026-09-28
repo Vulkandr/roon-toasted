@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 //! How the app gets opened from outside: its command line, and
 //! roon-toasted:// links (e.g. from a Stream Deck button), which Windows
 //! passes to the app as a command-line argument.

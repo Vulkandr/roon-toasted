@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // The now-playing toast (the window itself is managed by toast.rs).
 //
 // Rust sends a track with "toast-show". The page fills itself in, waits a

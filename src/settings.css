@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+   License, v. 2.0. If a copy of the MPL was not distributed with this
+   file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
 /* All colors in one place. Light theme first; the dark block below overrides it. */
 :root {
   --bg: #f4f4f6;
@@ -57,6 +61,24 @@ main {
   grid-template-columns: 1fr 1fr;
   gap: 16px;
   align-items: start;
+}
+
+/* The note at the bottom of the page */
+.footer {
+  text-align: center;
+  font-size: 12px;
+  padding: 0 24px 20px;
+}
+
+.footer a {
+  color: var(--muted);
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.footer a:hover {
+  color: var(--accent);
+  text-decoration: underline;
 }
 
 main > h1 {
@@ -203,6 +225,56 @@ button:disabled {
 /* Space between cards */
 .card + .card {
   margin-top: 16px;
+}
+
+/* The Roon Core card while no Core is paired yet: a slow glow that says
+   "start here" (it stops once a Core is paired) */
+.core-card.attention {
+  animation: attention 2.6s ease-in-out infinite;
+}
+
+@keyframes attention {
+  0%,
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+      0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+}
+
+/* The "Enable ..." line under it takes the status dot's color, at the same
+   speed, so the two pulses stay in step */
+#core-detail.attention {
+  animation: attention-text 2.6s ease-in-out infinite;
+}
+
+@keyframes attention-text {
+  0%,
+  100% {
+    color: var(--muted);
+    text-shadow: 0 0 0 transparent;
+  }
+  50% {
+    color: var(--warn);
+    text-shadow: 0 0 8px color-mix(in srgb, var(--warn) 60%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .core-card.attention {
+    animation: none;
+    border-color: var(--accent);
+  }
+
+  #core-detail.attention {
+    animation: none;
+    color: var(--warn);
+  }
 }
 
 /* A row of settings side by side; wraps onto new lines when full */

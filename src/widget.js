@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 // The taskbar widget's page (the window itself is placed by widget.rs).
 // Shows what's playing in the Toaster's zone; the buttons control it, and
 // clicking the art or text opens the Toaster.

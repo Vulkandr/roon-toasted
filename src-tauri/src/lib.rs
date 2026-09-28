@@ -1,3 +1,7 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
 use tauri::{
     webview::PageLoadEvent,
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
@@ -225,7 +229,7 @@ fn open_window(app: AppHandle, window: String) -> Result<(), String> {
 /// flicker (a window being shown, or focus passing from one to the other)
 /// doesn't hide anything.
 fn hide_if_app_unfocused(app: AppHandle) {
-    if !settings::get_settings(app.clone()).hide_on_blur {
+    if !settings::auto_hide_active(&app) {
         return;
     }
     tauri::async_runtime::spawn(async move {
@@ -287,7 +291,8 @@ pub fn run() {
     // closing first. Opening windows while it's still shutting down makes them
     // fail ("Access is denied" / "The group or resource is not in the correct
     // state") and leaves the app with broken windows.
-    if std::env::var_os(RESTARTED_ENV).is_some() {
+    let restarted = std::env::var_os(RESTARTED_ENV).is_some();
+    if restarted {
         std::env::remove_var(RESTARTED_ENV);
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
@@ -346,7 +351,7 @@ pub fn run() {
                 settings::apply_zoom(webview.app_handle());
             }
         })
-        .setup(|app| {
+        .setup(move |app| {
             // Tray icon and its right-click menu (see tray.rs); the tray and
             // taskbar-button icons follow the taskbar's light/dark mode
             tray::build(app)?;
@@ -396,6 +401,12 @@ pub fn run() {
             app.state::<zones::Zones>().init(app.handle());
             app.state::<queue::Queue>().init(app.handle());
             roon::start(app.handle());
+
+            // After switching Cores (the app restarts itself), bring Settings
+            // back so the new connection can be seen
+            if restarted {
+                show(app.handle(), SETTINGS_WINDOW);
+            }
 
             Ok(())
         })
