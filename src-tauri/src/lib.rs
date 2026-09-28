@@ -12,6 +12,7 @@ mod monitors;
 mod queue;
 mod roon;
 mod settings;
+mod status;
 mod toast;
 mod tray;
 mod widget;
@@ -48,6 +49,9 @@ fn save_window_state(app: &AppHandle) {
 
 /// Brings a window to the front, un-hiding and un-minimizing it if needed.
 pub(crate) fn show(app: &AppHandle, label: &str) {
+    if label == SETTINGS_WINDOW {
+        fit_to_screen(app, label, true);
+    }
     if let Some(window) = app.get_webview_window(label) {
         let _ = window.unminimize();
         let _ = window.show();
@@ -65,9 +69,97 @@ pub(crate) enum ToasterMode {
     Search,
 }
 
+/// Gap kept between a window and the edges of the screen's usable area
+/// (logical pixels).
+const SCREEN_MARGIN: f64 = 16.0;
+
+/// Makes a hidden window fit the usable area of the screen it will open on
+/// (the screen minus the taskbar), so it never opens taller or wider than the
+/// screen, or partly off it. Does nothing while the window is showing, so an
+/// open window never jumps.
+///
+/// With `use_default_size` the window gets its size from tauri.conf.json
+/// (shrunk to fit if needed) and is centered; otherwise it keeps its current
+/// size (shrunk to fit if needed) and is only moved back on screen if it was
+/// off it. The window's minimum size is lowered on small screens too, or
+/// Windows would refuse to shrink it.
+fn fit_to_screen(app: &AppHandle, label: &str, use_default_size: bool) {
+    let Some(window) = app.get_webview_window(label) else {
+        return;
+    };
+    if window.is_visible().unwrap_or(false) {
+        return;
+    }
+    let Some(monitor) = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+    else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let work = monitor.work_area();
+    let avail_w = (work.size.width as f64 / scale - 2.0 * SCREEN_MARGIN).max(200.0);
+    let avail_h = (work.size.height as f64 / scale - 2.0 * SCREEN_MARGIN).max(200.0);
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|w| w.label == label)
+        .map(|w| (w.width, w.height, w.min_width, w.min_height));
+    let Some((default_w, default_h, min_w, min_h)) = config else {
+        return;
+    };
+
+    let (mut width, mut height) = (default_w, default_h);
+    if !use_default_size {
+        if let Ok(size) = window.inner_size() {
+            let size = size.to_logical::<f64>(scale);
+            (width, height) = (size.width, size.height);
+        }
+    }
+    let (width, height) = (width.min(avail_w), height.min(avail_h));
+
+    // Set the minimum first, so the new size is never held back by the old one.
+    if min_w.is_some() || min_h.is_some() {
+        let min = tauri::LogicalSize::new(
+            min_w.unwrap_or(0.0).min(avail_w),
+            min_h.unwrap_or(0.0).min(avail_h),
+        );
+        let _ = window.set_min_size(Some(tauri::Size::Logical(min)));
+    }
+    let _ = window.set_size(tauri::LogicalSize::new(width, height));
+
+    let Ok(outer) = window.outer_size() else {
+        return;
+    };
+    let (work_x, work_y) = (work.position.x, work.position.y);
+    let (free_x, free_y) = (
+        work.size.width as i32 - outer.width as i32,
+        work.size.height as i32 - outer.height as i32,
+    );
+    let (x, y) = if use_default_size {
+        (work_x + free_x / 2, work_y + free_y / 2)
+    } else {
+        let (cur_x, cur_y) = window
+            .outer_position()
+            .map(|p| (p.x, p.y))
+            .unwrap_or((work_x, work_y));
+        (
+            cur_x.clamp(work_x, work_x + free_x.max(0)),
+            cur_y.clamp(work_y, work_y + free_y.max(0)),
+        )
+    };
+    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+}
+
 /// Puts a hidden Toaster back to its default size (from tauri.conf.json),
-/// centered and not maximized. Skipped if it's already on screen, so opening
-/// it again (e.g. the search hotkey) never makes an open window jump.
+/// centered and not maximized, and small enough for the screen. Skipped if
+/// it's already on screen, so opening it again (e.g. the search hotkey) never
+/// makes an open window jump.
 fn reset_toaster_size(app: &AppHandle) {
     let Some(window) = app.get_webview_window(TOASTER_WINDOW) else {
         return;
@@ -75,18 +167,8 @@ fn reset_toaster_size(app: &AppHandle) {
     if window.is_visible().unwrap_or(false) {
         return;
     }
-    let default = app
-        .config()
-        .app
-        .windows
-        .iter()
-        .find(|w| w.label == TOASTER_WINDOW)
-        .map(|w| (w.width, w.height));
     let _ = window.unmaximize();
-    if let Some((width, height)) = default {
-        let _ = window.set_size(tauri::LogicalSize::new(width, height));
-    }
-    let _ = window.center();
+    fit_to_screen(app, TOASTER_WINDOW, true);
 }
 
 /// Shows the Toaster and tells its page which mode it was opened in, via the
@@ -96,6 +178,10 @@ pub(crate) fn open_toaster(app: &AppHandle, mode: ToasterMode) {
     let saved = settings::get_settings(app.clone());
     if saved.toaster_window == settings::ToasterWindow::Default {
         reset_toaster_size(app);
+    } else {
+        // A remembered size still has to fit the screen it opens on
+        // (e.g. after a resolution or scaling change)
+        fit_to_screen(app, TOASTER_WINDOW, false);
     }
     show(app, TOASTER_WINDOW);
     let mode = match mode {
@@ -294,6 +380,10 @@ pub fn run() {
 
             // Windows' startup list, to match Start with Windows (autostart.rs)
             autostart::apply(app.handle());
+
+            // The status check other apps (the Stream Deck plugin) use to see
+            // that Roon: Toasted is running (see status.rs)
+            status::start(app.handle());
 
             // The taskbar widget, if it's switched on (see widget.rs)
             widget::start(app.handle());

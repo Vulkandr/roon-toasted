@@ -34,6 +34,18 @@ Other apps (like the Stream Deck plugin) can open the Toaster with these links:
 
 The app registers these links for the current user every time it starts.
 
+## Status check for other apps
+
+While Roon: Toasted is running, `http://127.0.0.1:58421/status` (this PC only)
+answers with JSON, so other apps can tell it's running:
+
+```json
+{ "app": "Roon: Toasted", "version": "0.9.0", "roon": "connected", "core": "Roon Optimized Core Kit" }
+```
+
+`roon` is `connected`, `searching` or `reconnecting`; `core` is the Core's name
+once connected, otherwise `null`. No answer means it isn't running.
+
 ## Building
 
 Needs [Rust](https://rustup.rs), [Node.js](https://nodejs.org) and the
