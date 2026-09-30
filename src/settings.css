@@ -544,9 +544,24 @@ button:disabled {
 }
 
 /* Switched off: its options are dimmed and locked */
-.widget-option.disabled {
+.widget-option.disabled,
+.library-option.disabled {
   opacity: 0.45;
   pointer-events: none;
+}
+
+/* Hearts & Library: the state line under the switches */
+.library-detail {
+  text-align: center;
+  margin-top: 12px;
+}
+
+.library-detail.ready {
+  color: var(--ok, #4caf50);
+}
+
+.library-detail.problem {
+  color: var(--warn);
 }
 
 .range-row {

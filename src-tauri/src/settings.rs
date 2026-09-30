@@ -67,6 +67,11 @@ pub struct AppSettings {
     /// How long a toast stays, in seconds (it waits while the mouse is on it).
     /// Allowed range: `TOAST_SECONDS`.
     pub toast_seconds: u32,
+    /// Hearts and add-to-library on the Playing tab (experimental, see
+    /// library.rs): on or off. Off hides the buttons entirely.
+    pub library_controls: bool,
+    /// What "add to library" adds: just the song, or its whole album.
+    pub library_add_mode: roon_library::AddMode,
 }
 
 impl Default for AppSettings {
@@ -91,6 +96,8 @@ impl Default for AppSettings {
             widget_lines: WidgetLines::default(),
             start_with_windows: true,
             toast_seconds: 8,
+            library_controls: true,
+            library_add_mode: roon_library::AddMode::Track,
         }
     }
 }
@@ -281,6 +288,7 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     if updated.hotkeys_enabled != before.hotkeys_enabled {
         crate::hotkeys::register_saved(&app);
     }
+    crate::library::settings_changed(&app, &before, &updated);
     crate::tray::sync(&app, &updated);
     let _ = app.emit("settings-changed", &updated);
     Ok(updated)

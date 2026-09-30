@@ -190,6 +190,39 @@
           </div>
         </div>
       </section>
+
+      <!-- Hearts and add-to-library over Roon's internal protocol (see library.rs) -->
+      <section class="card library-card">
+        <h2>Hearts &amp; Library <span class="badge">Experimental</span></h2>
+
+        <div class="setting-row">
+          <div class="setting">
+            <span class="setting-name">Hearts &amp; Library</span>
+            <div class="switch-group" id="library-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="library-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting library-option">
+            <span class="setting-name">Add to Library</span>
+            <div class="switch-group" id="library-mode-group">
+              <span class="switch-label label-off">Single Song</span>
+              <label class="switch">
+                <input type="checkbox" id="library-mode" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Whole Album</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Whether the Core accepts us, in plain words -->
+        <p id="library-detail" class="muted library-detail">Off</p>
+      </section>
       </div>
 
       <!-- Right column -->
@@ -278,6 +311,13 @@
           <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
           then slide Position and Width until it sits in a free spot; One Line suits small
           taskbars. Windows doesn't officially allow this, so it may misbehave.
+        </p>
+        <p>
+          <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts
+          the track in your library (the Add to Library switch decides whether that's just the
+          song or its whole album), then a heart. The same buttons show on album pages by the
+          playing artist. It uses a part of Roon that isn't officially open to apps, so a Roon
+          update may break it until I'm able to repair it.
         </p>
         <p>
           <strong>Toasts:</strong> A small card shows what's currently playing in the corner and

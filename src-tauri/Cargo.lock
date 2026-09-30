@@ -3109,6 +3109,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "roon-library"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tokio",
+]
+
+[[package]]
 name = "roon-moo"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3142,6 +3150,7 @@ version = "1.0.0"
 dependencies = [
  "ico",
  "roon-api",
+ "roon-library",
  "roon-sood",
  "serde",
  "serde_json",

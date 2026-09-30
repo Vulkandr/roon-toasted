@@ -133,6 +133,8 @@ impl Roon {
             if pairing_changed {
                 crate::settings::apply_taskbar(app);
             }
+            // The library connection follows the Core (see library.rs)
+            crate::library::reconsider(app);
         }
     }
 

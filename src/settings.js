@@ -545,6 +545,65 @@ for (const [slider, name, label] of [
 invoke("get_settings").then(showWidget);
 listen("settings-changed", (event) => showWidget(event.payload));
 
+// ===== Hearts & Library ====================================================
+//
+// On/off and what "add to library" adds. The line underneath says whether the
+// Core accepts the connection (this uses a part of Roon that isn't officially
+// open to apps, so it can stop working after a Roon update).
+
+const libraryEnabled = document.querySelector("#library-enabled");
+const libraryMode = document.querySelector("#library-mode");
+const libraryDetail = document.querySelector("#library-detail");
+
+function showLibrary(settings) {
+  libraryEnabled.checked = settings.libraryControls;
+  libraryMode.checked = settings.libraryAddMode === "album";
+  document.querySelectorAll(".library-option").forEach((option) => {
+    option.classList.toggle("disabled", !settings.libraryControls);
+  });
+}
+
+const LIBRARY_TEXT = {
+  off: "Off",
+  connecting: "Connecting to the Roon Core...",
+  ready: "Ready: the Playing tab has the button.",
+  unsupported: "Not available with this Roon version.",
+  unavailable: "Waiting for the Roon Core...",
+};
+
+function showLibraryStatus(status) {
+  let text = LIBRARY_TEXT[status.state] ?? status.state;
+  if (status.reason && status.state !== "ready" && status.state !== "off") {
+    text = `${LIBRARY_TEXT[status.state] ?? ""} ${status.reason}`.trim();
+  }
+  libraryDetail.textContent = text;
+  libraryDetail.classList.toggle("ready", status.state === "ready");
+  libraryDetail.classList.toggle("problem", status.state === "unsupported");
+}
+
+async function saveLibrary(changes) {
+  try {
+    await invoke("update_settings", { changes });
+  } catch (err) {
+    console.error(err);
+    showLibrary(await invoke("get_settings"));
+  }
+}
+
+function librarySwitch(input, group, change) {
+  input.addEventListener("change", () => saveLibrary(change(input.checked)));
+  const labels = document.querySelector(group);
+  labels.querySelector(".label-off").addEventListener("click", () => saveLibrary(change(false)));
+  labels.querySelector(".label-on").addEventListener("click", () => saveLibrary(change(true)));
+}
+librarySwitch(libraryEnabled, "#library-group", (on) => ({ libraryControls: on }));
+librarySwitch(libraryMode, "#library-mode-group", (album) => ({ libraryAddMode: album ? "album" : "track" }));
+
+invoke("get_settings").then(showLibrary);
+listen("settings-changed", (event) => showLibrary(event.payload));
+invoke("library_status").then(showLibraryStatus);
+listen("library-status", (event) => showLibraryStatus(event.payload));
+
 // ===== Reset on slider numbers ============================================
 //
 // The number next to a slider (e.g. "59 px"): hovering it shows a red

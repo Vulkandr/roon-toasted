@@ -12,6 +12,7 @@ mod browse;
 mod hotkeys;
 mod icon;
 mod launch;
+mod library;
 mod monitors;
 mod queue;
 mod roon;
@@ -338,6 +339,7 @@ pub fn run() {
         .manage(hotkeys::HotkeyState::default())
         .manage(toast::ToastState::default())
         .manage(launch::StartupMode::default())
+        .manage(library::Library::default())
         .plugin(tauri_plugin_opener::init())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
@@ -402,6 +404,9 @@ pub fn run() {
             app.state::<queue::Queue>().init(app.handle());
             roon::start(app.handle());
 
+            // Hearts and add-to-library, if switched on (see library.rs)
+            library::start(app.handle());
+
             // After switching Cores (the app restarts itself), bring Settings
             // back so the new connection can be seen
             if restarted {
@@ -463,7 +468,20 @@ pub fn run() {
             toast::toast_hide,
             toast::toast_test,
             monitors::list_monitors,
-            launch::take_startup_mode
+            launch::take_startup_mode,
+            library::library_status,
+            library::library_track,
+            library::library_heart,
+            library::library_add,
+            library::library_album_heart,
+            library::library_artist_albums,
+            library::library_album_tracks_for,
+            library::library_album_heart_for,
+            library::library_album_add_for,
+            library::library_album_tracks,
+            library::library_track_heart,
+            library::library_track_add,
+            library::library_play_track
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

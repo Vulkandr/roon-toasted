@@ -151,6 +151,94 @@ button:disabled {
   color: var(--accent);
 }
 
+/* Hearts & Library button (experimental): a "+" until the track is in the
+   library, then a heart, filled and purple once hearted. Dimmed while a
+   change is waiting for Roon's answer. */
+.library .icon-heart,
+.library.in-library .icon-add {
+  display: none;
+}
+
+.library.in-library .icon-heart {
+  display: block;
+}
+
+.library.on {
+  color: var(--accent);
+}
+
+.library.on .icon-heart {
+  fill: currentColor;
+}
+
+.library.busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Tracks of the release that Roon's page left out (played through Rust) */
+.row.extra .row-title {
+  opacity: 0.85;
+}
+
+/* Keeps the transport centered while the library button is hidden */
+#goto-btn.spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Hearts on the playing album's page: far right of each track row, and on
+   the album header next to Play */
+.row-library {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.row-library.on {
+  color: var(--accent);
+}
+
+.row-library.on .icon-heart {
+  fill: currentColor;
+}
+
+.row-library .icon-heart,
+.row-library.in-library .icon-add {
+  display: none;
+}
+
+.row-library.in-library .icon-heart {
+  display: block;
+}
+
+.row-library.busy,
+.head-library.busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.head-library {
+  margin-left: 8px;
+  vertical-align: middle;
+}
+
+.head-library.on {
+  color: var(--accent);
+}
+
+.head-library.on .icon-heart {
+  fill: currentColor;
+}
+
+.head-library .icon-heart,
+.head-library.in-library .icon-add {
+  display: none;
+}
+
+.head-library.in-library .icon-heart {
+  display: block;
+}
+
 /* Header: zone picker, search bar, settings cog */
 .top {
   display: flex;
@@ -1453,4 +1541,16 @@ input[type="range"]:disabled {
     color-mix(in srgb, var(--accent) 20%, transparent),
     transparent 75%
   );
+}
+
+/* Albums of the playing artist that Roon's page leaves out (Qobuz/TIDAL only) */
+.tile.extra .tile-title::after {
+  content: " +";
+  opacity: 0.55;
+}
+
+/* Section headings on the playing artist's page (Albums / Singles & EPs) */
+#browse-view > .group-head,
+#search-view > .group-head {
+  margin-top: 22px;
 }

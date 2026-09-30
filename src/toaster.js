@@ -252,6 +252,7 @@ function render(payload) {
     nothingPlaying.hidden = false;
     nowPlaying.hidden = true;
     outputBar.hidden = true;
+    renderLibrary();
     return;
   }
 
@@ -298,6 +299,7 @@ function render(payload) {
   queueShuffleBtn.classList.toggle("on", zone.shuffle);
   queueRepeatBtn.classList.toggle("on", zone.loopMode !== "disabled");
   queueRepeatBtn.classList.toggle("one", zone.loopMode === "loop_one");
+  renderLibrary();
   queueRadio.checked = zone.autoRadio;
 
   const queued = zone.queueItemsRemaining ?? 0;
@@ -391,6 +393,483 @@ muteBtn.addEventListener("click", () => {
     send("roon_mute", { outputId: output.outputId, muted: !output.volume.isMuted });
   }
 });
+
+// ===== 6b. Hearts & Library (experimental) ================================
+//
+// The button left of Shuffle: a "+" adds the playing track to the library (as
+// a single song or its whole album, per Settings); once Roon confirms the track
+// is in the library it becomes a heart, filled when hearted. Rust keeps the
+// state live (`library-track` events, including hearts set in Roon itself) and
+// says whether the feature is on and connected (`library-status`); the button
+// is hidden entirely otherwise.
+
+const libraryBtn = $("#library-btn");
+const gotoBtn = $("#goto-btn");
+const gotoMenu = $("#goto-menu");
+let libraryReady = false; // the feature is on and connected to the Core
+let libraryTracks = {}; // zoneId -> the zone's track state from Rust (null = nothing loaded)
+let libraryBusy = false; // a change is waiting for Roon's answer
+let discography = null; // the playing artist's albums, see 6d: { zoneId, artist, albums }
+
+function renderLibrary() {
+  const show = libraryReady && zone != null && zone.nowPlaying != null;
+  libraryBtn.hidden = !show;
+  // "Go to" shows whenever something plays; while the library button is hidden
+  // it turns invisible instead, so Play stays centered
+  const playing = zone != null && zone.nowPlaying != null;
+  gotoBtn.hidden = !playing;
+  gotoBtn.classList.toggle("spacer", playing && !show);
+  if (!show) return;
+
+  const track = libraryTracks[zone.zoneId];
+  const known = track != null;
+  libraryBtn.classList.toggle("in-library", known && track.inLibrary);
+  libraryBtn.classList.toggle("on", known && track.favorite);
+  libraryBtn.classList.toggle("busy", libraryBusy);
+  libraryBtn.disabled = !known;
+  if (!known) {
+    libraryBtn.title = "Waiting for Roon...";
+  } else if (!track.inLibrary) {
+    libraryBtn.title = appSettings.libraryAddMode === "album" ? "Add album to library" : "Add to library";
+  } else {
+    libraryBtn.title = track.favorite ? "Remove heart" : "Heart";
+  }
+  // Rust only pushes states it has seen change; ask for this zone's if it's new to us
+  if (!(zone.zoneId in libraryTracks)) {
+    libraryTracks[zone.zoneId] = null;
+    invoke("library_track", { zoneId: zone.zoneId })
+      .then((t) => {
+        libraryTracks[zone.zoneId] = t;
+        renderLibrary();
+      })
+      .catch(() => delete libraryTracks[zone.zoneId]);
+  }
+}
+
+libraryBtn.addEventListener("click", async () => {
+  const track = zone ? libraryTracks[zone.zoneId] : null;
+  if (!zone || !track || libraryBusy) return;
+  const zoneId = zone.zoneId;
+  libraryBusy = true;
+  renderLibrary();
+  try {
+    // Adding first, hearting second: the heart only shows once Roon says it's in
+    const result = track.inLibrary
+      ? await invoke("library_heart", { zoneId, favorite: !track.favorite })
+      : await invoke("library_add", { zoneId });
+    libraryTracks[zoneId] = result;
+  } catch (err) {
+    console.error("library", err);
+  } finally {
+    libraryBusy = false;
+    renderLibrary();
+  }
+});
+
+function setLibraryStatus(status) {
+  libraryReady = status.state === "ready";
+  if (!libraryReady) {
+    libraryTracks = {}; // states are only valid per connection
+    discography = null;
+  }
+  renderLibrary();
+}
+
+invoke("library_status").then(setLibraryStatus);
+listen("library-status", (event) => setLibraryStatus(event.payload));
+listen("library-track", (event) => {
+  libraryTracks[event.payload.zoneId] = event.payload.track;
+  renderLibrary();
+});
+
+// ===== 6c. Go to artist / album ===========================================
+//
+// The button right of Repeat: a small menu that opens the playing artist or
+// album in the Search tab. It searches Roon for the name and opens the exact
+// match; if the match isn't among the first results it opens the "See all"
+// list for that name instead.
+
+const GOTO_ICONS = {
+  artist:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></svg>',
+  album:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/></svg>',
+};
+
+function closeGotoMenu() {
+  gotoMenu.hidden = true;
+}
+
+gotoBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const np = zone?.nowPlaying;
+  if (!np) return;
+  if (!gotoMenu.hidden) {
+    closeGotoMenu();
+    return;
+  }
+  gotoMenu.replaceChildren();
+  const choices = [];
+  if (np.artist) choices.push(["artist", `Go to ${np.artist}`, "Artists", np.artist]);
+  if (np.album) choices.push(["album", `Go to ${np.album}`, "Albums", np.album]);
+  for (const [kind, label, group, name] of choices) {
+    const item = el("button", "action-option");
+    const icon = el("span", "action-icon");
+    icon.innerHTML = GOTO_ICONS[kind];
+    item.append(icon, el("span", null, label));
+    item.addEventListener("click", () => {
+      closeGotoMenu();
+      goTo(group, name, kind === "album" ? np.artist : null);
+    });
+    gotoMenu.append(item);
+  }
+  const rect = gotoBtn.getBoundingClientRect();
+  gotoMenu.hidden = false;
+  const width = gotoMenu.offsetWidth;
+  gotoMenu.style.left = `${Math.max(8, Math.min(rect.right - width, window.innerWidth - width - 8))}px`;
+  gotoMenu.style.top = `${rect.bottom + 6}px`;
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (!gotoMenu.hidden && !gotoMenu.contains(event.target)) closeGotoMenu();
+});
+window.addEventListener("resize", closeGotoMenu);
+window.addEventListener("blur", closeGotoMenu);
+
+// Searches Roon for `name` and opens it: the item in `group` ("Artists" /
+// "Albums") whose title is the name (and, for albums, whose subtitle is the
+// artist when several match), else that group's full list for the name.
+async function goTo(group, name, artist) {
+  showTab("search");
+  $("#search-hint").hidden = true;
+  lastSearch = name;
+  searchInput.value = name;
+  let data;
+  try {
+    data = await withSpinner(invoke("roon_search", { query: name }));
+  } catch (err) {
+    console.error("goTo", err);
+    return;
+  }
+  const same = (a, b) => (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+  const section = data.sections.find((s) => s.title === group);
+  let pool = section ? section.items : [];
+  // The results page only carries a group's first few; look through the whole group
+  if (section && section.count > section.items.length) {
+    try {
+      const full = await withSpinner(
+        invoke("roon_browse_path", {
+          session: "goto-peek",
+          hierarchy: searchNav.hierarchy,
+          input: name,
+          path: [{ index: section.index, title: section.title }],
+          zoneId: zone?.zoneId ?? null,
+          count: 100,
+        })
+      );
+      if (full.action === "list" && full.items?.length) {
+        pool = full.items.map((item, i) => ({ ...item, index: full.offset + i }));
+      }
+    } catch (err) {
+      console.error("goTo group", err);
+    }
+  }
+  let candidates = pool.filter((item) => same(item.title, name));
+  if (artist && candidates.some((item) => same(item.subtitle, artist))) {
+    candidates = candidates.filter((item) => same(item.subtitle, artist));
+  }
+  // An album in the library may show up twice: the library copy (sometimes just
+  // a track or two) and the complete streaming release. Peek at each and open
+  // the fuller one, since that's the page where hearts and "+" are useful.
+  let best = candidates[0];
+  if (group === "Albums" && candidates.length > 1 && section) {
+    const groupStep = { index: section.index, title: section.title };
+    const counts = await Promise.all(
+      candidates.slice(0, 4).map((item) =>
+        invoke("roon_browse_path", {
+          session: "goto-peek",
+          hierarchy: searchNav.hierarchy,
+          input: name,
+          path: [groupStep, { index: item.index, title: item.title }],
+          zoneId: zone?.zoneId ?? null,
+          count: 1,
+        })
+          .then((page) => page.list?.count ?? 0)
+          .catch(() => 0)
+      )
+    );
+    best = candidates[counts.indexOf(Math.max(...counts))] ?? best;
+  }
+  best ??= data.topHits.find((hit) => same(hit.title, name) && (group !== "Albums" || !/\d+ Albums?$/.test(hit.subtitle ?? "")));
+  if (best && section && candidates.includes(best)) {
+    const groupStep = { index: section.index, title: section.title };
+    navGo(searchNav, { kind: "page", input: name, path: [groupStep, { index: best.index, title: best.title }], title: best.title });
+  } else if (best) {
+    navGo(searchNav, { kind: "page", input: name, path: [{ index: best.index, title: best.title }], title: best.title });
+  } else if (section) {
+    navGo(searchNav, { kind: "page", input: name, path: [{ index: section.index, title: section.title }], title: section.title });
+  } else {
+    navGo(searchNav, { kind: "results", query: name, title: `Results for "${name}"` });
+  }
+}
+
+// ===== 6d. Hearts on album pages ===========================================
+//
+// Roon's browse API never says which album a page is, so the bridge is the
+// artist that's playing: Rust can list that artist's whole discography (with
+// session handles) and, for any of those albums, the complete release with
+// each track's heart / library state. So an album page by the playing artist
+// gets a "+" / heart at the far right of every track row and one for the
+// album in the header, with the tracks Roon's page leaves out slotted in.
+// Pages are matched to the discography by title (and artist).
+
+const LIBRARY_ICONS =
+  '<svg class="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>' +
+  '<svg class="icon-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg>';
+
+const sameText = (a, b) => (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+
+function isPlayingAlbumPage(list) {
+  const np = zone?.nowPlaying;
+  if (!np || !np.album || !list?.title) return false;
+  return sameText(list.title, np.album) && (!list.subtitle || !np.artist || sameText(list.subtitle, np.artist) || list.subtitle.toLowerCase().includes(np.artist.toLowerCase()));
+}
+
+// The playing artist's discography, fetched once per artist and connection
+async function artistAlbums(zoneId) {
+  const artist = zone?.nowPlaying?.artist ?? "";
+  if (discography && discography.zoneId === zoneId && discography.artist === artist) return discography.albums;
+  const albums = await invoke("library_artist_albums", { zoneId });
+  discography = { zoneId, artist, albums };
+  return albums;
+}
+
+// The discography album a page shows, if any. Roon's browse pages show the
+// library copy of an album it holds, so those are preferred among same titles.
+function matchAlbumPage(list, albums) {
+  const artist = list.subtitle ?? "";
+  const fits = (a) => !artist || !a.artist || sameText(a.artist, artist) || artist.toLowerCase().includes(a.artist.toLowerCase()) || a.artist.toLowerCase().includes(artist.toLowerCase());
+  const candidates = albums.filter((a) => sameText(a.title, list.title) && fits(a));
+  return candidates.find((a) => a.inLibrary) ?? candidates.find((a) => a.group === "main") ?? candidates[0] ?? null;
+}
+
+function paintLibraryButton(btn, state) {
+  btn.classList.toggle("in-library", !!state && state.inLibrary);
+  btn.classList.toggle("on", !!state && state.favorite);
+  btn.title = !state ? "" : !state.inLibrary ? "Add to library" : state.favorite ? "Remove heart" : "Heart";
+}
+
+// Adds the buttons to an album page just drawn (rows in `block`, header in `head`)
+async function decorateAlbumPage(nav, ticket, list, items, block, head) {
+  if (!libraryReady || !zone || !zone.nowPlaying || !list?.title) return;
+  const zoneId = zone.zoneId;
+
+  // Which album this page is: one of the playing artist's, or (if the
+  // discography can't be had) the playing album itself
+  let album = null;
+  try {
+    album = matchAlbumPage(list, await artistAlbums(zoneId));
+  } catch (err) {
+    console.error("discography", err);
+  }
+  if (nav.ticket !== ticket) return; // the page changed meanwhile
+  const handle = album?.handle ?? null;
+  if (!handle && !isPlayingAlbumPage(list)) return;
+
+  let tracks;
+  try {
+    tracks = handle
+      ? await invoke("library_album_tracks_for", { zoneId, handle })
+      : await invoke("library_album_tracks", { zoneId });
+  } catch (err) {
+    console.error("album tracks", err);
+    return;
+  }
+  if (nav.ticket !== ticket) return;
+
+  // Header: the album itself
+  const info = head?.querySelector(".page-info");
+  const playingAlbum = libraryTracks[zoneId]?.album;
+  const albumState = album ?? (playingAlbum ? { inLibrary: playingAlbum.inLibrary, favorite: playingAlbum.favorite } : null);
+  if (info && albumState) {
+    const btn = el("button", "icon-btn head-library");
+    btn.innerHTML = LIBRARY_ICONS;
+    paintLibraryButton(btn, albumState);
+    let current = albumState;
+    btn.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      btn.classList.add("busy");
+      try {
+        if (handle) {
+          current = current.inLibrary
+            ? await invoke("library_album_heart_for", { handle, favorite: !current.favorite })
+            : await invoke("library_album_add_for", { handle });
+          // keep the cached discography entry current
+          if (discography) discography.albums = discography.albums.map((a) => (a.handle === handle ? current : a));
+        } else {
+          const state = libraryTracks[zoneId]?.album ?? current;
+          const result = state.inLibrary
+            ? await invoke("library_album_heart", { zoneId, favorite: !state.favorite })
+            : await invoke("library_add", { zoneId, mode: "album" });
+          libraryTracks[zoneId] = result;
+          current = { inLibrary: !!result.album?.inLibrary, favorite: !!result.album?.favorite };
+        }
+        paintLibraryButton(btn, current);
+      } catch (err) {
+        console.error("album", err);
+      } finally {
+        btn.classList.remove("busy");
+      }
+    });
+    info.querySelector(".page-title")?.append(btn);
+  }
+
+  // Rows: match Roon's track list to ours by title, in order
+  const rows = [...block.querySelectorAll(".row")];
+  // Roon numbers the rows ("2. Heavensbane"); the internal titles aren't numbered
+  const bare = (title) => (title ?? "").replace(/^\d+\.\s+/, "").trim().toLowerCase();
+  const rowNumber = (title) => Number((title ?? "").match(/^(\d+)\./)?.[1] ?? 0);
+  const remaining = [...tracks];
+  items.forEach((item, i) => {
+    const row = rows[i];
+    if (!row || item.hint !== "action_list") return;
+    const at = remaining.findIndex((t) => bare(t.title) === bare(item.title));
+    if (at < 0) return;
+    const [track] = remaining.splice(at, 1);
+    row.append(libraryRowButton(track));
+  });
+
+  // Roon's page only lists the library's tracks of an album it holds a part of;
+  // the rest of the release comes from Rust. Slot them in by track number, in
+  // Roon's row style, playable through Rust.
+  const subtitle = list.subtitle ?? "";
+  for (const track of remaining.sort((a, b) => (a.trackNumber ?? 0) - (b.trackNumber ?? 0))) {
+    const number = track.trackNumber ?? 0;
+    const row = el("li", "row extra");
+    const text = el("div", "row-text");
+    text.append(el("div", "row-title", number ? `${number}. ${track.title}` : track.title));
+    if (subtitle) text.append(el("div", "row-sub", subtitle));
+    row.append(text, libraryRowButton(track));
+    row.addEventListener("click", () => {
+      if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: track.handle });
+    });
+    // Before the first of Roon's rows with a higher number, else at the end
+    const after = [...block.querySelectorAll(".row")].find((r) => {
+      const t = r.querySelector(".row-title")?.textContent;
+      return rowNumber(t) > number;
+    });
+    if (after) block.insertBefore(row, after);
+    else block.append(row);
+  }
+}
+
+// Roon's artist page only lists the library's albums, mixed together. When
+// it's the playing artist, the discography from Rust sorts the page into
+// "Albums" and "Singles & EPs" (Roon's own grouping) and adds the albums Roon
+// left out as tiles: each is looked up through Roon's search, which knows the
+// streaming releases with their art and pages, and opens like a search result.
+async function completeArtistPage(nav, ticket, list, items, block) {
+  if (!libraryReady || !zone?.nowPlaying?.artist || !sameText(list.title, zone.nowPlaying.artist)) return;
+  const zoneId = zone.zoneId;
+  let albums;
+  try {
+    albums = await artistAlbums(zoneId);
+  } catch (err) {
+    console.error("discography", err);
+    return;
+  }
+  if (nav.ticket !== ticket) return;
+  const key = (title) => (title ?? "").trim().toLowerCase();
+  const groupOf = new Map(albums.map((a) => [key(a.title), a.group]));
+
+  // Two grids: Roon's tiles move to "Singles & EPs" when the discography says so
+  const singles = el("div", "tile-grid");
+  const tiles = [...block.children];
+  items.forEach((item, i) => {
+    if (groupOf.get(key(item.title)) === "other" && tiles[i]) singles.append(tiles[i]);
+  });
+  const heading = (text) => {
+    const head = el("div", "group-head");
+    head.append(el("h3", "group-title", text));
+    return head;
+  };
+  const albumsHead = heading("Albums");
+  const singlesHead = heading("Singles & EPs");
+  block.before(albumsHead);
+  block.after(singlesHead, singles);
+  const tidy = () => {
+    albumsHead.hidden = block.childElementCount === 0;
+    singlesHead.hidden = singles.childElementCount === 0;
+    singles.hidden = singlesHead.hidden;
+  };
+  tidy();
+
+  // The albums Roon didn't list, a few searches at a time; tiles appear as Roon answers
+  const shown = new Set(items.map((item) => key(item.title)));
+  const missing = albums.filter((a) => a.group !== "appearance" && !shown.has(key(a.title)));
+  let next = 0;
+  const worker = async () => {
+    while (next < missing.length && nav.ticket === ticket) {
+      const album = missing[next++];
+      const found = await findAlbumInSearch(album.title, album.artist);
+      if (!found || nav.ticket !== ticket) continue;
+      const tile = tileNode(found.item, false);
+      tile.classList.add("extra");
+      tile.addEventListener("click", () => {
+        showTab("search");
+        $("#search-hint").hidden = true;
+        lastSearch = found.query;
+        searchInput.value = found.query;
+        navGo(searchNav, { kind: "page", input: found.query, path: found.path, title: found.item.title });
+      });
+      (album.group === "other" ? singles : block).append(tile);
+      tidy();
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
+}
+
+// Roon's search result for an album: the Albums entry with that title (and
+// artist), with the path that opens its page. Null when Roon doesn't list it.
+async function findAlbumInSearch(title, artist) {
+  const query = artist ? `${artist} ${title}` : title;
+  let data;
+  try {
+    data = await invoke("roon_search", { query });
+  } catch (err) {
+    console.error("album search", err);
+    return null;
+  }
+  const section = data.sections.find((s) => s.title === "Albums");
+  if (!section) return null;
+  const fits = (item) => sameText(item.title, title) && (!artist || !item.subtitle || sameText(item.subtitle, artist));
+  const item = section.items.find(fits);
+  if (!item) return null;
+  return { query, item, path: [{ index: section.index, title: section.title }, { index: item.index, title: item.title }] };
+}
+
+// The "+" / heart button at the right end of an album track row
+function libraryRowButton(track) {
+  const btn = el("button", "icon-btn row-library");
+  btn.innerHTML = LIBRARY_ICONS;
+  paintLibraryButton(btn, track);
+  let current = track;
+  btn.addEventListener("click", async (event) => {
+    event.stopPropagation(); // don't open the row's action menu or play it
+    btn.classList.add("busy");
+    try {
+      current = current.inLibrary
+        ? await invoke("library_track_heart", { handle: current.handle, favorite: !current.favorite })
+        : await invoke("library_track_add", { handle: current.handle });
+      paintLibraryButton(btn, current);
+    } catch (err) {
+      console.error("track", err);
+    } finally {
+      btn.classList.remove("busy");
+    }
+  });
+  return btn;
+}
 
 // ===== 7. Seeking and volume ==============================================
 
@@ -837,6 +1316,13 @@ function renderPage(nav, entry, page) {
 
   // Remembered for loading the rest of long lists while scrolling
   nav.page = { entry, block, look, loaded: page.offset + page.items.length, total: list.count };
+
+  // Hearts on album pages, and the rest of the playing artist's albums (see 6d)
+  if (look.shape === "row" && list.imageKey) {
+    decorateAlbumPage(nav, nav.ticket, list, entries.map(([item]) => item), block, parts[0]);
+  } else if (isPerson && look.shape !== "row") {
+    completeArtistPage(nav, nav.ticket, list, entries.map(([item]) => item), block);
+  }
 }
 
 // The top of a list page without art, like Roon's "My Artists / 1959 artists"
@@ -932,6 +1418,14 @@ async function showActions(nav, input, path, event) {
     return;
   }
   if (actions.length === 0) return;
+
+  // Search results wrap a track's actions in a one-entry menu holding just the
+  // track's name (Roon's "in-between" page); open that straight through
+  if (actions.length === 1 && actions[0][0].hint === "action_list") {
+    const [item, index] = actions[0];
+    showActions(nav, input, [...path, { index, title: item.title }], event);
+    return;
+  }
 
   actionMenu.replaceChildren();
   for (const [item, index] of actions) {
@@ -1218,7 +1712,10 @@ let appSettings = { zoom: 1, zoomHotkeys: true };
 let zoomToastTimer = 0;
 
 invoke("get_settings").then((settings) => (appSettings = settings));
-listen("settings-changed", (event) => (appSettings = event.payload));
+listen("settings-changed", (event) => {
+  appSettings = event.payload;
+  renderLibrary(); // the "+" tooltip names what gets added
+});
 
 // A small pill at the bottom showing the new zoom
 function showZoomToast() {
@@ -1313,4 +1810,4 @@ listen("roon-seek", (event) => {
 });
 
 invoke("roon_queue").then(renderQueue);
-listen("roon-queue", (event) => renderQueue(event.payload));
+listen("roon-queue", (event) => renderQueue(event.payload));

@@ -1,0 +1,9 @@
+roon-library (part of Roon: Toasted), Mozilla Public License 2.0.
+
+The protocol details (handshake, frame format, object graph encoding, method
+signatures) were worked out by Arthur Soares in roon-api-reverse-engineering
+(https://github.com/arthursoares/roon-api-reverse-engineering, MIT License,
+Copyright (c) 2026 Arthur Soares). This crate is an independent Rust
+implementation of the slice needed for hearts and add-to-library; no code was
+copied. Roon is a trademark of Roon Labs LLC; this project is not affiliated
+with or endorsed by Roon Labs.

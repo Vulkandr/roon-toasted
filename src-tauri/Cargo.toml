@@ -26,6 +26,9 @@ serde_json = "1"
 # Roon connection: discovery, pairing, transport, browse (MIT/Apache-2.0, github.com/shin1ohno/roon-rs)
 roon-api = "0.5.3"
 roon-sood = "0.5.3"
+# Hearts and add-to-library over Roon's internal client protocol (experimental,
+# see library.rs); our own crate in roon-library/
+roon-library = { path = "roon-library" }
 tokio = { version = "1", features = ["sync", "rt", "macros", "time", "net", "io-util"] }
 # Reads the tray icon file, to pick the right size for the screen (see icon.rs)
 ico = "0.5"
