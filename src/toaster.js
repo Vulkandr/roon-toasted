@@ -477,6 +477,34 @@ function setLibraryStatus(status) {
 
 invoke("library_status").then(setLibraryStatus);
 listen("library-status", (event) => setLibraryStatus(event.payload));
+
+// ===== Version / update in the title bar ===================================
+//
+// The middle of the title bar shows the version (quietly) or, once Rust's
+// update check found a newer release, "Update available" in the accent
+// color; clicking it opens Settings, which has the Install button.
+
+const titlebarUpdate = document.querySelector("#titlebar-update");
+
+function showTitlebarUpdate(status) {
+  const available = status.state === "available";
+  const busy = status.state === "downloading" || status.state === "installing";
+  titlebarUpdate.querySelector("span").textContent = available
+    ? "Update available"
+    : busy
+      ? "Updating..."
+      : `v${status.currentVersion}`;
+  titlebarUpdate.classList.toggle("available", available);
+  titlebarUpdate.classList.add("shown");
+  titlebarUpdate.title = available ? `Roon: Toasted ${status.version} is ready to install` : `Roon: Toasted ${status.currentVersion}`;
+}
+
+titlebarUpdate.addEventListener("click", () => {
+  if (titlebarUpdate.classList.contains("available")) invoke("open_window", { window: "settings" });
+});
+invoke("update_status").then(showTitlebarUpdate);
+listen("update-status", (event) => showTitlebarUpdate(event.payload));
+
 listen("library-track", (event) => {
   libraryTracks[event.payload.zoneId] = event.payload.track;
   renderLibrary();

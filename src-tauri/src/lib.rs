@@ -13,6 +13,7 @@ mod hotkeys;
 mod icon;
 mod launch;
 mod library;
+mod update;
 mod monitors;
 mod queue;
 mod roon;
@@ -340,7 +341,9 @@ pub fn run() {
         .manage(toast::ToastState::default())
         .manage(launch::StartupMode::default())
         .manage(library::Library::default())
+        .manage(update::Updates::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         // Album art for the pages, fetched from the Core (see zones.rs).
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
             zones::image_request(ctx.app_handle(), request, responder)
@@ -406,6 +409,7 @@ pub fn run() {
 
             // Hearts and add-to-library, if switched on (see library.rs)
             library::start(app.handle());
+            update::start(app.handle());
 
             // After switching Cores (the app restarts itself), bring Settings
             // back so the new connection can be seen
@@ -478,6 +482,9 @@ pub fn run() {
             library::library_album_tracks_for,
             library::library_album_heart_for,
             library::library_album_add_for,
+            update::update_status,
+            update::update_check,
+            update::update_install,
             library::library_album_tracks,
             library::library_track_heart,
             library::library_track_add,

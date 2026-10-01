@@ -128,6 +128,28 @@ App icons are generated from `branding/app-icon-1024.png` with `npx tauri icon`;
 (`branding/app-icon-small-1024.png`, `branding/logo-mask-small-1024.png`) at
 small sizes.
 
+### Releasing
+
+Updates are signed, so a build meant for release needs the private key (kept
+outside the repo, never committed) in the environment. In PowerShell:
+
+```
+$env:TAURI_SIGNING_PRIVATE_KEY = "$HOME\.tauri\roon-toasted.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<the key's password>"
+npm run tauri build
+node scripts/latest-json.mjs
+```
+
+The build writes the installer and its `.sig` to
+`src-tauri/target/release/bundle/nsis`; the script adds `latest.json` there
+(version, release notes from `RELEASE_NOTES.md`, the installer's URL and
+signature). Upload all three to a GitHub release tagged `v<version>`. Installed
+copies check that release for a newer version and offer it in Settings.
+
+Before building, bump the version in `src-tauri/tauri.conf.json`,
+`src-tauri/Cargo.toml`, `package.json` and `package-lock.json`, and write the
+release notes to `RELEASE_NOTES.md` (also the text for the GitHub release).
+
 ## License
 
 Roon: Toasted is licensed under the [Mozilla Public License 2.0](LICENSE).

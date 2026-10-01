@@ -18,6 +18,11 @@
     <div class="titlebar" data-tauri-drag-region="deep">
       <span class="titlebar-logo"></span>
       <span class="titlebar-title">Roon: Toasted Settings</span>
+      <!-- Middle of the bar: the version, or "Update available" (update.rs) -->
+      <button id="titlebar-update" class="titlebar-update" title="Open Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>
+        <span></span>
+      </button>
       <button id="win-maximize" class="win-btn" title="Maximize">
         <svg class="icon-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
         <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="8" width="11" height="11" rx="1"/><path d="M8 8V6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-2"/></svg>
@@ -137,6 +142,84 @@
         <p id="hotkey-error" class="error"></p>
       </section>
 
+      <section class="card toasts-card">
+        <h2>Toasts</h2>
+
+        <div class="toast-row">
+          <div class="setting">
+            <span class="setting-name">Show Toasts</span>
+            <div class="switch-group" id="toasts-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="toasts-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+
+          <!-- Dimmed and locked while toasts are off -->
+          <div id="toast-options" class="toast-options">
+            <div class="toast-option">
+              <span class="option-name">Position</span>
+              <!-- A little screen: click the corner the toast should appear in -->
+              <div class="screen">
+                <button class="corner" data-corner="top-left" title="Top left"></button>
+                <button class="corner" data-corner="top-right" title="Top right"></button>
+                <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
+                <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
+              </div>
+            </div>
+            <div class="toast-option">
+              <span class="option-name">Time on Screen</span>
+              <div class="time-row">
+                <input type="range" id="toast-seconds" min="2" max="30" step="1" />
+                <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
+              </div>
+              <button id="toast-test">Test</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Which screen (names as Windows shows them in Display settings) -->
+        <div id="monitor-row" class="monitor-row">
+          <span class="option-name">Monitor</span>
+          <select id="toast-monitor"></select>
+        </div>
+      </section>
+
+      <!-- What each setting does -->
+      </div>
+
+      <!-- Right column -->
+      <div class="column">
+
+      <section class="card updates-card">
+        <h2>Updates</h2>
+
+        <div class="setting-row">
+          <div class="setting">
+            <span class="setting-name">Check for Updates</span>
+            <div class="switch-group" id="updates-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="updates-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting update-action-row">
+            <button id="update-action">Check now</button>
+          </div>
+        </div>
+
+        <!-- What the last check found, in plain words -->
+        <p id="update-detail" class="muted update-detail"></p>
+        <div id="update-progress" class="update-progress" hidden><div class="bar"></div></div>
+        <pre id="update-notes" class="update-notes" hidden></pre>
+      </section>
+
       <section class="card widget-card">
         <h2>Taskbar Widget <span class="badge">Experimental</span></h2>
 
@@ -223,60 +306,8 @@
         <!-- Whether the Core accepts us, in plain words -->
         <p id="library-detail" class="muted library-detail">Off</p>
       </section>
-      </div>
-
-      <!-- Right column -->
-      <div class="column">
-
-      <section class="card toasts-card">
-        <h2>Toasts</h2>
-
-        <div class="toast-row">
-          <div class="setting">
-            <span class="setting-name">Show Toasts</span>
-            <div class="switch-group" id="toasts-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="toasts-enabled" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
-          </div>
-
-          <!-- Dimmed and locked while toasts are off -->
-          <div id="toast-options" class="toast-options">
-            <div class="toast-option">
-              <span class="option-name">Position</span>
-              <!-- A little screen: click the corner the toast should appear in -->
-              <div class="screen">
-                <button class="corner" data-corner="top-left" title="Top left"></button>
-                <button class="corner" data-corner="top-right" title="Top right"></button>
-                <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
-                <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
-              </div>
-            </div>
-            <div class="toast-option">
-              <span class="option-name">Time on Screen</span>
-              <div class="time-row">
-                <input type="range" id="toast-seconds" min="2" max="30" step="1" />
-                <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
-              </div>
-              <button id="toast-test">Test</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Which screen (names as Windows shows them in Display settings) -->
-        <div id="monitor-row" class="monitor-row">
-          <span class="option-name">Monitor</span>
-          <select id="toast-monitor"></select>
-        </div>
-      </section>
-
-      <!-- What each setting does -->
-      <section class="card legend">
-        <h2>Legend</h2>
+      <details class="card legend">
+        <summary><h2>Legend</h2></summary>
         <p>
           <strong>Window Size:</strong> Default opens the Toaster at its normal size in the
           middle of the screen every time. Last Position reopens it where you left it, at the
@@ -320,12 +351,18 @@
           update may break it until I'm able to repair it.
         </p>
         <p>
+          <strong>Updates:</strong> Looks on GitHub for a newer Roon: Toasted (a minute after it
+          starts, then every 6 hours) and shows it here and in the tray menu. Nothing downloads
+          or installs until you press Install; the update installs the same way as the first
+          install, then the app restarts.
+        </p>
+        <p>
           <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
           on the monitor you pick, in the Toaster's colors. Primary Monitor follows whichever
           one Windows has as main. Clicking the toast opens the Toaster. Mousing over it pauses
           the timer.
         </p>
-      </section>
+      </details>
       </div>
     </main>
 

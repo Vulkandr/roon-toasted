@@ -1554,3 +1554,50 @@ input[type="range"]:disabled {
 #search-view > .group-head {
   margin-top: 22px;
 }
+
+/* Middle of the title bar: the version (quiet) or "Update available" (accent) */
+.titlebar {
+  position: relative;
+}
+
+.titlebar-update {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted, #8a8a94);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.titlebar-update.shown {
+  display: inline-flex;
+}
+
+.titlebar-update svg {
+  display: none;
+  width: 13px;
+  height: 13px;
+}
+
+.titlebar-update.available {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.titlebar-update.available svg {
+  display: block;
+}
+
+.titlebar-update.available:hover {
+  background: var(--hover);
+}

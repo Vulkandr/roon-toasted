@@ -28,6 +28,8 @@ pub struct TrayMenu {
     /// Settings' Window Size: checked = Last Position, unchecked = Default.
     remember_window: CheckMenuItem<Wry>,
     start_with_windows: CheckMenuItem<Wry>,
+    /// "Check for Updates", or "Update to x" once one is waiting (update.rs).
+    update: MenuItem<Wry>,
 }
 
 /// Creates the tray icon and its menu (in setup).
@@ -57,6 +59,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
         saved.start_with_windows,
         None::<&str>,
     )?;
+    let update = MenuItem::with_id(app, "update", "Check for Updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
     let menu = Menu::with_items(
@@ -70,6 +73,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
             &remember_window,
             &start_with_windows,
             &PredefinedMenuItem::separator(app)?,
+            &update,
             &quit,
         ],
     )?;
@@ -103,8 +107,24 @@ pub fn build(app: &App) -> tauri::Result<()> {
         auto_hide,
         remember_window,
         start_with_windows,
+        update,
     });
     Ok(())
+}
+
+/// Puts the update entry's text in line with the updater's state.
+pub fn sync_update(app: &AppHandle, status: &crate::update::UpdateStatus) {
+    use crate::update::UpdateState;
+    let Some(menu) = app.try_state::<TrayMenu>() else { return };
+    let (text, enabled) = match &status.state {
+        UpdateState::Available { version, .. } => (format!("Update to {version}"), true),
+        UpdateState::Checking => ("Checking for updates...".to_string(), false),
+        UpdateState::Downloading { .. } => ("Downloading update...".to_string(), false),
+        UpdateState::Installing { .. } => ("Installing update...".to_string(), false),
+        _ => ("Check for Updates".to_string(), true),
+    };
+    let _ = menu.update.set_text(text);
+    let _ = menu.update.set_enabled(enabled);
 }
 
 fn on_menu(app: &AppHandle, event: MenuEvent) {
@@ -113,6 +133,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         "open_toaster" => return crate::open_toaster(app, ToasterMode::Player),
         "settings" => return crate::show(app, crate::SETTINGS_WINDOW),
         "quit" => return app.exit(0),
+        "update" => return crate::update::from_tray(app),
         "toasts" => json!({ "toastsEnabled": !saved.toasts_enabled }),
         "auto_hide" => json!({ "hideOnBlur": !saved.hide_on_blur }),
         "start_with_windows" => json!({ "startWithWindows": !saved.start_with_windows }),

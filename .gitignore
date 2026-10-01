@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Release notes for the build in progress (they go on the GitHub release)
+RELEASE_NOTES.md

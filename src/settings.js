@@ -604,6 +604,128 @@ listen("settings-changed", (event) => showLibrary(event.payload));
 invoke("library_status").then(showLibraryStatus);
 listen("library-status", (event) => showLibraryStatus(event.payload));
 
+// ===== Updates =============================================================
+//
+// The "Check for Updates" switch, a Check now / Install button, the state
+// line and, when a new version is waiting, its release notes and the download
+// bar. Rust does the work (update.rs) and reports through `update-status`.
+
+const updatesEnabled = document.querySelector("#updates-enabled");
+const updateAction = document.querySelector("#update-action");
+const updateDetail = document.querySelector("#update-detail");
+const updateProgress = document.querySelector("#update-progress");
+const updateNotes = document.querySelector("#update-notes");
+let updateStatus = null;
+
+function showUpdates(settings) {
+  updatesEnabled.checked = settings.checkForUpdates;
+}
+
+function showUpdateStatus(status) {
+  updateStatus = status;
+  const current = `Roon: Toasted ${status.currentVersion}`;
+  let text = current;
+  let button = "Check now";
+  let enabled = true;
+  let tone = "";
+  let progress = null; // null hides the bar, "indeterminate" animates it, a number fills it
+  switch (status.state) {
+    case "off":
+      text = `${current}. Automatic checks are off.`;
+      break;
+    case "idle":
+      text = `${current}. Not checked yet.`;
+      break;
+    case "checking":
+      text = "Checking for updates...";
+      enabled = false;
+      break;
+    case "upToDate":
+      text = `${current} is the latest version.`;
+      break;
+    case "available":
+      text = `${status.version} is available (you have ${status.currentVersion}).`;
+      button = `Install ${status.version}`;
+      tone = "available";
+      break;
+    case "downloading":
+      text = `Downloading ${status.version}...`;
+      button = status.percent == null ? "Downloading..." : `Downloading ${status.percent}%`;
+      enabled = false;
+      progress = status.percent == null ? "indeterminate" : status.percent;
+      break;
+    case "installing":
+      text = `Installing ${status.version}. Roon: Toasted will restart.`;
+      button = "Installing...";
+      enabled = false;
+      progress = "indeterminate";
+      break;
+    case "failed":
+      text = status.message;
+      tone = "problem";
+      break;
+  }
+  updateDetail.textContent = text;
+  updateDetail.classList.toggle("available", tone === "available");
+  updateDetail.classList.toggle("problem", tone === "problem");
+  updateAction.textContent = button;
+  updateAction.disabled = !enabled;
+  updateProgress.hidden = progress === null;
+  updateProgress.classList.toggle("indeterminate", progress === "indeterminate");
+  updateProgress.querySelector(".bar").style.width = typeof progress === "number" ? `${progress}%` : "";
+  const notes = status.state === "available" ? status.notes : null;
+  updateNotes.hidden = !notes;
+  updateNotes.textContent = notes ?? "";
+}
+
+updateAction.addEventListener("click", async () => {
+  if (!updateStatus) return;
+  try {
+    if (updateStatus.state === "available") {
+      await invoke("update_install");
+    } else {
+      showUpdateStatus(await invoke("update_check"));
+    }
+  } catch (err) {
+    console.error(err);
+    showUpdateStatus(await invoke("update_status"));
+  }
+});
+
+librarySwitch(updatesEnabled, "#updates-group", (on) => ({ checkForUpdates: on }));
+invoke("get_settings").then(showUpdates);
+listen("settings-changed", (event) => showUpdates(event.payload));
+invoke("update_status").then(showUpdateStatus);
+listen("update-status", (event) => showUpdateStatus(event.payload));
+
+// ===== Version / update in the title bar ===================================
+//
+// The middle of the title bar shows the version (quietly) or, once Rust's
+// update check found a newer release, "Update available" in the accent
+// color; clicking it opens Settings, which has the Install button.
+
+const titlebarUpdate = document.querySelector("#titlebar-update");
+
+function showTitlebarUpdate(status) {
+  const available = status.state === "available";
+  const busy = status.state === "downloading" || status.state === "installing";
+  titlebarUpdate.querySelector("span").textContent = available
+    ? "Update available"
+    : busy
+      ? "Updating..."
+      : `v${status.currentVersion}`;
+  titlebarUpdate.classList.toggle("available", available);
+  titlebarUpdate.classList.add("shown");
+  titlebarUpdate.title = available ? `Roon: Toasted ${status.version} is ready to install` : `Roon: Toasted ${status.currentVersion}`;
+}
+
+titlebarUpdate.addEventListener("click", () => {
+  if (titlebarUpdate.classList.contains("available")) updateAction.click();
+});
+invoke("update_status").then(showTitlebarUpdate);
+listen("update-status", (event) => showTitlebarUpdate(event.payload));
+
+
 // ===== Reset on slider numbers ============================================
 //
 // The number next to a slider (e.g. "59 px"): hovering it shows a red

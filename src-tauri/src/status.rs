@@ -8,7 +8,7 @@
 //! While the app runs it answers `GET http://127.0.0.1:58421/status` with:
 //!
 //! ```json
-//! { "app": "Roon: Toasted", "version": "1.0.0",
+//! { "app": "Roon: Toasted", "version": "1.1.0",
 //!   "roon": "connected", "core": "Roon Optimized Core Kit", "library": "ready" }
 //! ```
 //!

@@ -1,6 +1,6 @@
 [package]
 name = "roon-toasted"
-version = "1.0.0"
+version = "1.1.0"
 description = "Roon: Toasted, a Roon companion for Windows"
 authors = ["Vulkandr"]
 license = "MPL-2.0"
@@ -34,6 +34,7 @@ tokio = { version = "1", features = ["sync", "rt", "macros", "time", "net", "io-
 ico = "0.5"
 # Prints library warnings to the terminal in dev builds
 tracing-subscriber = "0.3"
+tauri-plugin-updater = "2"
 
 # Desktop-only plugins
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]

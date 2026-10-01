@@ -72,6 +72,8 @@ pub struct AppSettings {
     pub library_controls: bool,
     /// What "add to library" adds: just the song, or its whole album.
     pub library_add_mode: roon_library::AddMode,
+    /// Look for new releases on GitHub (update.rs); nothing installs without a click.
+    pub check_for_updates: bool,
 }
 
 impl Default for AppSettings {
@@ -98,6 +100,7 @@ impl Default for AppSettings {
             toast_seconds: 8,
             library_controls: true,
             library_add_mode: roon_library::AddMode::Track,
+            check_for_updates: true,
         }
     }
 }
@@ -289,6 +292,7 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         crate::hotkeys::register_saved(&app);
     }
     crate::library::settings_changed(&app, &before, &updated);
+    crate::update::settings_changed(&app, &before, &updated);
     crate::tray::sync(&app, &updated);
     let _ = app.emit("settings-changed", &updated);
     Ok(updated)

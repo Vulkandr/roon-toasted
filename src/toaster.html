@@ -20,6 +20,11 @@
     <div class="titlebar" data-tauri-drag-region="deep">
       <span class="titlebar-logo"></span>
       <span class="titlebar-title">Roon: Toasted</span>
+      <!-- Middle of the bar: the version, or "Update available" (update.rs) -->
+      <button id="titlebar-update" class="titlebar-update" title="Open Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>
+        <span></span>
+      </button>
       <button id="win-maximize" class="win-btn" title="Maximize">
         <svg class="icon-maximize" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
         <svg class="icon-restore" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="5" y="8" width="11" height="11" rx="1"/><path d="M8 8V6a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1h-2"/></svg>

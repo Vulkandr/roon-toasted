@@ -392,6 +392,43 @@ button:disabled {
 }
 
 /* Legend: one short paragraph per setting ("Zoom: what it does") */
+/* The Legend folds away (closed by default); its heading is the handle */
+.legend summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.legend summary::-webkit-details-marker {
+  display: none;
+}
+
+.legend summary::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+  margin-right: 2px;
+}
+
+.legend[open] summary::before {
+  transform: rotate(45deg);
+}
+
+.legend summary h2 {
+  margin: 0;
+}
+
+.legend[open] summary {
+  margin-bottom: 12px;
+}
+
 .legend p {
   margin: 0 0 10px;
   font-size: 13px;
@@ -732,4 +769,108 @@ button:disabled {
 #toast-monitor:focus-visible {
   border-color: var(--accent);
   outline: none;
+}
+
+/* Updates: the state line, download bar and release notes */
+.update-action-row {
+  justify-content: flex-end;
+}
+
+.update-detail {
+  text-align: center;
+  margin-top: 12px;
+}
+
+.update-detail.available {
+  color: var(--accent);
+}
+
+.update-detail.problem {
+  color: var(--warn);
+}
+
+.update-progress {
+  height: 6px;
+  margin: 10px 0 0;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.update-progress .bar {
+  height: 100%;
+  width: 0;
+  background: var(--accent);
+  transition: width 0.2s;
+}
+
+.update-progress.indeterminate .bar {
+  width: 30%;
+  animation: update-slide 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes update-slide {
+  from { margin-left: 0; }
+  to { margin-left: 70%; }
+}
+
+.update-notes {
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  max-height: 160px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  color: var(--text);
+}
+
+/* Middle of the title bar: the version (quiet) or "Update available" (accent) */
+.titlebar {
+  position: relative;
+}
+
+.titlebar-update {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: none;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted, #8a8a94);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+.titlebar-update.shown {
+  display: inline-flex;
+}
+
+.titlebar-update svg {
+  display: none;
+  width: 13px;
+  height: 13px;
+}
+
+.titlebar-update.available {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.titlebar-update.available svg {
+  display: block;
+}
+
+.titlebar-update.available:hover {
+  background: var(--hover);
 }
