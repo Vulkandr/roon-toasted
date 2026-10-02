@@ -74,6 +74,15 @@ pub struct AppSettings {
     pub library_add_mode: roon_library::AddMode,
     /// Look for new releases on GitHub (update.rs); nothing installs without a click.
     pub check_for_updates: bool,
+    /// A Roon Core address the user typed in (Settings > Roon Core > Manual),
+    /// asked directly on every search. Changed through `roon_set_manual_core`.
+    pub manual_core_host: Option<String>,
+    /// The port to connect to directly when the Core at `manual_core_host`
+    /// doesn't answer the search (its API port, 9330 unless changed in Roon).
+    pub manual_core_port: u16,
+    /// Where the paired Core was last seen. Asked directly on every search too,
+    /// so finding it again doesn't depend on multicast. Set by roon.rs.
+    pub last_core_host: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -101,9 +110,15 @@ impl Default for AppSettings {
             library_controls: true,
             library_add_mode: roon_library::AddMode::Track,
             check_for_updates: true,
+            manual_core_host: None,
+            manual_core_port: DEFAULT_CORE_PORT,
+            last_core_host: None,
         }
     }
 }
+
+/// The port a Roon Core's API listens on unless changed in Roon.
+pub const DEFAULT_CORE_PORT: u16 = 9330;
 
 /// What the app calls 100%: the Toaster is designed at this real zoom, so the
 /// user's 100% is 110% underneath (picked by Vulk as the ideal size).
@@ -245,6 +260,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     for (name, value) in changes {
         if name == "selectedZoneId" {
             return Err("Use roon_select_zone to change the zone.".into());
+        }
+        if name == "manualCoreHost" || name == "manualCorePort" || name == "lastCoreHost" {
+            return Err("Use roon_set_manual_core to change the Core address.".into());
         }
         if name == "hotkeyPlayer" || name == "hotkeySearch" {
             return Err("Use set_hotkey to change a hotkey.".into());

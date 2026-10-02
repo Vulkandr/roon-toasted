@@ -107,6 +107,11 @@ once connected, otherwise `null`. No answer means it isn't running.
   example after a display change.
 - Roon: Toasted only talks to your Roon Core on your own network. The status
   check only answers on your own PC.
+- Can't find your Core? Press Search in Settings > Roon Core. If that doesn't
+  help, press Manual and type the Core's IP address (leave the port alone
+  unless you changed it in Roon). Diagnostics, at the bottom of the same
+  card, shows which network adapters were searched and which answered; Copy
+  puts that on the clipboard for a bug report.
 
 ## Building
 

@@ -10,6 +10,7 @@
 //! Zones and playback live in zones.rs, which this hands each connection to.
 
 use std::collections::{HashMap, HashSet};
+use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -78,6 +79,27 @@ pub struct Roon {
     inner: Mutex<Inner>,
     state_path: OnceLock<PathBuf>,
     app: OnceLock<AppHandle>,
+    /// Steers discovery (search again, direct queries); set once discovery is up.
+    control: Mutex<Option<roon_sood::SoodControl>>,
+    /// Tells the connection loop the manual address changed.
+    manual_changed: Mutex<Option<tokio::sync::mpsc::UnboundedSender<()>>>,
+    /// What the direct (typed address) connection is doing, for the Manual panel.
+    direct: Mutex<DirectState>,
+}
+
+/// The direct connection to a typed-in address, for the Manual panel.
+#[derive(Clone, Serialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DirectState {
+    /// Not trying (no manual address, the Core answered the search, or connected).
+    #[default]
+    Idle,
+    /// The address didn't answer the search; connecting to host:port directly.
+    Connecting,
+    /// Connected through the typed address.
+    Connected,
+    /// The last direct attempt failed; retrying.
+    Failed,
 }
 
 impl Default for Roon {
@@ -92,6 +114,9 @@ impl Default for Roon {
             }),
             state_path: OnceLock::new(),
             app: OnceLock::new(),
+            control: Mutex::new(None),
+            manual_changed: Mutex::new(None),
+            direct: Mutex::new(DirectState::Idle),
         }
     }
 }
@@ -145,6 +170,20 @@ impl Roon {
             }
             inner.seen.insert(core.core_id.clone(), (core, Instant::now()));
         });
+    }
+
+    fn set_direct(&self, state: DirectState) {
+        let changed = {
+            let mut direct = self.direct.lock().unwrap();
+            let changed = *direct != state;
+            *direct = state;
+            changed
+        };
+        if changed {
+            if let Some(app) = self.app.get() {
+                let _ = app.emit("roon-status", &self.status());
+            }
+        }
     }
 
     fn remove_stale_cores(&self) {
@@ -206,6 +245,162 @@ pub async fn switch_core(roon: State<'_, Roon>, core_id: String) -> Result<(), S
     // The new copy waits for this one's WebView2 to close (see lib.rs)
     std::env::set_var(crate::RESTARTED_ENV, "1");
     app.restart();
+}
+
+
+/// Searches the network for Cores again right now.
+#[tauri::command]
+pub fn roon_search_again(roon: State<'_, Roon>) -> Result<(), String> {
+    match roon.control.lock().unwrap().as_ref() {
+        Some(control) => {
+            println!("[roon] searching again (asked from Settings)");
+            control.search_now();
+            Ok(())
+        }
+        None => Err("Still starting up, try again in a moment.".into()),
+    }
+}
+
+/// Saves (or clears, with None or an empty string) a Core address typed in by
+/// hand, and searches again with it. The address is asked directly on every
+/// search, so it works even when multicast and broadcast don't reach the Core.
+#[tauri::command]
+pub fn roon_set_manual_core(
+    app: AppHandle,
+    roon: State<'_, Roon>,
+    address: Option<String>,
+    port: Option<u16>,
+) -> Result<(), String> {
+    let address = address.map(|a| a.trim().to_string()).filter(|a| !a.is_empty());
+    let host = match &address {
+        Some(text) => {
+            let ip: Ipv4Addr = text.parse().map_err(|_| {
+                "Enter the Core's IPv4 address, like 192.168.1.20 (no port needed).".to_string()
+            })?;
+            if ip.is_loopback() || ip.is_unspecified() || ip.is_broadcast() || ip.is_multicast() {
+                return Err("That isn't an address a Core can be reached at.".to_string());
+            }
+            Some(ip.to_string())
+        }
+        None => None,
+    };
+
+    let path = crate::settings::path(&app).ok_or("Couldn't find the app data folder.")?;
+    let port = port.unwrap_or(crate::settings::DEFAULT_CORE_PORT);
+    if port == 0 {
+        return Err("The port must be between 1 and 65535.".into());
+    }
+    let mut settings = crate::settings::load(&path);
+    settings.manual_core_host = host.clone();
+    settings.manual_core_port = port;
+    crate::settings::save(&path, &settings)?;
+    match &host {
+        Some(h) => println!("[roon] manual Core address set to {h}:{port}"),
+        None => println!("[roon] manual Core address cleared"),
+    }
+
+    if let Some(control) = roon.control.lock().unwrap().as_ref() {
+        control.set_known_hosts(known_hosts(&settings));
+    }
+    if let Some(tx) = roon.manual_changed.lock().unwrap().as_ref() {
+        let _ = tx.send(());
+    }
+    Ok(())
+}
+
+/// Addresses asked directly on every search: the one typed in by hand and
+/// where the paired Core was last seen.
+fn known_hosts(settings: &crate::settings::AppSettings) -> Vec<Ipv4Addr> {
+    let mut hosts: Vec<Ipv4Addr> = Vec::new();
+    for text in [&settings.manual_core_host, &settings.last_core_host]
+        .into_iter()
+        .flatten()
+    {
+        if let Ok(ip) = text.parse::<Ipv4Addr>() {
+            if !hosts.contains(&ip) {
+                hosts.push(ip);
+            }
+        }
+    }
+    hosts
+}
+
+/// One network adapter the search goes out of, with what came back.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AdapterInfo {
+    pub ip: String,
+    pub queries_sent: u64,
+    pub replies: u64,
+}
+
+/// What the Diagnostics dropdown in Settings shows.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Diagnostics {
+    pub app_version: String,
+    pub adapters: Vec<AdapterInfo>,
+    /// Answers that came in on the shared sockets rather than one adapter's.
+    pub other_replies: u64,
+    pub searches: u64,
+    pub last_search_secs_ago: Option<u64>,
+    pub last_reply_secs_ago: Option<u64>,
+    pub last_reply_from: Option<String>,
+    /// Addresses asked directly on every search.
+    pub known_hosts: Vec<String>,
+    /// The address typed in under Manual, if any, and its port.
+    pub manual_core: Option<String>,
+    pub manual_port: u16,
+    /// Whether a Core has answered the search at that address.
+    pub manual_answered: bool,
+    /// What the direct connection to the typed address is doing.
+    pub direct: DirectState,
+}
+
+#[tauri::command]
+pub fn roon_diagnostics(app: AppHandle, roon: State<'_, Roon>) -> Result<Diagnostics, String> {
+    let Some(control) = roon.control.lock().unwrap().clone() else {
+        return Err("Still starting up, try again in a moment.".into());
+    };
+    let diag = control.diagnostics();
+    let settings = crate::settings::path(&app)
+        .map(|p| crate::settings::load(&p))
+        .unwrap_or_default();
+    let status = roon.status();
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let ago = |t: Option<u64>| t.map(|t| now.saturating_sub(t));
+
+    let manual_answered = settings
+        .manual_core_host
+        .as_ref()
+        .is_some_and(|m| status.available.iter().any(|c| &c.host == m));
+
+    Ok(Diagnostics {
+        app_version: app.package_info().version.to_string(),
+        adapters: diag
+            .adapters
+            .iter()
+            .map(|a| AdapterInfo {
+                ip: a.ip.to_string(),
+                queries_sent: a.queries_sent,
+                replies: a.replies,
+            })
+            .collect(),
+        other_replies: diag.other_replies,
+        searches: diag.searches,
+        last_search_secs_ago: ago(diag.last_search_unix),
+        last_reply_secs_ago: ago(diag.last_reply_unix),
+        last_reply_from: diag.last_reply_from.map(|ip| ip.to_string()),
+        known_hosts: diag.known_hosts.iter().map(|h| h.to_string()).collect(),
+        manual_core: settings.manual_core_host,
+        manual_port: settings.manual_core_port,
+        manual_answered,
+        direct: roon.direct.lock().unwrap().clone(),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +529,32 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
     }
 
     // Keep the handle: dropping it would stop discovery.
-    let (_discovery, mut found) = roon_sood::SoodDiscovery::start().await?;
+    let (discovery, mut found) = roon_sood::SoodDiscovery::start().await?;
+    // Also ask the manual address and the Core's last known address directly,
+    // so finding it doesn't rely on multicast or broadcast getting through.
+    let settings_path = crate::settings::path(app);
+    let settings = settings_path
+        .as_deref()
+        .map(crate::settings::load)
+        .unwrap_or_default();
+    let mut saved_host = settings.last_core_host.clone();
+    let control = discovery.control();
+    control.set_known_hosts(known_hosts(&settings));
+    *roon.control.lock().unwrap() = Some(control);
+
+    // Direct connection to a typed-in address (Settings > Roon Core > Manual):
+    // used only if that address doesn't answer the search within a few
+    // seconds, for networks that block the search's UDP port but not the
+    // Core's own port. Any change to the address re-arms it.
+    let (manual_tx, mut manual_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
+    *roon.manual_changed.lock().unwrap() = Some(manual_tx);
+    const DIRECT_WAIT: Duration = Duration::from_secs(5);
+    const DIRECT_RETRY: Duration = Duration::from_secs(15);
+    let direct_due = tokio::time::sleep(DIRECT_WAIT);
+    tokio::pin!(direct_due);
+    let mut direct_task: Option<JoinHandle<()>> = None;
+    // Result of the direct attempt: the Core it reached, or None if it failed
+    let (direct_tx, mut direct_rx) = tokio::sync::mpsc::channel::<Option<String>>(1);
     let (connected_tx, mut connected_rx) = tokio::sync::mpsc::channel::<String>(1);
     let mut attempts: HashMap<String, JoinHandle<()>> = HashMap::new();
     let mut ignored: HashSet<String> = HashSet::new();
@@ -356,6 +576,73 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
 
             _ = prune.tick() => roon.remove_stale_cores(),
 
+            // The manual address was saved or cleared: start the clock again
+            Some(()) = manual_rx.recv() => {
+                if let Some(task) = direct_task.take() {
+                    task.abort();
+                }
+                roon.set_direct(DirectState::Idle);
+                direct_due.as_mut().reset(tokio::time::Instant::now() + DIRECT_WAIT);
+            }
+
+            // Time to try the typed address directly, if nothing else worked
+            () = &mut direct_due => {
+                // Re-arm; only does anything when the conditions below hold
+                direct_due.as_mut().reset(tokio::time::Instant::now() + DIRECT_RETRY);
+                if connected.is_some() || direct_task.as_ref().is_some_and(|t| !t.is_finished()) {
+                    continue;
+                }
+                let settings = settings_path.as_deref().map(crate::settings::load).unwrap_or_default();
+                let Some(host) = settings.manual_core_host.clone() else {
+                    roon.set_direct(DirectState::Idle);
+                    continue;
+                };
+                // The search reached it: the normal path has it covered
+                if roon.status().available.iter().any(|c| c.host == host) {
+                    roon.set_direct(DirectState::Idle);
+                    continue;
+                }
+                let port = settings.manual_core_port;
+                println!("[roon] {host} didn't answer the search, connecting to {host}:{port} directly...");
+                roon.set_direct(DirectState::Connecting);
+                let client = client.clone();
+                let direct_tx = direct_tx.clone();
+                direct_task = Some(tokio::spawn(async move {
+                    match client.connect(&host, port).await {
+                        Ok(core) => {
+                            let _ = direct_tx.send(Some(core.core_id().to_string())).await;
+                        }
+                        Err(e) => {
+                            eprintln!("[roon] direct connection to {host}:{port} failed: {e} (will keep trying)");
+                            let _ = direct_tx.send(None).await;
+                        }
+                    }
+                }));
+            }
+
+            Some(result) = direct_rx.recv() => {
+                match result {
+                    Some(core_id) => {
+                        // A typed address means "use that Core": if it isn't
+                        // the paired one, switch to it, which restarts the app
+                        if paired.as_ref().is_some_and(|p| *p != core_id) {
+                            println!("[roon] the Core at the manual address is a different Core, switching to it");
+                            if let Some(path) = roon.state_path.get() {
+                                let _ = FileStateStore::new(path.clone()).save_paired_core_id(Some(&core_id));
+                            }
+                            std::env::set_var(crate::RESTARTED_ENV, "1");
+                            app.restart();
+                        }
+                        for (_, task) in attempts.drain() {
+                            task.abort();
+                        }
+                        connected = Some(core_id);
+                        roon.set_direct(DirectState::Connected);
+                    }
+                    None => roon.set_direct(DirectState::Failed),
+                }
+            }
+
             result = found.recv() => {
                 let core = match result {
                     Ok(core) => core,
@@ -375,6 +662,26 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                     host: core.host.to_string(),
                     port: core.http_port,
                 });
+
+                // Remember where the Core we use lives, so it can be asked
+                // directly next time (only written when the address changes)
+                let ours = paired.as_ref() == Some(&core.core_id)
+                    || connected.as_ref() == Some(&core.core_id);
+                if ours && !core.host.is_loopback() {
+                    let host = core.host.to_string();
+                    if saved_host.as_ref() != Some(&host) {
+                        if let Some(path) = &settings_path {
+                            let mut current = crate::settings::load(path);
+                            current.last_core_host = Some(host.clone());
+                            if crate::settings::save(path, &current).is_ok() {
+                                if let Some(control) = roon.control.lock().unwrap().as_ref() {
+                                    control.set_known_hosts(known_hosts(&current));
+                                }
+                                saved_host = Some(host);
+                            }
+                        }
+                    }
+                }
 
                 // Connected: just keep the reconnect address current (does
                 // nothing unless the Core's address changed)

@@ -1,6 +1,6 @@
 [package]
 name = "roon-toasted"
-version = "1.1.0"
+version = "1.1.1"
 description = "Roon: Toasted, a Roon companion for Windows"
 authors = ["Vulkandr"]
 license = "MPL-2.0"

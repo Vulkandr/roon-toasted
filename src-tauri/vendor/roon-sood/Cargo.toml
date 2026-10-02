@@ -44,6 +44,9 @@ path = "src/lib.rs"
 [dependencies.bytes]
 version = "1"
 
+[dependencies.if-addrs]
+version = "0.15"
+
 [dependencies.socket2]
 version = "0.5"
 

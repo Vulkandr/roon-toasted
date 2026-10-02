@@ -5,7 +5,9 @@ pub mod discovery;
 mod parse;
 mod serialize;
 
-pub use discovery::{DiscoveredCore, SoodDiscovery};
+pub use discovery::{
+    AdapterDiagnostics, DiscoveredCore, DiscoveryDiagnostics, SoodControl, SoodDiscovery,
+};
 pub use parse::parse;
 pub use serialize::serialize_query;
 

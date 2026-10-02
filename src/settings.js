@@ -23,6 +23,7 @@ const STATE_TEXT = {
 
 // Updates the whole Roon Core section to match a status from Rust
 function render(status) {
+  lastStatus = status;
   // Dot color comes from the .connected / .searching / .reconnecting CSS classes
   dot.className = `dot ${status.state}`;
 
@@ -94,6 +95,215 @@ async function switchTo(core) {
     coreError.textContent = err;
   }
 }
+
+// ===== Search, Manual and Diagnostics ======================================
+
+const searchButton = document.querySelector("#core-search");
+const manualButton = document.querySelector("#core-manual");
+const manualPanel = document.querySelector("#manual-panel");
+const manualInput = document.querySelector("#manual-address");
+const manualPort = document.querySelector("#manual-port");
+const manualSave = document.querySelector("#manual-save");
+const manualClear = document.querySelector("#manual-clear");
+const manualNote = document.querySelector("#manual-note");
+const manualError = document.querySelector("#manual-error");
+const diagButton = document.querySelector("#diag-toggle");
+const diagPanel = document.querySelector("#diag-panel");
+const diagText = document.querySelector("#diag-text");
+const diagCopy = document.querySelector("#diag-copy");
+
+let lastStatus = null;
+let diagTimer = null;
+
+// Opens or closes a slide-down panel and keeps its button's state in step
+function setOpen(panel, button, open) {
+  panel.classList.toggle("open", open);
+  panel.inert = !open;
+  button.setAttribute("aria-expanded", String(open));
+}
+
+// Search: asks the app to look for Cores again right now
+searchButton.addEventListener("click", async () => {
+  coreError.textContent = "";
+  searchButton.disabled = true;
+  searchButton.textContent = "Searching...";
+  try {
+    await invoke("roon_search_again");
+  } catch (err) {
+    coreError.textContent = err;
+  }
+  // Answers come back within a second or two; give it a moment before
+  // allowing another search
+  setTimeout(() => {
+    searchButton.disabled = false;
+    searchButton.textContent = "Search";
+    if (diagPanel.classList.contains("open")) refreshDiagnostics();
+  }, 3000);
+});
+
+// What the Manual panel says about the saved address
+function manualText(diag) {
+  if (!diag.manualCore) {
+    return "Use this if searching can't find your Core. Leave the port as is unless you have a custom port.";
+  }
+  if (diag.manualAnswered) return "A Core answered the search at this address.";
+  const where = `${diag.manualCore}:${diag.manualPort}`;
+  switch (diag.direct) {
+    case "connecting": return `No answer to the search. Connecting to ${where} directly...`;
+    case "connected": return `Connected directly to ${where}.`;
+    case "failed": return `Couldn't connect to ${where}. Check the address and port, and that Roon is running there. Retrying every 15 seconds.`;
+    default: return "No answer from this address yet.";
+  }
+}
+
+async function refreshManual() {
+  try {
+    const diag = await invoke("roon_diagnostics");
+    manualNote.textContent = manualText(diag);
+    return diag;
+  } catch (err) {
+    manualError.textContent = err;
+    return null;
+  }
+}
+
+// Manual: type in the Core's address
+manualButton.addEventListener("click", async () => {
+  const open = !manualPanel.classList.contains("open");
+  setOpen(manualPanel, manualButton, open);
+  if (!open) return;
+  manualError.textContent = "";
+  const diag = await refreshManual();
+  if (diag) {
+    manualInput.value = diag.manualCore ?? "";
+    manualPort.value = String(diag.manualPort || 9330);
+  }
+  manualInput.focus();
+});
+
+// The direct connection's state arrives with every status update
+listen("roon-status", () => {
+  if (manualPanel.classList.contains("open")) refreshManual();
+});
+
+async function saveManual(address, port) {
+  manualError.textContent = "";
+  try {
+    await invoke("roon_set_manual_core", { address, port });
+  } catch (err) {
+    manualError.textContent = err;
+    return false;
+  }
+  return true;
+}
+
+manualSave.addEventListener("click", async () => {
+  const address = manualInput.value.trim();
+  if (!address) {
+    manualError.textContent = "Enter the Core's IPv4 address, like 192.168.1.20.";
+    return;
+  }
+  const portText = manualPort.value.trim() || "9330";
+  const port = Number(portText);
+  if (!/^\d+$/.test(portText) || port < 1 || port > 65535) {
+    manualError.textContent = "The port must be a number between 1 and 65535 (9330 unless you changed it in Roon).";
+    return;
+  }
+  if (!(await saveManual(address, port))) return;
+  manualPort.value = String(port);
+  manualNote.textContent = `Asking ${address}...`;
+  // The search answer, if there is one, arrives within a second or two; if
+  // not, the direct connection starts after 5 seconds and reports through
+  // the status updates
+  setTimeout(refreshManual, 3000);
+});
+
+manualClear.addEventListener("click", async () => {
+  if (!(await saveManual(null, null))) return;
+  manualInput.value = "";
+  manualPort.value = "9330";
+  manualNote.textContent = "Manual address removed.";
+});
+
+for (const field of [manualInput, manualPort]) {
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") manualSave.click();
+  });
+}
+
+// Diagnostics: what the search has been doing, as plain text (also what Copy gives)
+function ago(secs) {
+  if (secs === null || secs === undefined) return "never";
+  if (secs < 60) return `${secs} s ago`;
+  if (secs < 3600) return `${Math.floor(secs / 60)} min ago`;
+  return `${Math.floor(secs / 3600)} h ago`;
+}
+
+function diagnosticsText(diag) {
+  const status = lastStatus;
+  const lines = [`Roon: Toasted ${diag.appVersion}`];
+  if (status) {
+    lines.push(`Connection: ${status.state}`);
+    lines.push(`Cores found: ${status.available.length}`);
+  }
+  lines.push(`Searches sent: ${diag.searches} (last ${ago(diag.lastSearchSecsAgo)})`);
+  lines.push(
+    diag.lastReplyFrom
+      ? `Last answer: from ${diag.lastReplyFrom}, ${ago(diag.lastReplySecsAgo)}`
+      : "Last answer: none yet",
+  );
+  lines.push(
+    diag.knownHosts.length
+      ? `Asked directly: ${diag.knownHosts.join(", ")}`
+      : "Asked directly: nothing saved",
+  );
+  if (diag.manualCore) {
+    lines.push(
+      `Manual address: ${diag.manualCore}:${diag.manualPort} `
+        + `(search ${diag.manualAnswered ? "answered" : "not answered"}, direct connection ${diag.direct})`,
+    );
+  }
+  lines.push("");
+  lines.push(`Network adapters searched: ${diag.adapters.length}`);
+  for (const adapter of diag.adapters) {
+    lines.push(
+      `  ${adapter.ip}  sent ${adapter.queriesSent}, answers ${adapter.replies}`,
+    );
+  }
+  if (diag.otherReplies > 0) {
+    lines.push(`  other (shared sockets)  answers ${diag.otherReplies}`);
+  }
+  return lines.join("\n");
+}
+
+async function refreshDiagnostics() {
+  try {
+    diagText.textContent = diagnosticsText(await invoke("roon_diagnostics"));
+  } catch (err) {
+    diagText.textContent = String(err);
+  }
+}
+
+diagButton.addEventListener("click", () => {
+  const open = !diagPanel.classList.contains("open");
+  setOpen(diagPanel, diagButton, open);
+  clearInterval(diagTimer);
+  if (open) {
+    refreshDiagnostics();
+    // Stays live while the panel is open
+    diagTimer = setInterval(refreshDiagnostics, 2000);
+  }
+});
+
+diagCopy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(diagText.textContent);
+    diagCopy.textContent = "Copied";
+  } catch {
+    diagCopy.textContent = "Couldn't copy";
+  }
+  setTimeout(() => (diagCopy.textContent = "Copy"), 1500);
+});
 
 // Load the current status once, then stay live with updates from Rust
 invoke("roon_status").then(render);

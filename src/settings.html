@@ -48,11 +48,48 @@
             <div id="core-name">Looking for your Roon Core...</div>
             <div id="core-detail" class="muted"></div>
           </div>
+          <div class="core-actions">
+            <button id="core-manual" class="small" type="button" aria-expanded="false" aria-controls="manual-panel">Manual</button>
+            <button id="core-search" class="small" type="button" title="Look for Cores on the network again">Search</button>
+          </div>
+        </div>
+
+        <!-- Manual: type in the Core's address, for when the search can't find it -->
+        <div id="manual-panel" class="drop" inert>
+          <div class="drop-inner">
+            <div class="manual-box">
+              <div class="manual-labels">
+                <label class="muted" for="manual-address">Core address (IPv4)</label>
+                <label class="muted" for="manual-port">Port</label>
+              </div>
+              <div class="manual-row">
+                <input id="manual-address" type="text" inputmode="decimal" placeholder="192.168.1.20" spellcheck="false" autocomplete="off" />
+                <input id="manual-port" type="text" inputmode="numeric" placeholder="9330" spellcheck="false" autocomplete="off" title="The Core's port, 9330 unless you changed it in Roon" />
+                <button id="manual-save" class="small" type="button">Save</button>
+                <button id="manual-clear" class="small" type="button">Clear</button>
+              </div>
+              <p id="manual-note" class="muted"></p>
+              <p id="manual-error" class="error"></p>
+            </div>
+          </div>
         </div>
 
         <h3>Available Cores</h3>
         <ul id="core-list"></ul>
         <p id="core-error" class="error"></p>
+
+        <!-- Diagnostics: what the search is doing, for when a Core can't be found -->
+        <div class="diag-bar">
+          <button id="diag-toggle" class="small" type="button" aria-expanded="false" aria-controls="diag-panel">Diagnostics</button>
+        </div>
+        <div id="diag-panel" class="drop" inert>
+          <div class="drop-inner">
+            <div class="diag-box">
+              <pre id="diag-text" class="diag-text">Loading...</pre>
+              <button id="diag-copy" class="small" type="button">Copy</button>
+            </div>
+          </div>
+        </div>
       </section>
       <section class="card toaster-card">
         <h2>Toaster</h2>
