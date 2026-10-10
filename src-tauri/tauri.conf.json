@@ -77,13 +77,13 @@
         "transparent": true
       },
       {
-        "label": "roonhost",
+        "label": "wrapper",
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
-        "url": "roonhost.html",
-        "title": "Roon: Toasted",
-        "width": 1400,
+        "url": "wrapper.html",
+        "title": "Roon: Wrapped",
+        "width": 1600,
         "height": 900,
-        "minWidth": 960,
+        "minWidth": 1440,
         "minHeight": 640,
         "center": true,
         "visible": false,

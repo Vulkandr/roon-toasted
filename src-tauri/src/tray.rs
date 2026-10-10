@@ -2,14 +2,16 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The tray icon and its right-click menu: Open Toaster, Settings, a few
-//! quick settings (Toasts, Auto-Hide, Remember Window, Start with Windows),
-//! the Roon panel prototype, and Quit. Double-clicking
+//! The tray icon and its right-click menu: Open Toaster, Open Wrapper (only
+//! while the Wrapper is switched on), Settings, a few quick settings (Toasts,
+//! Auto-Hide, Remember Window, Start with Windows) and Quit. Double-clicking
 //! the icon opens the Toaster.
 //!
 //! The quick settings change the same saved settings as the Settings window
 //! (through `update_settings`), and their check marks follow any change made
 //! in Settings (`sync`, called by `update_settings`).
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde_json::json;
 use tauri::{
@@ -23,6 +25,10 @@ use crate::ToasterMode;
 
 /// The quick settings' menu items, kept so their check marks can be updated.
 pub struct TrayMenu {
+    menu: Menu<Wry>,
+    /// "Open Wrapper", in the menu only while the Wrapper is on.
+    wrapper: MenuItem<Wry>,
+    wrapper_shown: AtomicBool,
     toasts: CheckMenuItem<Wry>,
     auto_hide: CheckMenuItem<Wry>,
     /// Settings' Window Size: checked = Last Position, unchecked = Default.
@@ -37,6 +43,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
     let saved = settings::get_settings(app.handle().clone());
 
     let open_toaster = MenuItem::with_id(app, "open_toaster", "Open Toaster", true, None::<&str>)?;
+    let open_wrapper = MenuItem::with_id(app, "open_wrapper", "Open Wrapper", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
     let toasts =
         CheckMenuItem::with_id(app, "toasts", "Toasts", true, saved.toasts_enabled, None::<&str>)?;
@@ -59,8 +66,6 @@ pub fn build(app: &App) -> tauri::Result<()> {
         saved.start_with_windows,
         None::<&str>,
     )?;
-    let roon_panel =
-        MenuItem::with_id(app, "roon_panel", "Roon Panel (prototype)", true, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for Updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
@@ -75,7 +80,6 @@ pub fn build(app: &App) -> tauri::Result<()> {
             &remember_window,
             &start_with_windows,
             &PredefinedMenuItem::separator(app)?,
-            &roon_panel,
             &update,
             &quit,
         ],
@@ -105,7 +109,14 @@ pub fn build(app: &App) -> tauri::Result<()> {
         })
         .build(app)?;
 
+    if saved.wrapper_enabled {
+        menu.insert(&open_wrapper, 1)?;
+    }
+
     app.manage(TrayMenu {
+        menu: menu.clone(),
+        wrapper: open_wrapper,
+        wrapper_shown: AtomicBool::new(saved.wrapper_enabled),
         toasts,
         auto_hide,
         remember_window,
@@ -135,12 +146,8 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
     let change = match event.id.as_ref() {
         "open_toaster" => return crate::open_toaster(app, ToasterMode::Player),
         "settings" => return crate::show(app, crate::SETTINGS_WINDOW),
-        "roon_panel" => return crate::roonhost::toggle(app),
-        "quit" => {
-            // Roon goes back to being its own window before we go
-            crate::roonhost::detach(app);
-            return app.exit(0);
-        }
+        "open_wrapper" => return crate::wrapper::open(app),
+        "quit" => return app.exit(0),
         "update" => return crate::update::from_tray(app),
         "toasts" => json!({ "toastsEnabled": !saved.toasts_enabled }),
         "auto_hide" => json!({ "hideOnBlur": !saved.hide_on_blur }),
@@ -169,4 +176,13 @@ pub fn sync(app: &AppHandle, settings: &AppSettings) {
         .remember_window
         .set_checked(settings.toaster_window == ToasterWindow::Remember);
     let _ = menu.start_with_windows.set_checked(settings.start_with_windows);
+
+    // "Open Wrapper" comes and goes with the Wrapper switch
+    if menu.wrapper_shown.swap(settings.wrapper_enabled, Ordering::Relaxed) != settings.wrapper_enabled {
+        let _ = if settings.wrapper_enabled {
+            menu.menu.insert(&menu.wrapper, 1)
+        } else {
+            menu.menu.remove(&menu.wrapper)
+        };
+    }
 }

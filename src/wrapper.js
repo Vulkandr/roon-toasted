@@ -2,7 +2,7 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// The Roon panel's page. Tells roonhost.rs where the hole is whenever the
+// The Wrapper's page. Tells wrapper.rs where the hole is whenever the
 // page's size changes, and runs the player bar under it: what's playing in
 // the Toaster's zone, transport, progress, zone picker and volume. Same
 // Rust commands and events as the Toaster's Playing tab.
@@ -17,6 +17,7 @@ const appWindow = window.__TAURI__.window.getCurrentWindow();
 const $ = (selector) => document.querySelector(selector);
 
 const hole = $("#hole");
+const holeNote = $("#hole-note");
 const status = $("#status");
 const art = $("#art");
 const artMissing = $("#art-missing");
@@ -61,7 +62,7 @@ function formatTime(seconds) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
-// Updates a slider's accent fill (the --fill variable in roonhost.css)
+// Updates a slider's accent fill (the --fill variable in wrapper.css)
 function setFill(slider) {
   const min = Number(slider.min);
   const max = Number(slider.max);
@@ -75,7 +76,7 @@ function setFill(slider) {
 // window's client area); Rust turns it into real pixels.
 function reportHole() {
   const rect = hole.getBoundingClientRect();
-  invoke("roonhost_hole", {
+  invoke("wrapper_hole", {
     x: rect.left,
     y: rect.top,
     width: rect.width,
@@ -86,13 +87,15 @@ function reportHole() {
 new ResizeObserver(reportHole).observe(hole);
 reportHole();
 
-// Rust's one-line status, shown in the title bar only when something's off
+// Rust's one-line status: in the title bar when something's off, and in
+// the middle while Roon isn't there yet (starting, or not found)
 async function refreshStatus() {
   try {
-    const s = await invoke("roonhost_status");
-    const fine = s.attached && s.roonFound;
+    const s = await invoke("wrapper_status");
+    const fine = s.open && s.roonFound;
     status.hidden = fine || !s.note;
     status.textContent = s.note;
+    holeNote.textContent = s.roonFound ? "" : s.note || "Looking for Roon...";
   } catch {
     status.hidden = true;
   }
@@ -345,7 +348,7 @@ document.addEventListener("keydown", (event) => {
 $("#win-min").addEventListener("click", () => appWindow.minimize());
 $("#win-max").addEventListener("click", () => appWindow.toggleMaximize());
 $("#win-close").addEventListener("click", () => appWindow.close());
-$("#detach").addEventListener("click", () => appWindow.close());
+$("#detach").addEventListener("click", () => send("wrapper_put_back"));
 
 // No right-click menu
 document.addEventListener("contextmenu", (event) => event.preventDefault());

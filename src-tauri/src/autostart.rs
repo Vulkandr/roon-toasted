@@ -5,7 +5,8 @@
 //! Start with Windows (setting `startWithWindows`, on by default): the app
 //! adds itself to Windows' startup list for the current user, so it's in the
 //! tray (with toasts, hotkeys and the widget ready) after signing in. It
-//! starts plainly, so it stays in the tray until opened.
+//! starts with `--autostart`, so it stays in the tray, unless the Wrapper is
+//! set to open at sign-in (see launch.rs and wrapper.rs).
 //!
 //! The entry lives under HKEY_CURRENT_USER\Software\Microsoft\Windows\
 //! CurrentVersion\Run, named after the app ("Roon Toasted", the product name),
@@ -41,7 +42,11 @@ fn write(app: &AppHandle, on: bool) -> bool {
         return remove_value(RUN_KEY, &name);
     }
     match std::env::current_exe() {
-        Ok(exe) => crate::launch::set_value(RUN_KEY, Some(&name), &format!("\"{}\"", exe.display())),
+        Ok(exe) => crate::launch::set_value(
+            RUN_KEY,
+            Some(&name),
+            &format!("\"{}\" {}", exe.display(), crate::launch::AUTOSTART_ARG),
+        ),
         Err(_) => false,
     }
 }

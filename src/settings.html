@@ -175,6 +175,12 @@
           <button id="hotkey-search" class="hotkey" data-which="search"></button>
           <button class="hotkey-clear" data-which="search">Clear</button>
         </div>
+        <!-- Only while the Wrapper is on (see the Wrapper card) -->
+        <div id="wrapper-hotkey-row" class="hotkey-row" hidden>
+          <span class="hotkey-name">Open Wrapper</span>
+          <button id="hotkey-wrapper" class="hotkey" data-which="wrapper"></button>
+          <button class="hotkey-clear" data-which="wrapper">Clear</button>
+        </div>
         </div>
         <p id="hotkey-error" class="error"></p>
       </section>
@@ -311,6 +317,43 @@
         </div>
       </section>
 
+      <!-- Roon desktop inside a Toasted window (see wrapper.rs) -->
+      <section class="card wrapper-card">
+        <h2>The Wrapper <span class="badge">Experimental</span></h2>
+
+        <div class="setting-row">
+          <div class="setting">
+            <span class="setting-name">Wrapper</span>
+            <div class="switch-group" id="wrapper-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="wrapper-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting wrapper-option">
+            <span class="setting-name">Open at Sign-in</span>
+            <div class="switch-group" id="wrapper-signin-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="wrapper-at-sign-in" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting wrapper-option update-action-row">
+            <button id="wrapper-open">Open Wrapper</button>
+          </div>
+        </div>
+
+        <p class="muted wrapper-detail">
+          Roon: Wrapped runs Roon inside Toasted, with Toasted's player at the bottom.
+        </p>
+      </section>
+
       <!-- Hearts and add-to-library over Roon's internal protocol (see library.rs) -->
       <section class="card library-card">
         <h2>Hearts &amp; Library <span class="badge">Experimental</span></h2>
@@ -379,6 +422,14 @@
           <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
           then slide Position and Width until it sits in a free spot; One Line suits small
           taskbars. Windows doesn't officially allow this, so it may misbehave.
+        </p>
+        <p>
+          <strong>The Wrapper:</strong> Shows the Roon app inside a Roon: Toasted window
+          (Roon: Wrapped), with Toasted's player along the bottom, so everything Roon can do,
+          its settings included, is right there. Open it from the tray menu, its hotkey or the
+          button above; it starts Roon if needed. Closing it keeps Roon running out of sight,
+          so it reopens instantly. Put Roon back gives Roon its own window again. Open at
+          Sign-in opens it when Windows starts Roon: Toasted (with Start with Windows on).
         </p>
         <p>
           <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts

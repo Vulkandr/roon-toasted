@@ -673,6 +673,10 @@ button:disabled {
   padding: 3px 10px;
 }
 
+.hotkey-row[hidden] {
+  display: none;
+}
+
 /* Hotkeys switched off: the combinations are kept, but dimmed and locked */
 #hotkey-list.disabled {
   opacity: 0.45;
@@ -696,7 +700,8 @@ button:disabled {
 
 /* Switched off: its options are dimmed and locked */
 .widget-option.disabled,
-.library-option.disabled {
+.library-option.disabled,
+.wrapper-option.disabled {
   opacity: 0.45;
   pointer-events: none;
 }
@@ -890,7 +895,8 @@ button:disabled {
   justify-content: flex-end;
 }
 
-.update-detail {
+.update-detail,
+.wrapper-detail {
   text-align: center;
   margin-top: 12px;
 }

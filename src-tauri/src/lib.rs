@@ -17,12 +17,12 @@ mod update;
 mod monitors;
 mod queue;
 mod roon;
-mod roonhost;
 mod settings;
 mod status;
 mod toast;
 mod tray;
 mod widget;
+mod wrapper;
 mod zones;
 
 // Window labels, as set in tauri.conf.json.
@@ -42,9 +42,10 @@ const WINDOW_STATE: tauri_plugin_window_state::StateFlags =
         .union(tauri_plugin_window_state::StateFlags::POSITION)
         .union(tauri_plugin_window_state::StateFlags::MAXIMIZED);
 
-/// Saves the Toaster's current size/position right away (the plugin also saves
-/// when the app exits), so it isn't lost if the app is ever force-closed.
-fn save_window_state(app: &AppHandle) {
+/// Saves the Toaster's (and the Wrapper's) current size/position right away
+/// (the plugin also saves when the app exits), so it isn't lost if the app is
+/// ever force-closed.
+pub(crate) fn save_window_state(app: &AppHandle) {
     #[cfg(desktop)]
     {
         use tauri_plugin_window_state::AppHandleExt;
@@ -90,7 +91,7 @@ const SCREEN_MARGIN: f64 = 16.0;
 /// size (shrunk to fit if needed) and is only moved back on screen if it was
 /// off it. The window's minimum size is lowered on small screens too, or
 /// Windows would refuse to shrink it.
-fn fit_to_screen(app: &AppHandle, label: &str, use_default_size: bool) {
+pub(crate) fn fit_to_screen(app: &AppHandle, label: &str, use_default_size: bool) {
     let Some(window) = app.get_webview_window(label) else {
         return;
     };
@@ -220,6 +221,7 @@ fn open_window(app: AppHandle, window: String) -> Result<(), String> {
     match window.as_str() {
         TOASTER_WINDOW => open_toaster(&app, ToasterMode::Player),
         SETTINGS_WINDOW => show(&app, SETTINGS_WINDOW),
+        wrapper::WRAPPER_WINDOW => wrapper::open(&app),
         _ => return Err(format!("Unknown window: {window}")),
     }
     Ok(())
@@ -315,10 +317,12 @@ pub fn run() {
             launch::handle(app, request);
         }));
 
-        // Tracks the Toaster's size/position so it can reopen where it was left.
-        // Restoring is done in setup() (only when the setting says "remember").
-        // Settings always opens centered, and the toast and the taskbar widget
-        // place themselves (toast.rs, widget.rs), so none of those are tracked.
+        // Tracks the Toaster's and the Wrapper's size/position so they can
+        // reopen where they were left. Restoring is done in setup() (the
+        // Toaster only when the setting says "remember"; the Wrapper's
+        // maximized state when it first opens, see wrapper.rs). Settings
+        // always opens centered, and the toast and the taskbar widget place
+        // themselves (toast.rs, widget.rs), so none of those are tracked.
         builder = builder.plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE)
@@ -326,9 +330,9 @@ pub fn run() {
                     SETTINGS_WINDOW,
                     toast::TOAST_WINDOW,
                     widget::WIDGET_WINDOW,
-                    roonhost::ROONHOST_WINDOW,
                 ])
                 .skip_initial_state(TOASTER_WINDOW)
+                .skip_initial_state(wrapper::WRAPPER_WINDOW)
                 .build(),
         );
 
@@ -385,6 +389,12 @@ pub fn run() {
                         let _ = toaster.restore_state(WINDOW_STATE);
                     }
                 }
+                // The Wrapper's size and position (maximizing a hidden window
+                // would show it, so that waits until it opens)
+                if let Some(wrapper) = app.get_webview_window(wrapper::WRAPPER_WINDOW) {
+                    use tauri_plugin_window_state::StateFlags;
+                    let _ = wrapper.restore_state(StateFlags::SIZE | StateFlags::POSITION);
+                }
             }
 
             // Taskbar buttons only when "Auto-Hide" is off
@@ -404,8 +414,9 @@ pub fn run() {
             // The taskbar widget, if it's switched on (see widget.rs)
             widget::start(app.handle());
 
-            // The Roon panel prototype (see roonhost.rs)
-            roonhost::start(app.handle());
+            // The Wrapper (see wrapper.rs): picks up a Roon an earlier run
+            // left hidden. Before launch::startup, which may open it.
+            wrapper::start(app.handle());
 
             // roon-toasted:// links, and opening the Toaster if a link or
             // --search started the app (see launch.rs)
@@ -433,12 +444,13 @@ pub fn run() {
             // The app keeps running in the tray until "Quit" is chosen.
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
-                // Closing the Roon panel puts Roon back first
-                if window.label() == roonhost::ROONHOST_WINDOW {
-                    roonhost::detach(window.app_handle());
+                // Closing the Wrapper hides it and Roon (Roon keeps running)
+                if window.label() == wrapper::WRAPPER_WINDOW {
+                    wrapper::park(window.app_handle());
+                } else {
+                    let _ = window.hide();
+                    save_window_state(window.app_handle());
                 }
-                let _ = window.hide();
-                save_window_state(window.app_handle());
                 // Closing Settings goes back to the Toaster if it's open, so
                 // focus doesn't land elsewhere and hide it too.
                 if window.label() == SETTINGS_WINDOW {
@@ -456,11 +468,11 @@ pub fn run() {
             {
                 hide_if_app_unfocused(window.app_handle().clone());
             }
-            // Roon follows the Roon panel as it moves and resizes
+            // Roon follows the Wrapper as it moves and resizes
             WindowEvent::Moved(_) | WindowEvent::Resized(_)
-                if window.label() == roonhost::ROONHOST_WINDOW =>
+                if window.label() == wrapper::WRAPPER_WINDOW =>
             {
-                roonhost::sync(window.app_handle());
+                wrapper::sync(window.app_handle());
             }
             _ => {}
         })
@@ -511,9 +523,16 @@ pub fn run() {
             library::library_track_heart,
             library::library_track_add,
             library::library_play_track,
-            roonhost::roonhost_hole,
-            roonhost::roonhost_status
+            wrapper::wrapper_hole,
+            wrapper::wrapper_status,
+            wrapper::wrapper_put_back
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Quitting: Roon gets its own window back if it's in the Wrapper
+            if let tauri::RunEvent::Exit = event {
+                wrapper::put_back(app);
+            }
+        });
 }

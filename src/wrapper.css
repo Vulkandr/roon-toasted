@@ -2,7 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-/* The Roon panel: a title bar, a hole (Roon shows through it), and
+/* The Wrapper: a title bar, a hole (Roon shows through it), and
    Toasted's player bar. Same palette as the Toaster; with Colors on
    "Album Art" the accent and background come from the album. */
 
@@ -179,12 +179,19 @@ button:disabled {
 
 /* ----- The hole ----- */
 
-/* Nothing is drawn here once roonhost.rs cuts it out of the window, so the
-   background only shows while Roon isn't behind it yet. */
+/* Nothing is drawn here once wrapper.rs cuts it out of the window, so the
+   background (and the note) only show while Roon isn't behind it yet. */
 .hole {
   flex: 1;
   min-height: 0;
+  display: grid;
+  place-items: center;
   background: var(--bg);
+}
+
+.hole-note {
+  color: var(--muted);
+  font-size: 14px;
 }
 
 /* ----- Player bar ----- */

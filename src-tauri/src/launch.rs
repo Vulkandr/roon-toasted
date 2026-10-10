@@ -10,6 +10,10 @@
 //! - `roon-toasted://search` or `--search`: the Toaster on Search, ready to type
 //! - `roon-toasted://toggle`: like the Open Toaster hotkey (hides it if it's
 //!   open and in front, otherwise opens it)
+//! - `roon-toasted://wrapper` or `--wrapper`: the Wrapper (the Toaster if the
+//!   Wrapper is switched off)
+//! - `--autostart`: how Windows starts the app at sign-in (autostart.rs);
+//!   stays in the tray, or opens the Wrapper if it's set to
 //!
 //! Starting the app plainly (no link or option, e.g. with Windows) leaves it in
 //! the tray; starting it again while it's running opens the Toaster. When a
@@ -27,11 +31,17 @@ use tauri::{AppHandle, Manager, State};
 
 use crate::ToasterMode;
 
+/// The option Windows' startup entry passes (see autostart.rs).
+pub const AUTOSTART_ARG: &str = "--autostart";
+
 /// What a launch asks for.
 #[derive(Clone, Copy)]
 pub enum Request {
     Open(ToasterMode),
     Toggle,
+    Wrapper,
+    /// Started by Windows at sign-in.
+    SignIn,
 }
 
 /// The mode the app was started in by a link or `--search`, until the
@@ -47,6 +57,12 @@ pub fn request(args: &[String]) -> Option<Request> {
         if arg == "--search" {
             return Some(Request::Open(ToasterMode::Search));
         }
+        if arg == "--wrapper" {
+            return Some(Request::Wrapper);
+        }
+        if arg == AUTOSTART_ARG {
+            return Some(Request::SignIn);
+        }
         if let Some(rest) = arg.strip_prefix("roon-toasted:") {
             // "//search/", "//search?x" and "search" all mean search
             let action = rest
@@ -57,6 +73,7 @@ pub fn request(args: &[String]) -> Option<Request> {
             return Some(match action {
                 "search" => Request::Open(ToasterMode::Search),
                 "toggle" => Request::Toggle,
+                "wrapper" => Request::Wrapper,
                 _ => Request::Open(ToasterMode::Player),
             });
         }
@@ -69,6 +86,9 @@ pub fn handle(app: &AppHandle, request: Request) {
     match request {
         Request::Open(mode) => crate::open_toaster(app, mode),
         Request::Toggle => crate::toggle_toaster(app),
+        Request::Wrapper if crate::wrapper::enabled(app) => crate::wrapper::open(app),
+        Request::Wrapper => crate::open_toaster(app, ToasterMode::Player),
+        Request::SignIn => crate::wrapper::at_sign_in(app),
     }
 }
 
@@ -84,11 +104,13 @@ pub fn startup(app: &AppHandle) {
     let Some(request) = request(&args) else {
         return;
     };
+    // For the Toaster's page, in case it loads after the request
     let mode = match request {
-        Request::Open(ToasterMode::Search) => "search",
-        _ => "player",
+        Request::Open(ToasterMode::Search) => Some("search"),
+        Request::Open(ToasterMode::Player) | Request::Toggle => Some("player"),
+        Request::Wrapper | Request::SignIn => None,
     };
-    *app.state::<StartupMode>().0.lock().unwrap() = Some(mode);
+    *app.state::<StartupMode>().0.lock().unwrap() = mode;
     handle(app, request);
 }
 
@@ -155,6 +177,8 @@ mod tests {
             Request::Open(ToasterMode::Search) => "search",
             Request::Open(ToasterMode::Player) => "player",
             Request::Toggle => "toggle",
+            Request::Wrapper => "wrapper",
+            Request::SignIn => "sign-in",
         })
     }
 
@@ -167,6 +191,9 @@ mod tests {
         assert_eq!(parse("roon-toasted://toggle"), Some("toggle"));
         assert_eq!(parse("roon-toasted://open"), Some("player"));
         assert_eq!(parse("roon-toasted://"), Some("player"));
+        assert_eq!(parse("roon-toasted://wrapper"), Some("wrapper"));
+        assert_eq!(parse("--wrapper"), Some("wrapper"));
+        assert_eq!(parse("--autostart"), Some("sign-in"));
         assert_eq!(parse("--something-else"), None);
         assert!(request(&["roon-toasted.exe".to_string()]).is_none());
     }

@@ -456,11 +456,12 @@ updateMaximizeButton();
 const hotkeyButtons = {
   player: document.querySelector("#hotkey-player"),
   search: document.querySelector("#hotkey-search"),
+  wrapper: document.querySelector("#hotkey-wrapper"),
 };
 const hotkeyError = document.querySelector("#hotkey-error");
 const hotkeysEnabled = document.querySelector("#hotkeys-enabled");
 const hotkeysGroup = document.querySelector("#hotkeys-group");
-let recording = null; // "player" or "search" while waiting for keys
+let recording = null; // "player", "search" or "wrapper" while waiting for keys
 
 // "Ctrl+Alt+R" -> "Ctrl + Alt + R"
 function prettyHotkey(text) {
@@ -474,13 +475,15 @@ function prettyHotkey(text) {
 function showHotkeys(status) {
   hotkeysEnabled.checked = status.enabled;
   document.querySelector("#hotkey-list").classList.toggle("disabled", !status.enabled);
-  for (const which of ["player", "search"]) {
+  for (const which of ["player", "search", "wrapper"]) {
     const button = hotkeyButtons[which];
     if (recording === which) continue;
     button.textContent = prettyHotkey(status[which]);
     button.classList.toggle("off", !status[which]);
   }
-  hotkeyError.textContent = [status.playerError, status.searchError].filter(Boolean).join(" ");
+  hotkeyError.textContent = [status.playerError, status.searchError, status.wrapperError]
+    .filter(Boolean)
+    .join(" ");
 }
 
 async function refreshHotkeys() {
@@ -754,6 +757,50 @@ for (const [slider, name, label] of [
 
 invoke("get_settings").then(showWidget);
 listen("settings-changed", (event) => showWidget(event.payload));
+
+// ===== The Wrapper (experimental) ==========================================
+//
+// On/off, opening at sign-in, and a button to open it. Its hotkey lives in
+// the Toaster card's Hotkeys list and only shows while it's on.
+
+const wrapperEnabled = document.querySelector("#wrapper-enabled");
+const wrapperAtSignIn = document.querySelector("#wrapper-at-sign-in");
+const wrapperOpen = document.querySelector("#wrapper-open");
+
+function showWrapper(settings) {
+  wrapperEnabled.checked = settings.wrapperEnabled;
+  wrapperAtSignIn.checked = settings.wrapperAtSignIn;
+  document.querySelectorAll(".wrapper-option").forEach((option) => {
+    option.classList.toggle("disabled", !settings.wrapperEnabled);
+  });
+  wrapperOpen.disabled = !settings.wrapperEnabled;
+  document.querySelector("#wrapper-hotkey-row").hidden = !settings.wrapperEnabled;
+}
+
+async function saveWrapper(changes) {
+  try {
+    await invoke("update_settings", { changes });
+  } catch (err) {
+    console.error(err);
+    showWrapper(await invoke("get_settings"));
+  }
+}
+
+function wrapperSwitch(input, group, change) {
+  input.addEventListener("change", () => saveWrapper(change(input.checked)));
+  const labels = document.querySelector(group);
+  labels.querySelector(".label-off").addEventListener("click", () => saveWrapper(change(false)));
+  labels.querySelector(".label-on").addEventListener("click", () => saveWrapper(change(true)));
+}
+wrapperSwitch(wrapperEnabled, "#wrapper-group", (on) => ({ wrapperEnabled: on }));
+wrapperSwitch(wrapperAtSignIn, "#wrapper-signin-group", (on) => ({ wrapperAtSignIn: on }));
+
+wrapperOpen.addEventListener("click", () => {
+  invoke("open_window", { window: "wrapper" }).catch((err) => console.error(err));
+});
+
+invoke("get_settings").then(showWrapper);
+listen("settings-changed", (event) => showWrapper(event.payload));
 
 // ===== Hearts & Library ====================================================
 //

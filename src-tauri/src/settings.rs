@@ -83,6 +83,14 @@ pub struct AppSettings {
     /// Where the paired Core was last seen. Asked directly on every search too,
     /// so finding it again doesn't depend on multicast. Set by roon.rs.
     pub last_core_host: Option<String>,
+    /// The Wrapper (experimental, see wrapper.rs): Roon desktop inside a
+    /// Toasted window. Off hides its tray entry and releases its hotkey.
+    pub wrapper_enabled: bool,
+    /// Open the Wrapper when Windows starts the app at sign-in.
+    pub wrapper_at_sign_in: bool,
+    /// Global hotkey that opens (or hides) the Wrapper; None = off. Only
+    /// registered while the Wrapper is on. Changed through `set_hotkey`.
+    pub hotkey_wrapper: Option<String>,
 }
 
 impl Default for AppSettings {
@@ -113,6 +121,9 @@ impl Default for AppSettings {
             manual_core_host: None,
             manual_core_port: DEFAULT_CORE_PORT,
             last_core_host: None,
+            wrapper_enabled: false,
+            wrapper_at_sign_in: true,
+            hotkey_wrapper: Some("Ctrl+Alt+W".into()),
         }
     }
 }
@@ -264,7 +275,7 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         if name == "manualCoreHost" || name == "manualCorePort" || name == "lastCoreHost" {
             return Err("Use roon_set_manual_core to change the Core address.".into());
         }
-        if name == "hotkeyPlayer" || name == "hotkeySearch" {
+        if name == "hotkeyPlayer" || name == "hotkeySearch" || name == "hotkeyWrapper" {
             return Err("Use set_hotkey to change a hotkey.".into());
         }
         if !fields.contains_key(name) {
@@ -306,9 +317,12 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     if updated.hide_on_blur != before.hide_on_blur {
         apply_taskbar(&app);
     }
-    if updated.hotkeys_enabled != before.hotkeys_enabled {
+    if updated.hotkeys_enabled != before.hotkeys_enabled
+        || updated.wrapper_enabled != before.wrapper_enabled
+    {
         crate::hotkeys::register_saved(&app);
     }
+    crate::wrapper::settings_changed(&app, &before, &updated);
     crate::library::settings_changed(&app, &before, &updated);
     crate::update::settings_changed(&app, &before, &updated);
     crate::tray::sync(&app, &updated);
