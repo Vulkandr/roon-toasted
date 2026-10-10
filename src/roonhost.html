@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roon: Toasted</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <link rel="stylesheet" href="roonhost.css" />
+    <script type="module" src="/roonhost.js" defer></script>
+  </head>
+
+  <body>
+    <!-- The Roon panel (prototype, see roonhost.rs). The middle of this page
+         is a hole cut out of the window; Roon's own window sits behind it. -->
+    <div class="panel">
+      <div class="titlebar" data-tauri-drag-region="deep">
+        <span class="titlebar-title" data-tauri-drag-region="deep">Roon: Toasted</span>
+        <span class="titlebar-tag" data-tauri-drag-region="deep">Roon panel prototype</span>
+        <span class="titlebar-spacer" data-tauri-drag-region="deep"></span>
+        <button id="win-min" class="win-btn" title="Minimize">
+          <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" /></svg>
+        </button>
+        <button id="win-max" class="win-btn" title="Maximize">
+          <svg viewBox="0 0 10 10"><rect x="1.5" y="1.5" width="7" height="7" /></svg>
+        </button>
+        <button id="win-close" class="win-btn close" title="Close">
+          <svg viewBox="0 0 10 10"><line x1="1.5" y1="1.5" x2="8.5" y2="8.5" /><line x1="8.5" y1="1.5" x2="1.5" y2="8.5" /></svg>
+        </button>
+      </div>
+
+      <div id="hole" class="hole"></div>
+
+      <div class="player">
+        <div class="player-text">
+          <div class="player-title">Toasted player goes here</div>
+          <div id="status" class="player-status">Starting...</div>
+        </div>
+        <button id="detach" class="btn">Put Roon back</button>
+      </div>
+    </div>
+  </body>
+</html>

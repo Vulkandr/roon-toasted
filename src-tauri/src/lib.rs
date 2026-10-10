@@ -17,6 +17,7 @@ mod update;
 mod monitors;
 mod queue;
 mod roon;
+mod roonhost;
 mod settings;
 mod status;
 mod toast;
@@ -321,7 +322,12 @@ pub fn run() {
         builder = builder.plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE)
-                .with_denylist(&[SETTINGS_WINDOW, toast::TOAST_WINDOW, widget::WIDGET_WINDOW])
+                .with_denylist(&[
+                    SETTINGS_WINDOW,
+                    toast::TOAST_WINDOW,
+                    widget::WIDGET_WINDOW,
+                    roonhost::ROONHOST_WINDOW,
+                ])
                 .skip_initial_state(TOASTER_WINDOW)
                 .build(),
         );
@@ -398,6 +404,9 @@ pub fn run() {
             // The taskbar widget, if it's switched on (see widget.rs)
             widget::start(app.handle());
 
+            // The Roon panel prototype (see roonhost.rs)
+            roonhost::start(app.handle());
+
             // roon-toasted:// links, and opening the Toaster if a link or
             // --search started the app (see launch.rs)
             launch::startup(app.handle());
@@ -424,6 +433,10 @@ pub fn run() {
             // The app keeps running in the tray until "Quit" is chosen.
             WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
+                // Closing the Roon panel puts Roon back first
+                if window.label() == roonhost::ROONHOST_WINDOW {
+                    roonhost::detach(window.app_handle());
+                }
                 let _ = window.hide();
                 save_window_state(window.app_handle());
                 // Closing Settings goes back to the Toaster if it's open, so
@@ -442,6 +455,12 @@ pub fn run() {
                 if matches!(window.label(), TOASTER_WINDOW | SETTINGS_WINDOW) =>
             {
                 hide_if_app_unfocused(window.app_handle().clone());
+            }
+            // Roon follows the Roon panel as it moves and resizes
+            WindowEvent::Moved(_) | WindowEvent::Resized(_)
+                if window.label() == roonhost::ROONHOST_WINDOW =>
+            {
+                roonhost::sync(window.app_handle());
             }
             _ => {}
         })
@@ -491,7 +510,9 @@ pub fn run() {
             library::library_album_tracks,
             library::library_track_heart,
             library::library_track_add,
-            library::library_play_track
+            library::library_play_track,
+            roonhost::roonhost_hole,
+            roonhost::roonhost_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

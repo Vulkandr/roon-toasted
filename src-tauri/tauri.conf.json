@@ -75,6 +75,20 @@
         "decorations": false,
         "shadow": false,
         "transparent": true
+      },
+      {
+        "label": "roonhost",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
+        "url": "roonhost.html",
+        "title": "Roon: Toasted",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true,
+        "visible": false,
+        "decorations": false,
+        "shadow": true
       }
     ],
     "security": {

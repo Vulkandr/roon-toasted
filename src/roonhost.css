@@ -1,0 +1,141 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+/* The Roon panel (prototype): a title bar, a hole, and a player bar. */
+
+:root {
+  --bg: #1b1b1f;
+  --bar: #232328;
+  --text: #ececf1;
+  --muted: #9a9aa6;
+  --accent: #7b5fc7;
+  --warn: #e39a3b;
+  --line: rgba(255, 255, 255, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+  font-family: "Lato", "Segoe UI", sans-serif;
+  font-size: 14px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.titlebar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding-left: 14px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+
+.titlebar-title {
+  font-weight: 700;
+}
+
+.titlebar-tag {
+  color: var(--warn);
+  font-size: 12px;
+  padding: 2px 8px;
+  border: 1px solid var(--warn);
+  border-radius: 999px;
+}
+
+.titlebar-spacer {
+  flex: 1;
+  height: 100%;
+}
+
+.win-btn {
+  width: 46px;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+
+.win-btn svg {
+  width: 10px;
+  height: 10px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.2;
+}
+
+.win-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.win-btn.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+/* The hole: nothing is drawn here (the window has no pixels here at all
+   once roonhost.rs cuts it out), so the background only shows while Roon
+   isn't behind it yet. */
+.hole {
+  flex: 1;
+  min-height: 0;
+  background: var(--bg);
+}
+
+.player {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 110px;
+  padding: 0 20px;
+  background: var(--bar);
+  border-top: 1px solid var(--line);
+  flex: none;
+}
+
+.player-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.player-title {
+  font-weight: 700;
+  font-size: 16px;
+}
+
+.player-status {
+  color: var(--muted);
+  margin-top: 6px;
+}
+
+.btn {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.12);
+}

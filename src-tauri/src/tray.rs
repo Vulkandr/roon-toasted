@@ -3,8 +3,8 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The tray icon and its right-click menu: Open Toaster, Settings, a few
-//! quick settings (Toasts, Auto-Hide, Remember Window, Start with Windows)
-//! and Quit. Double-clicking
+//! quick settings (Toasts, Auto-Hide, Remember Window, Start with Windows),
+//! the Roon panel prototype, and Quit. Double-clicking
 //! the icon opens the Toaster.
 //!
 //! The quick settings change the same saved settings as the Settings window
@@ -59,6 +59,8 @@ pub fn build(app: &App) -> tauri::Result<()> {
         saved.start_with_windows,
         None::<&str>,
     )?;
+    let roon_panel =
+        MenuItem::with_id(app, "roon_panel", "Roon Panel (prototype)", true, None::<&str>)?;
     let update = MenuItem::with_id(app, "update", "Check for Updates", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
 
@@ -73,6 +75,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
             &remember_window,
             &start_with_windows,
             &PredefinedMenuItem::separator(app)?,
+            &roon_panel,
             &update,
             &quit,
         ],
@@ -132,7 +135,12 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
     let change = match event.id.as_ref() {
         "open_toaster" => return crate::open_toaster(app, ToasterMode::Player),
         "settings" => return crate::show(app, crate::SETTINGS_WINDOW),
-        "quit" => return app.exit(0),
+        "roon_panel" => return crate::roonhost::toggle(app),
+        "quit" => {
+            // Roon goes back to being its own window before we go
+            crate::roonhost::detach(app);
+            return app.exit(0);
+        }
         "update" => return crate::update::from_tray(app),
         "toasts" => json!({ "toastsEnabled": !saved.toasts_enabled }),
         "auto_hide" => json!({ "hideOnBlur": !saved.hide_on_blur }),
