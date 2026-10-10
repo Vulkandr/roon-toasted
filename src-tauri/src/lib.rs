@@ -18,6 +18,7 @@ mod monitors;
 mod queue;
 mod roon;
 mod settings;
+mod skin;
 mod status;
 mod toast;
 mod tray;
@@ -417,6 +418,8 @@ pub fn run() {
             // The Wrapper (see wrapper.rs): picks up a Roon an earlier run
             // left hidden. Before launch::startup, which may open it.
             wrapper::start(app.handle());
+            // Roon's sidebar in the Wrapper's colors (see skin.rs)
+            skin::start(app.handle());
 
             // roon-toasted:// links, and opening the Toaster if a link or
             // --search started the app (see launch.rs)
@@ -468,11 +471,12 @@ pub fn run() {
             {
                 hide_if_app_unfocused(window.app_handle().clone());
             }
-            // Roon follows the Wrapper as it moves and resizes
-            WindowEvent::Moved(_) | WindowEvent::Resized(_)
-                if window.label() == wrapper::WRAPPER_WINDOW =>
-            {
+            // Roon follows the Wrapper as it moves, and waits out resizing
+            WindowEvent::Moved(_) if window.label() == wrapper::WRAPPER_WINDOW => {
                 wrapper::sync(window.app_handle());
+            }
+            WindowEvent::Resized(_) if window.label() == wrapper::WRAPPER_WINDOW => {
+                wrapper::resized(window.app_handle());
             }
             _ => {}
         })
@@ -525,7 +529,8 @@ pub fn run() {
             library::library_play_track,
             wrapper::wrapper_hole,
             wrapper::wrapper_status,
-            wrapper::wrapper_put_back
+            wrapper::wrapper_put_back,
+            skin::wrapper_colors
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

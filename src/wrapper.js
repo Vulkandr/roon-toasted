@@ -2,10 +2,11 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-// The Wrapper's page. Tells wrapper.rs where the hole is whenever the
-// page's size changes, and runs the player bar under it: what's playing in
-// the Toaster's zone, transport, progress, zone picker and volume. Same
-// Rust commands and events as the Toaster's Playing tab.
+// The Wrapper's page. Tells wrapper.rs where the hole is (and which of our
+// menus and panels sit over it) whenever that changes, and runs the player
+// bar under it: what's playing in the Toaster's zone, hearts, transport,
+// progress, queue, zone picker and volume. Same Rust commands and events as
+// the Toaster.
 
 import { albumHue, albumPalette, paintColors } from "./album-colors.js";
 
@@ -39,20 +40,42 @@ const zoneMenu = $("#zone-menu");
 const muteBtn = $("#mute");
 const volume = $("#volume");
 const volumeValue = $("#volume-value");
+const libraryBtn = $("#library-btn");
+const queueBtn = $("#queue-btn");
+const queuePanel = $("#queue-panel");
+const queueSummary = $("#queue-summary");
+const queueList = $("#queue-list");
+const queueMore = $("#queue-more");
+const queueEmpty = $("#queue-empty");
 
 const darkScheme = matchMedia("(prefers-color-scheme: dark)");
 
 let zoneList = [];
 let zone = null; // the Toaster's zone, from Rust
-let artKey = null;
+let artKey; // the art showing (undefined at first, so the first render always draws it)
 let draggingSeek = false;
 let draggingVolume = false;
 let colorsMode = "default"; // "default" or "album", from Settings
+let addMode = "track"; // what "add to library" adds, from Settings
+let queue = { zoneId: null, items: [] };
 
 // ===== Helpers =============================================================
 
 function send(command, args) {
   return invoke(command, args).catch((err) => console.error(command, err));
+}
+
+// Long durations, like Roon's queue total: 3:08, 1:04:07, 15:04:59:16 (days first)
+function formatLongTime(seconds) {
+  const s = Math.max(0, Math.floor(seconds ?? 0));
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const minutes = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  const two = (n) => String(n).padStart(2, "0");
+  if (days > 0) return `${days}:${two(hours)}:${two(minutes)}:${two(secs)}`;
+  if (hours > 0) return `${hours}:${two(minutes)}:${two(secs)}`;
+  return `${minutes}:${two(secs)}`;
 }
 
 // 188 -> "3:08"
@@ -73,18 +96,30 @@ function setFill(slider) {
 // ===== The hole ============================================================
 
 // The hole's rectangle in CSS pixels, relative to the page (which fills the
-// window's client area); Rust turns it into real pixels.
+// window's client area), plus whatever we show over it (the zone menu, the
+// queue panel), which has to stay part of the window. Rust turns them into
+// real pixels.
 function reportHole() {
   const rect = hole.getBoundingClientRect();
+  const covers = [zoneMenu, queuePanel]
+    .filter((element) => !element.hidden)
+    .map((element) => {
+      const r = element.getBoundingClientRect();
+      return [r.left, r.top, r.width, r.height];
+    });
   invoke("wrapper_hole", {
     x: rect.left,
     y: rect.top,
     width: rect.width,
     height: rect.height,
+    covers,
   }).catch(() => {});
 }
 
-new ResizeObserver(reportHole).observe(hole);
+const holeWatcher = new ResizeObserver(reportHole);
+holeWatcher.observe(hole);
+holeWatcher.observe(zoneMenu);
+holeWatcher.observe(queuePanel);
 reportHole();
 
 // Rust's one-line status: in the title bar when something's off, and in
@@ -138,7 +173,14 @@ function render(payload) {
   repeatBtn.classList.toggle("one", zone?.loopMode === "loop_one");
   radioBtn.classList.toggle("on", !!zone?.autoRadio);
 
+  const queued = zone?.queueItemsRemaining ?? 0;
+  queueSummary.textContent = queued
+    ? `${queued} ${queued === 1 ? "track" : "tracks"} remaining (${formatLongTime(zone.queueTimeRemaining)})`
+    : "";
+  updateQueueMore();
+
   renderOutput(zone?.outputs[0]);
+  renderLibrary();
 }
 
 function showText(t, a, b) {
@@ -217,7 +259,9 @@ async function applyColors() {
 function applySettings(settings) {
   const colorsChanged = settings.toasterColors !== colorsMode;
   colorsMode = settings.toasterColors;
+  addMode = settings.libraryAddMode;
   if (colorsChanged) applyColors();
+  renderLibrary();
 }
 
 // ===== Controls ============================================================
@@ -284,6 +328,153 @@ volume.addEventListener("change", () => {
 // Art or text: open the Toaster
 $("#info").addEventListener("click", () => send("open_window", { window: "toaster" }));
 
+// ===== Hearts & Library (experimental) =====================================
+//
+// Same as the Toaster's: a "+" adds the playing track to the library (single
+// song or whole album, per Settings), then it's a heart. Rust keeps the state
+// live (`library-track`) and says whether the feature is on and connected
+// (`library-status`).
+
+let libraryReady = false;
+let libraryTracks = {}; // zoneId -> the zone's track state (null = loading)
+let libraryBusy = false;
+
+function renderLibrary() {
+  const show = libraryReady && zone != null && zone.nowPlaying != null;
+  libraryBtn.classList.toggle("spacer", !show);
+  if (!show) return;
+
+  const track = libraryTracks[zone.zoneId];
+  const known = track != null;
+  libraryBtn.classList.toggle("in-library", known && track.inLibrary);
+  libraryBtn.classList.toggle("on", known && track.favorite);
+  libraryBtn.classList.toggle("busy", libraryBusy);
+  libraryBtn.disabled = !known;
+  if (!known) {
+    libraryBtn.title = "Waiting for Roon...";
+  } else if (!track.inLibrary) {
+    libraryBtn.title = addMode === "album" ? "Add album to library" : "Add to library";
+  } else {
+    libraryBtn.title = track.favorite ? "Remove heart" : "Heart";
+  }
+  // Rust only pushes states it has seen change; ask for this zone's if it's new
+  if (!(zone.zoneId in libraryTracks)) {
+    const zoneId = zone.zoneId;
+    libraryTracks[zoneId] = null;
+    invoke("library_track", { zoneId })
+      .then((t) => {
+        libraryTracks[zoneId] = t;
+        renderLibrary();
+      })
+      .catch(() => delete libraryTracks[zoneId]);
+  }
+}
+
+libraryBtn.addEventListener("click", async () => {
+  const track = zone ? libraryTracks[zone.zoneId] : null;
+  if (!zone || !track || libraryBusy) return;
+  const zoneId = zone.zoneId;
+  libraryBusy = true;
+  renderLibrary();
+  try {
+    const result = track.inLibrary
+      ? await invoke("library_heart", { zoneId, favorite: !track.favorite })
+      : await invoke("library_add", { zoneId });
+    libraryTracks[zoneId] = result;
+  } catch (err) {
+    console.error("library", err);
+  } finally {
+    libraryBusy = false;
+    renderLibrary();
+  }
+});
+
+function setLibraryStatus(status) {
+  libraryReady = status.state === "ready";
+  if (!libraryReady) libraryTracks = {}; // states are only valid per connection
+  renderLibrary();
+}
+
+// ===== Queue panel =========================================================
+//
+// The Toaster's zone's queue (first 100 tracks); clicking a track plays from
+// there. Opens over the right side of Roon.
+
+// Play icon over the art when hovering an upcoming track (Lucide "play")
+const PLAY_ICON =
+  '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>';
+
+function queueRow(item, isNow) {
+  const row = document.createElement("li");
+  row.className = isNow ? "queue-item now" : "queue-item";
+
+  const artBox = document.createElement("div");
+  artBox.className = "queue-art";
+  if (item.imageKey) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.loading = "lazy";
+    img.src = convertFileSrc(item.imageKey, "roonimg") + "?width=96&height=96";
+    artBox.append(img);
+  } else {
+    const missing = document.createElement("div");
+    missing.className = "art-placeholder";
+    artBox.append(missing);
+  }
+  if (!isNow) {
+    const play = document.createElement("span");
+    play.className = "queue-play";
+    play.innerHTML = PLAY_ICON;
+    artBox.append(play);
+  }
+
+  const text = document.createElement("div");
+  text.className = "queue-text";
+  const titleEl = document.createElement("div");
+  titleEl.className = "queue-item-title";
+  titleEl.textContent = item.title;
+  const artistEl = document.createElement("div");
+  artistEl.className = "queue-item-artist";
+  artistEl.textContent = item.artist;
+  text.append(titleEl, artistEl);
+
+  const lengthEl = document.createElement("span");
+  lengthEl.className = "queue-length";
+  lengthEl.textContent = item.length ? formatTime(item.length) : "";
+
+  row.append(artBox, text, lengthEl);
+  if (!isNow) {
+    row.addEventListener("click", () => {
+      send("roon_play_from_here", { zoneId: queue.zoneId, queueItemId: item.queueItemId });
+    });
+  }
+  return row;
+}
+
+function renderQueue(payload) {
+  queue = payload;
+  queueEmpty.hidden = payload.items.length > 0;
+  queueList.replaceChildren(...payload.items.map((item, i) => queueRow(item, i === 0)));
+  updateQueueMore();
+}
+
+// "+ N more tracks not shown" when the queue is longer than the 100 shown
+function updateQueueMore() {
+  const total = zone?.queueItemsRemaining ?? 0;
+  const notShown = total - queue.items.length;
+  queueMore.hidden = notShown <= 0;
+  queueMore.textContent = `+ ${notShown.toLocaleString()} more tracks not shown`;
+}
+
+function setQueueOpen(open) {
+  queuePanel.hidden = !open;
+  queueBtn.classList.toggle("on", open);
+  reportHole();
+}
+
+queueBtn.addEventListener("click", () => setQueueOpen(queuePanel.hidden));
+$("#queue-close").addEventListener("click", () => setQueueOpen(false));
+
 // ===== Zone picker =========================================================
 
 // Checkmark next to the zone you're on (Lucide "check")
@@ -320,10 +511,13 @@ function openZoneMenu() {
   zoneMenu.style.left = `${left}px`;
   zoneMenu.style.bottom = `${window.innerHeight - rect.top + 6}px`;
   zoneMenu.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  reportHole();
 }
 
 function closeZoneMenu() {
+  if (zoneMenu.hidden) return;
   zoneMenu.hidden = true;
+  reportHole();
 }
 
 zoneButton.addEventListener("click", () => {
@@ -339,11 +533,39 @@ document.addEventListener("pointerdown", (event) => {
 });
 window.addEventListener("resize", closeZoneMenu);
 window.addEventListener("blur", closeZoneMenu);
+// Escape: the zone menu first, then the queue panel
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") closeZoneMenu();
+  if (event.key !== "Escape") return;
+  if (!zoneMenu.hidden) closeZoneMenu();
+  else if (!queuePanel.hidden) setQueueOpen(false);
 });
 
 // ===== Window buttons ======================================================
+
+// The colors Roon's sidebar copy is painted in (skin.rs): the panel's
+// background and the accent, as the browser works them out (album colors
+// included); sent when they change
+let sentColors = "";
+function sendColors() {
+  const rgb = (value) => (value.match(/[\d.]+/g) || []).slice(0, 3).map((n) => Math.round(Number(n)));
+  const bg = rgb(getComputedStyle(document.querySelector(".panel")).backgroundColor);
+  const accent = rgb(getComputedStyle(playPauseBtn).backgroundColor);
+  if (bg.length < 3 || accent.length < 3) return;
+  const key = `${bg}|${accent}`;
+  if (key === sentColors) return;
+  sentColors = key;
+  invoke("wrapper_colors", { bg, accent }).catch(() => {});
+}
+setInterval(sendColors, 400);
+sendColors();
+
+// Square corners and no border while maximized (wrapper.rs squares the
+// window's shape then too)
+async function updateMaximized() {
+  document.documentElement.classList.toggle("maximized", await appWindow.isMaximized());
+}
+appWindow.onResized(updateMaximized);
+updateMaximized();
 
 $("#win-min").addEventListener("click", () => appWindow.minimize());
 $("#win-max").addEventListener("click", () => appWindow.toggleMaximize());
@@ -364,3 +586,11 @@ listen("roon-seek", (event) => {
   if (zone && event.payload.zoneId === zone.zoneId) updatePosition(event.payload.seekPosition);
 });
 darkScheme.addEventListener("change", applyColors);
+invoke("library_status").then(setLibraryStatus);
+listen("library-status", (event) => setLibraryStatus(event.payload));
+listen("library-track", (event) => {
+  libraryTracks[event.payload.zoneId] = event.payload.track;
+  renderLibrary();
+});
+invoke("roon_queue").then(renderQueue);
+listen("roon-queue", (event) => renderQueue(event.payload));

@@ -8,7 +8,9 @@
 //!
 //! The "wrapper" window (page wrapper.html) has a hole in it: the page
 //! reports where its empty middle is, and this module cuts that rectangle
-//! out of the window with `SetWindowRgn`. Windows then neither draws the
+//! out of the window with `SetWindowRgn`. Anything the page draws over the
+//! hole (the zone menu, the queue panel) is reported too and left in, so it
+//! shows on top of Roon. Windows then neither draws the
 //! window there nor sends it clicks there, so whatever sits behind the hole
 //! is what you see and what you click. This module keeps Roon's own window
 //! parked right behind the hole, lined up so Roon's title bar hides above
@@ -28,6 +30,35 @@
 //!   the Wrapper again is instant. If Roon shows itself (e.g. started again
 //!   from the Start menu), the Wrapper opens around it.
 //!
+//! The window has no Windows frame or shadow (a window with a region loses
+//! both, and the invisible frame would show as a white edge). Its rounded
+//! corners are drawn by the page instead (the window is transparent and
+//! the page's rounded panel fills it), which keeps them smooth; a rounded
+//! region would be cut pixel by pixel and look stepped.
+//! The page leaves a few pixels of its own along the sides of the hole,
+//! where Tauri's resize borders are, so the Wrapper can still be resized
+//! from every edge.
+//!
+//! While the Wrapper is being resized, Roon is hidden and the hole closed
+//! (our background shows), so Roon neither repaints at every step nor
+//! shows outside the shrinking Wrapper; once the resizing stops, Roon is
+//! fitted to the new size, given a moment to repaint, and the hole opens
+//! again.
+//!
+//! Roon has a minimum window size of its own. When it's bigger than the
+//! hole, the Wrapper's minimum size grows by the difference (and the
+//! Wrapper grows if it's smaller), so Roon never hangs out below or beside
+//! it.
+//!
+//! Roon's window loses its resize borders (WS_THICKFRAME) while it's in
+//! the Wrapper. Otherwise its invisible borders, a few pixels outside what
+//! it draws, poke out past the Wrapper's edges, and grabbing there would
+//! resize Roon instead of the Wrapper. They come back with "Put Roon back".
+//!
+//! Roon's minimum size is measured when it's taken in (asked to be 1 x 1
+//! while hidden, it stops at its minimum), so the Wrapper's own minimum is
+//! big enough from the start, also in the middle of a resize.
+//!
 //! While Open or Parked, Roon's window is a tool window: no taskbar button
 //! or Alt-Tab entry of its own (the Wrapper is the one you switch to).
 //! "Put Roon back" (and quitting Toasted) returns to Off: Roon gets its own
@@ -43,8 +74,25 @@ use tauri::AppHandle;
 
 use crate::settings;
 
+/// Where Roon shows through the Wrapper right now (its window, and the
+/// hole as x, y, width, height in real screen pixels), or None when it
+/// doesn't (closed, parked, minimized, resizing). For skin.rs.
+#[cfg(windows)]
+pub(crate) fn visible_hole() -> Option<(windows::Win32::Foundation::HWND, [i32; 4])> {
+    windows_wrapper::visible_hole()
+}
+
 /// The Wrapper window's label, as set in tauri.conf.json.
 pub(crate) const WRAPPER_WINDOW: &str = "wrapper";
+
+/// Whether the Wrapper is being moved right now (dragged, or within a
+/// moment of its last move step). The sidebar filter pauses its refreshes
+/// meanwhile: each one makes Windows copy part of the screen, which held
+/// the drag to about 60 fps.
+#[cfg(windows)]
+pub(crate) fn moving() -> bool {
+    windows_wrapper::moving()
+}
 
 /// What the page shows in its title bar when something isn't right.
 #[derive(Serialize, Clone, Default)]
@@ -61,13 +109,22 @@ pub fn enabled(app: &AppHandle) -> bool {
 }
 
 /// Called by the page with the hole's rectangle in CSS pixels, relative to
-/// the page (which fills the window's client area), whenever it changes.
+/// the page (which fills the window's client area), whenever it changes;
+/// `covers` are the page's own panels and menus over the hole ([x, y,
+/// width, height] each), which stay part of the window.
 #[tauri::command]
-pub fn wrapper_hole(app: AppHandle, x: f64, y: f64, width: f64, height: f64) {
+pub fn wrapper_hole(
+    app: AppHandle,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    covers: Option<Vec<[f64; 4]>>,
+) {
     #[cfg(windows)]
-    windows_wrapper::set_hole(&app, (x, y, width, height));
+    windows_wrapper::set_hole(&app, [x, y, width, height], covers.unwrap_or_default());
     #[cfg(not(windows))]
-    let _ = (app, x, y, width, height);
+    let _ = (app, x, y, width, height, covers);
 }
 
 #[tauri::command]
@@ -135,7 +192,16 @@ pub fn put_back(app: &AppHandle) {
     let _ = app;
 }
 
-/// Lines Roon up with the Wrapper right now (it moved or resized).
+/// The Wrapper is being resized: closes the hole until it stops (see the
+/// module notes).
+pub fn resized(app: &AppHandle) {
+    #[cfg(windows)]
+    windows_wrapper::resized(app);
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// Lines Roon up with the Wrapper right now (it moved).
 pub fn sync(app: &AppHandle) {
     #[cfg(windows)]
     windows_wrapper::sync(app);
@@ -162,8 +228,8 @@ pub fn settings_changed(app: &AppHandle, before: &settings::AppSettings, after: 
 #[cfg(windows)]
 mod windows_wrapper {
     use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU8, Ordering};
-    use std::sync::Mutex;
-    use std::time::Duration;
+    use std::sync::{Mutex, OnceLock};
+    use std::time::{Duration, Instant};
 
     use tauri::{AppHandle, Manager};
     use windows::Win32::Foundation::{HWND, POINT, RECT};
@@ -171,16 +237,21 @@ mod windows_wrapper {
     use super::{WrapperStatus, WRAPPER_WINDOW};
 
     /// Height of Roon's transport bar (play controls at the bottom of its
-    /// window), in logical pixels: Roon's window is made that much taller
-    /// than the hole, so the bar sits hidden under our player bar.
-    const ROON_BOTTOM_BAR: f64 = 100.0;
+    /// window, with the line above it), in logical pixels: Roon's window is
+    /// made that much taller than the hole, so the bar sits hidden under our
+    /// player bar and Roon's content ends right where ours starts. Measured
+    /// on Roon 2.x.
+    const ROON_BOTTOM_BAR: f64 = 104.0;
 
-    /// Roon's window is never made shorter than this (logical pixels). Its
-    /// width is always exactly the hole's: Roon collapses its sidebar below
-    /// about 1400 logical px, so the Wrapper's minimum width in
-    /// tauri.conf.json (1440) keeps the hole wide enough. Making Roon wider
-    /// than the hole instead would let it stick out past the Wrapper.
-    const ROON_MIN_HEIGHT: f64 = 500.0;
+    // Roon's width is always exactly the hole's: Roon collapses its sidebar
+    // below about 1400 logical px, so the Wrapper's minimum width in
+    // tauri.conf.json (1440) keeps the hole wide enough.
+
+
+    /// After the last resize step: how long the hole stays closed, then how
+    /// long Roon gets to repaint at its new size before the hole reopens.
+    const RESIZE_QUIET: Duration = Duration::from_millis(250);
+    const RESIZE_REPAINT: Duration = Duration::from_millis(200);
 
     const OFF: u8 = 0;
     const OPEN: u8 = 1;
@@ -190,15 +261,17 @@ mod windows_wrapper {
     /// Our window and Roon's window (0 = none).
     static HOST_HWND: AtomicIsize = AtomicIsize::new(0);
     static ROON_HWND: AtomicIsize = AtomicIsize::new(0);
-    /// The hole, in CSS pixels relative to the page (x, y, width, height).
-    static HOLE: Mutex<Option<(f64, f64, f64, f64)>> = Mutex::new(None);
-    /// A hole cut out of a window: x, y, width, height in window
-    /// coordinates, then the window's width and height.
-    type Region = (i32, i32, i32, i32, i32, i32);
+    /// The hole and what the page draws over it, in CSS pixels relative to
+    /// the page ([x, y, width, height]).
+    struct Hole {
+        rect: [f64; 4],
+        covers: Vec<[f64; 4]>,
+    }
+    static HOLE: Mutex<Option<Hole>> = Mutex::new(None);
 
-    /// The hole last cut out of the window, so the region is only replaced
-    /// when it changes.
-    static LAST_REGION: Mutex<Option<Region>> = Mutex::new(None);
+    /// The region last given to the window (window size, then the hole and
+    /// covers in window coordinates), so it's only replaced when it changes.
+    static LAST_REGION: Mutex<Option<Vec<i32>>> = Mutex::new(None);
     /// Where Roon's window was before we took it, to put it back.
     static ROON_RESTORE: Mutex<Option<(i32, i32, i32, i32)>> = Mutex::new(None);
     /// Roon's extended window style before we made it a tool window
@@ -211,6 +284,81 @@ mod windows_wrapper {
     /// Whether the saved maximized state has been applied this run (only
     /// possible once the window is showing).
     static MAXIMIZE_RESTORED: AtomicBool = AtomicBool::new(false);
+    /// When the Wrapper last changed size (None = not since it opened).
+    static LAST_RESIZE: Mutex<Option<Instant>> = Mutex::new(None);
+    /// When the Wrapper was last dragged by its title bar. While that's
+    /// going on, Roon and the sidebar filter are moved along in the
+    /// Wrapper's own move step (see `on_host_message`), and the regular
+    /// sync passes stay out of the way: each one asks Roon about its window
+    /// and may wait on it, which made dragging feel choppy.
+    static LAST_MOVE: Mutex<Option<Instant>> = Mutex::new(None);
+
+    /// Where Roon's window sits relative to ours (top-left to top-left,
+    /// real pixels), as of the last full sync. A drag puts Roon at the
+    /// Wrapper's new spot plus this, rather than nudging Roon from wherever
+    /// it seems to be: with moves that don't wait, Roon may not have caught
+    /// up with the last step yet, and nudging lost those steps.
+    static ROON_OFFSET: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+
+    /// How long after the last move step a drag counts as over.
+    const MOVE_QUIET: Duration = Duration::from_millis(200);
+    /// Where Roon currently shows through (screen pixels), see
+    /// `visible_hole`.
+    static VISIBLE_HOLE: Mutex<Option<[i32; 4]>> = Mutex::new(None);
+
+    /// What the page draws over the hole (screen pixels), as of the last
+    /// sync pass that showed Roon.
+    static VISIBLE_COVERS: Mutex<Vec<[i32; 4]>> = Mutex::new(Vec::new());
+
+    /// While the Wrapper is dragged by its title bar, Roon isn't moved
+    /// along at all: the hole is closed, Roon waits just off the screen,
+    /// and a live picture of it (a DWM thumbnail, which the
+    /// screen composer draws as part of our window) shows in its place. So
+    /// the whole Wrapper moves as one window, at the speed of any other
+    /// window. When the drag ends Roon is put at the new spot and the hole
+    /// opens again. See `start_drag` / `end_drag`.
+    static DRAGGING: AtomicBool = AtomicBool::new(false);
+    /// The live pictures of Roon (one per piece of the hole not under a
+    /// cover), to remove once the hole is open again.
+    static THUMBNAILS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+    static APP: OnceLock<AppHandle> = OnceLock::new();
+
+    /// Only once the Wrapper has actually moved: pressing the title bar
+    /// starts Windows' move before the mouse moves, and the Wrapper comes
+    /// to the front right then, so the filter still has to refresh.
+    pub fn moving() -> bool {
+        DRAGGING.load(Ordering::Relaxed)
+            || LAST_MOVE.lock().unwrap().is_some_and(|at| at.elapsed() < MOVE_QUIET)
+    }
+
+    pub fn visible_hole() -> Option<(HWND, [i32; 4])> {
+        let hole = (*VISIBLE_HOLE.lock().unwrap())?;
+        Some((roon_window()?, hole))
+    }
+
+    /// Records where Roon shows through when a sync pass ends, whichever
+    /// way it ends (None unless the pass got all the way to showing Roon).
+    struct HoleReport(Option<[i32; 4]>);
+
+    impl Drop for HoleReport {
+        fn drop(&mut self) {
+            *VISIBLE_HOLE.lock().unwrap() = self.0;
+        }
+    }
+
+    /// The Wrapper's minimum size (logical pixels) once Roon has turned out
+    /// to need more than tauri.conf.json's.
+    static LEARNED_MIN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+    /// How much bigger than asked Roon was on the last pass; only acted on
+    /// when two passes in a row agree, so a Roon still busy resizing
+    /// doesn't count.
+    static ROON_EXTRA: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+    /// Roon's window style before we took its resize borders (0 = not
+    /// changed).
+    static ROON_STYLE: AtomicIsize = AtomicIsize::new(0);
+    /// The smallest client area Roon allows (real pixels), measured when
+    /// it's taken in.
+    static ROON_MIN_CLIENT: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 
     fn hwnd_of(cell: &AtomicIsize) -> Option<HWND> {
         let raw = cell.load(Ordering::Relaxed);
@@ -235,8 +383,10 @@ mod windows_wrapper {
     }
 
     pub fn start(app: &AppHandle) {
+        let _ = APP.set(app.clone());
         remember_host(app);
         watch_foreground();
+        follow_moves();
 
         // A Roon still marked as ours: an earlier run stopped without
         // putting it back
@@ -265,8 +415,13 @@ mod windows_wrapper {
         }
     }
 
-    pub fn set_hole(app: &AppHandle, hole: (f64, f64, f64, f64)) {
-        *HOLE.lock().unwrap() = Some(hole);
+    pub fn resized(app: &AppHandle) {
+        *LAST_RESIZE.lock().unwrap() = Some(Instant::now());
+        sync(app);
+    }
+
+    pub fn set_hole(app: &AppHandle, rect: [f64; 4], covers: Vec<[f64; 4]>) {
+        *HOLE.lock().unwrap() = Some(Hole { rect, covers });
         sync(app);
     }
 
@@ -298,6 +453,10 @@ mod windows_wrapper {
         *LAST_REGION.lock().unwrap() = None;
         // A remembered size still has to fit the screen it opens on
         crate::fit_to_screen(app, WRAPPER_WINDOW, false);
+        // fit_to_screen sets the configured minimum; Roon may need more
+        if let Some((w, h)) = *LEARNED_MIN.lock().unwrap() {
+            let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(w, h))));
+        }
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -333,6 +492,9 @@ mod windows_wrapper {
             return;
         }
         STATE.store(PARKED, Ordering::Relaxed);
+        *VISIBLE_HOLE.lock().unwrap() = None;
+        DRAGGING.store(false, Ordering::Relaxed);
+        drop_thumbnails();
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
             let _ = window.hide();
         }
@@ -344,6 +506,9 @@ mod windows_wrapper {
 
     pub fn put_back(app: &AppHandle) {
         let before = STATE.swap(OFF, Ordering::Relaxed);
+        *VISIBLE_HOLE.lock().unwrap() = None;
+        DRAGGING.store(false, Ordering::Relaxed);
+        drop_thumbnails();
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
             if before == OPEN {
                 crate::save_window_state(app);
@@ -398,6 +563,7 @@ mod windows_wrapper {
     /// Parked: Roon stays hidden. If it quit, forget it; if it showed itself
     /// (started again from the Start menu, say), open the Wrapper around it.
     fn sync_parked(app: &AppHandle) {
+        *VISIBLE_HOLE.lock().unwrap() = None;
         let Some(roon) = hwnd_of(&ROON_HWND) else {
             return;
         };
@@ -411,6 +577,17 @@ mod windows_wrapper {
     }
 
     fn sync_open(app: &AppHandle) {
+        let mut report = HoleReport(None);
+        // Being dragged: everything is already moving along (see LAST_MOVE
+        // and DRAGGING)
+        if DRAGGING.load(Ordering::Relaxed)
+            || LAST_MOVE.lock().unwrap().is_some_and(|at| at.elapsed() < MOVE_QUIET)
+        {
+            // Leave VISIBLE_HOLE as the move steps have it (writing back what
+            // was read could undo a step made in between)
+            std::mem::forget(report);
+            return;
+        }
         let Some(host) = hwnd_of(&HOST_HWND) else {
             return;
         };
@@ -434,50 +611,99 @@ mod windows_wrapper {
             }
         };
 
-        // The hole, in real pixels on the screen
+        // The hole and covers, in real pixels: on the screen, and relative
+        // to our window (for the region)
         let scale = window.scale_factor().unwrap_or(1.0);
-        let Some((hx, hy, hw, hh)) = *HOLE.lock().unwrap() else {
+        let (Some(client_origin), Some(host_rect)) = (client_origin(host), window_rect(host)) else {
             return;
         };
-        let Some(client_origin) = client_origin(host) else {
-            return;
+        let to_window = |r: &[f64; 4]| {
+            [
+                client_origin.x - host_rect.0 + (r[0] * scale).round() as i32,
+                client_origin.y - host_rect.1 + (r[1] * scale).round() as i32,
+                (r[2] * scale).round() as i32,
+                (r[3] * scale).round() as i32,
+            ]
         };
-        let Some(host_rect) = window_rect(host) else {
-            return;
+        let (hole, covers) = {
+            let guard = HOLE.lock().unwrap();
+            let Some(saved) = guard.as_ref() else {
+                return;
+            };
+            (to_window(&saved.rect), saved.covers.iter().map(to_window).collect::<Vec<_>>())
         };
-        let hole = (
-            client_origin.x + (hx * scale).round() as i32,
-            client_origin.y + (hy * scale).round() as i32,
-            (hw * scale).round() as i32,
-            (hh * scale).round() as i32,
-        );
+        let hole_on_screen = (host_rect.0 + hole[0], host_rect.1 + hole[1], hole[2], hole[3]);
 
-        // Cut the hole out of our window (only when it changed); no Roon yet
-        // means no hole, so the page's "Starting Roon" background shows
-        let region_key = (
-            hole.0 - host_rect.0,
-            hole.1 - host_rect.1,
-            hole.2,
-            hole.3,
-            host_rect.2,
-            host_rect.3,
-        );
-        {
-            let mut last = LAST_REGION.lock().unwrap();
-            if roon.is_some() && hole.2 > 0 && hole.3 > 0 {
-                if *last != Some(region_key) {
-                    cut_hole(host, region_key);
-                    *last = Some(region_key);
-                }
-            } else if last.is_some() {
-                clear_region(host);
-                *last = None;
+        // Being resized: keep the hole closed until it stops, then fit Roon
+        // and give it a moment to repaint before opening the hole again
+        let since_resize = LAST_RESIZE.lock().unwrap().map(|at| at.elapsed());
+        let resizing = since_resize.is_some_and(|t| t < RESIZE_QUIET);
+        let repainting = since_resize.is_some_and(|t| t < RESIZE_QUIET + RESIZE_REPAINT);
+
+        // The window's shape (only replaced when something changed): rounded
+        // corners, minus the hole when Roon is there and not mid-resize. No
+        // Roon yet means no hole, so the page's "Starting Roon" note shows.
+        let maximized = is_maximized(host);
+        let open_hole = roon.is_some() && !repainting && hole[2] > 0 && hole[3] > 0;
+        // Only the client area: a maximized window reaches past the screen's
+        // edges, and that strip would show as a white line
+        let Some((client_w, client_h)) = client_size(host) else {
+            return;
+        };
+        let bounds = [
+            client_origin.x - host_rect.0,
+            client_origin.y - host_rect.1,
+            client_w,
+            client_h,
+        ];
+        let mut region_key = bounds.to_vec();
+        region_key.push(open_hole as i32);
+        if open_hole {
+            region_key.extend_from_slice(&hole);
+            for cover in &covers {
+                region_key.extend_from_slice(cover);
             }
         }
+        {
+            let mut last = LAST_REGION.lock().unwrap();
+            if last.as_ref() != Some(&region_key) {
+                let hole = open_hole.then_some(hole);
+                set_region(host, bounds, hole, &covers);
+                *last = Some(region_key);
+            }
+        }
+        // A drag just ended: the hole is back, so the live pictures that
+        // stood in for Roon can go (after the next screen refresh, so the
+        // hole is showing Roon by then)
+        if !THUMBNAILS.lock().unwrap().is_empty() {
+            use windows::Win32::Graphics::Dwm::DwmFlush;
+            // SAFETY: no arguments.
+            let _ = unsafe { DwmFlush() };
+            drop_thumbnails();
+        }
+        let hole = hole_on_screen;
 
         let Some(roon) = roon else {
             return;
         };
+        let bar = (ROON_BOTTOM_BAR * scale).round() as i32;
+
+        // The hole must fit Roon's minimum: checked on every pass, so even
+        // in the middle of a resize the Wrapper can't get smaller than that
+        if !maximized {
+            if let Some((min_w, min_h)) = *ROON_MIN_CLIENT.lock().unwrap() {
+                let extra = ((min_w - hole.2).max(0), (min_h - (hole.3 + bar)).max(0));
+                if extra.0 > 0 || extra.1 > 0 {
+                    grow_minimum(&window, scale, extra.0, extra.1);
+                }
+            }
+        }
+
+        // Being resized: Roon waits hidden until it stops
+        if resizing {
+            hide(roon);
+            return;
+        }
 
         // We're minimized or hidden: Roon waits out of sight
         if is_minimized(host) || !is_visible(host) {
@@ -491,11 +717,72 @@ mod windows_wrapper {
         }
 
         // Roon's client area = the hole plus its transport bar below it
-        let bar = (ROON_BOTTOM_BAR * scale).round() as i32;
-        let min_h = (ROON_MIN_HEIGHT * scale).round() as i32;
-        let client = (hole.0, hole.1, hole.2, (hole.3 + bar).max(min_h));
+        let client = (hole.0, hole.1, hole.2, hole.3 + bar);
+        // Roon goes right below us (the sidebar filter sits right above
+        // us, see skin.rs)
         place_roon(roon, client, host);
         keep_order(host, roon);
+        if let (Some(r), Some(h)) = (window_rect(roon), window_rect(host)) {
+            *ROON_OFFSET.lock().unwrap() = Some((r.0 - h.0, r.1 - h.1));
+        }
+        if open_hole {
+            report.0 = Some([hole.0, hole.1, hole.2, hole.3]);
+            *VISIBLE_COVERS.lock().unwrap() = covers
+                .iter()
+                .map(|c| [host_rect.0 + c[0], host_rect.1 + c[1], c[2], c[3]])
+                .collect();
+        }
+
+        // Roon still wouldn't get that small (its minimum wasn't measured,
+        // or changed): make the Wrapper's minimum bigger by the difference
+        if !maximized {
+            if let Some((roon_w, roon_h)) = client_size(roon) {
+                let extra = ((roon_w - client.2).max(0), (roon_h - client.3).max(0));
+                let too_big = extra.0 > 1 || extra.1 > 1;
+                let before = std::mem::replace(&mut *ROON_EXTRA.lock().unwrap(), too_big.then_some(extra));
+                if too_big && before == Some(extra) {
+                    grow_minimum(&window, scale, extra.0, extra.1);
+                }
+            }
+        }
+    }
+
+    /// Raises the Wrapper's minimum size so its hole fits Roon's minimum
+    /// (`extra_w` / `extra_h` real pixels more than now), growing the
+    /// Wrapper if it's smaller than that.
+    fn grow_minimum(window: &tauri::WebviewWindow, scale: f64, extra_w: i32, extra_h: i32) {
+        use tauri::{LogicalSize, Size};
+        let Ok(inner) = window.inner_size() else {
+            return;
+        };
+        let need = (
+            (inner.width as f64 + extra_w as f64) / scale,
+            (inner.height as f64 + extra_h as f64) / scale,
+        );
+        let configured = window
+            .app_handle()
+            .config()
+            .app
+            .windows
+            .iter()
+            .find(|w| w.label == WRAPPER_WINDOW)
+            .map(|w| (w.min_width.unwrap_or(0.0), w.min_height.unwrap_or(0.0)))
+            .unwrap_or_default();
+        let min = {
+            let mut learned = LEARNED_MIN.lock().unwrap();
+            let current = learned.unwrap_or(configured);
+            let min = (current.0.max(need.0).ceil(), current.1.max(need.1).ceil());
+            if Some(min) == *learned {
+                return;
+            }
+            *learned = Some(min);
+            min
+        };
+        let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(min.0, min.1))));
+        let now = (inner.width as f64 / scale, inner.height as f64 / scale);
+        if now.0 < min.0 || now.1 < min.1 {
+            let _ = window.set_size(LogicalSize::new(now.0.max(min.0), now.1.max(min.1)));
+        }
     }
 
     /// Moves Roon so its client area is `client` (x, y, width, height in
@@ -519,20 +806,19 @@ mod windows_wrapper {
             client.2 + left + right,
             client.3 + top + bottom,
         );
-        if want == rect && is_visible(roon) {
-            return;
-        }
-        // SAFETY: valid window handles.
-        unsafe {
-            let _ = SetWindowPos(
-                roon,
-                Some(behind),
-                want.0,
-                want.1,
-                want.2,
-                want.3,
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
+        if want != rect || !is_visible(roon) {
+            // SAFETY: valid window handles.
+            unsafe {
+                let _ = SetWindowPos(
+                    roon,
+                    Some(behind),
+                    want.0,
+                    want.1,
+                    want.2,
+                    want.3,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
         }
     }
 
@@ -573,13 +859,14 @@ mod windows_wrapper {
         }
     }
 
-    /// Keeps Roon directly behind the Wrapper. If Roon has come out on top
+    /// Keeps Roon directly behind the Wrapper (and the sidebar filter
+    /// directly in front of it when it's showing, see skin.rs). If Roon has come out on top
     /// (it was clicked, which activates it), the Wrapper goes back above it
     /// without taking focus, so typing still goes to Roon.
     fn keep_order(host: HWND, roon: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindow, SetWindowPos, GW_HWNDNEXT, GW_HWNDPREV, HWND_TOP, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE,
+            GetWindow, SetWindowPos, GW_HWNDNEXT, GW_HWNDPREV, HWND_TOP, SWP_ASYNCWINDOWPOS,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         };
         // SAFETY: plain window queries and moves on valid handles.
         unsafe {
@@ -603,7 +890,24 @@ mod windows_wrapper {
                     _ => break,
                 }
             }
-            // Directly below us?
+            // The filter right above us (it's on another thread: never wait
+            // on it). It recolors whatever is under it: Roon through the
+            // hole, or Roon's live picture while we're dragged.
+            if let Some(filter) = crate::skin::filter_window() {
+                let above = GetWindow(host, GW_HWNDPREV).ok().filter(|w| !w.is_invalid());
+                if above != Some(filter) {
+                    let _ = SetWindowPos(
+                        filter,
+                        Some(above.unwrap_or(HWND_TOP)),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                    );
+                }
+            }
+            // Roon right below us
             if GetWindow(host, GW_HWNDNEXT).ok() != Some(roon) {
                 let _ = SetWindowPos(
                     roon,
@@ -618,18 +922,33 @@ mod windows_wrapper {
         }
     }
 
-    /// Cuts a hole out of the window.
-    fn cut_hole(hwnd: HWND, (x, y, w, h, width, height): Region) {
+    /// Gives the window its shape: `bounds` (its client area) minus the hole
+    /// if there is one, except where the covers are (all in window
+    /// coordinates: [x, y, width, height]).
+    fn set_region(
+        hwnd: HWND,
+        bounds: [i32; 4],
+        hole: Option<[i32; 4]>,
+        covers: &[[i32; 4]],
+    ) {
         use windows::Win32::Graphics::Gdi::{
             CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
         };
         // SAFETY: GDI calls on regions we just made; the window takes
         // ownership of the final region in SetWindowRgn.
         unsafe {
-            let whole = CreateRectRgn(0, 0, width, height);
-            let hole = CreateRectRgn(x, y, x + w, y + h);
-            let _ = CombineRgn(Some(whole), Some(whole), Some(hole), RGN_DIFF);
-            let _ = DeleteObject(hole.into());
+            let [x, y, w, h] = bounds;
+            let whole = CreateRectRgn(x, y, x + w, y + h);
+            if let Some(hole) = hole {
+                let cut = CreateRectRgn(hole[0], hole[1], hole[0] + hole[2], hole[1] + hole[3]);
+                for c in covers {
+                    let cover = CreateRectRgn(c[0], c[1], c[0] + c[2], c[1] + c[3]);
+                    let _ = CombineRgn(Some(cut), Some(cut), Some(cover), RGN_DIFF);
+                    let _ = DeleteObject(cover.into());
+                }
+                let _ = CombineRgn(Some(whole), Some(whole), Some(cut), RGN_DIFF);
+                let _ = DeleteObject(cut.into());
+            }
             let _ = SetWindowRgn(hwnd, Some(whole), true);
         }
     }
@@ -757,6 +1076,9 @@ mod windows_wrapper {
         let ours = is_tool_window(roon);
         *ROON_RESTORE.lock().unwrap() = if ours { None } else { window_rect(roon) };
         restore_if_maximized(roon);
+        hide(roon);
+        measure_minimum(roon);
+        remove_resize_borders(roon);
         // SAFETY: style queries and changes on a valid window handle.
         unsafe {
             let exstyle = GetWindowLongPtrW(roon, GWL_EXSTYLE);
@@ -765,9 +1087,67 @@ mod windows_wrapper {
             }
             let tool = (exstyle | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
             if tool != exstyle {
-                hide(roon);
                 SetWindowLongPtrW(roon, GWL_EXSTYLE, tool);
             }
+        }
+    }
+
+    /// Finds the smallest client area Roon allows: asked to be 1 x 1 (it's
+    /// hidden), it stops at its minimum. Only while it still has its resize
+    /// borders, which is when Windows applies its minimum.
+    fn measure_minimum(roon: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
+            WS_THICKFRAME,
+        };
+        // SAFETY: a style query and a resize of a valid, hidden window.
+        unsafe {
+            if GetWindowLongPtrW(roon, GWL_STYLE) as u32 & WS_THICKFRAME.0 == 0 {
+                return;
+            }
+            let _ = SetWindowPos(roon, None, 0, 0, 1, 1, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        if let Some((w, h)) = client_size(roon) {
+            if w > 50 && h > 50 {
+                *ROON_MIN_CLIENT.lock().unwrap() = Some((w, h));
+            }
+        }
+    }
+
+    /// Takes away Roon's resize borders (remembering its style for later).
+    fn remove_resize_borders(roon: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, SetWindowLongPtrW, GWL_STYLE, WS_THICKFRAME};
+        // SAFETY: style queries and changes on a valid window handle.
+        unsafe {
+            let style = GetWindowLongPtrW(roon, GWL_STYLE);
+            let without = style & !(WS_THICKFRAME.0 as isize);
+            if without != style {
+                if ROON_STYLE.load(Ordering::Relaxed) == 0 {
+                    ROON_STYLE.store(style, Ordering::Relaxed);
+                }
+                SetWindowLongPtrW(roon, GWL_STYLE, without);
+                frame_changed(roon);
+            }
+        }
+    }
+
+    /// Tells Windows a window's frame style changed, so it's redrawn and
+    /// its borders recalculated.
+    fn frame_changed(hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        // SAFETY: a valid window handle.
+        unsafe {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                0,
+                0,
+                0,
+                0,
+                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -778,9 +1158,24 @@ mod windows_wrapper {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
         };
+        use windows::Win32::UI::WindowsAndMessaging::{GWL_STYLE, WS_THICKFRAME};
         let saved = ROON_EXSTYLE.swap(0, Ordering::Relaxed);
+        let saved_style = ROON_STYLE.swap(0, Ordering::Relaxed);
         // SAFETY: style queries and changes on a valid window handle.
         unsafe {
+            // Resize borders back (for one parked by an earlier run, just
+            // the borders on top of what it has now)
+            let style = GetWindowLongPtrW(roon, GWL_STYLE);
+            let original_style = if saved_style != 0 {
+                saved_style
+            } else {
+                style | WS_THICKFRAME.0 as isize
+            };
+            if original_style != style {
+                hide(roon);
+                SetWindowLongPtrW(roon, GWL_STYLE, original_style);
+                frame_changed(roon);
+            }
             let current = GetWindowLongPtrW(roon, GWL_EXSTYLE);
             let original = if saved != 0 {
                 saved
@@ -826,6 +1221,12 @@ mod windows_wrapper {
         use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
         // SAFETY: any handle value is fine to ask about.
         unsafe { IsWindowVisible(hwnd).as_bool() }
+    }
+
+    fn is_maximized(hwnd: HWND) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::IsZoomed;
+        // SAFETY: a valid window handle.
+        unsafe { IsZoomed(hwnd).as_bool() }
     }
 
     fn is_minimized(hwnd: HWND) -> bool {
@@ -889,6 +1290,288 @@ mod windows_wrapper {
         Some((rect.right - rect.left, rect.bottom - rect.top))
     }
 
+    /// Moves Roon along with the Wrapper while it's dragged by its title
+    /// bar: Windows asks the Wrapper's window before each step of a move
+    /// (WM_WINDOWPOSCHANGING), and Roon is sent to the same spot right then,
+    /// without waiting for Roon to finish (SWP_ASYNCWINDOWPOS), instead of
+    /// after the Wrapper has already moved. Resizes are left to `resized`.
+    /// Set up on the main thread, which owns the window.
+    fn follow_moves() {
+        use windows::Win32::UI::Shell::SetWindowSubclass;
+        let Some(host) = hwnd_of(&HOST_HWND) else {
+            return;
+        };
+        // SAFETY: our own window, on its own thread; the callback lives for
+        // the whole program.
+        unsafe {
+            let _ = SetWindowSubclass(host, Some(on_host_message), 0x5772_6170, 0);
+        }
+    }
+
+    unsafe extern "system" fn on_host_message(
+        hwnd: HWND,
+        msg: u32,
+        wparam: windows::Win32::Foundation::WPARAM,
+        lparam: windows::Win32::Foundation::LPARAM,
+        _id: usize,
+        _data: usize,
+    ) -> windows::Win32::Foundation::LRESULT {
+        use windows::Win32::UI::Shell::DefSubclassProc;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, WINDOWPOS, WM_EXITSIZEMOVE, WM_MOVING, WM_WINDOWPOSCHANGING,
+        };
+        if STATE.load(Ordering::Relaxed) == OPEN {
+            // Dragged by the title bar: the first step of the drag swaps
+            // Roon for its live picture, letting go swaps it back
+            if msg == WM_MOVING && !DRAGGING.load(Ordering::Relaxed) {
+                start_drag(hwnd);
+            } else if msg == WM_EXITSIZEMOVE && DRAGGING.load(Ordering::Relaxed) {
+                end_drag(hwnd);
+            }
+        }
+        if msg == WM_WINDOWPOSCHANGING && STATE.load(Ordering::Relaxed) == OPEN {
+            // SAFETY: for this message lparam points at a WINDOWPOS.
+            let pos = unsafe { &*(lparam.0 as *const WINDOWPOS) };
+            let moving = !pos.flags.contains(SWP_NOMOVE);
+            if moving {
+                if let (Some(now), Some(roon)) = (window_rect(hwnd), roon_window()) {
+                    let same_size = pos.flags.contains(SWP_NOSIZE) || (pos.cx == now.2 && pos.cy == now.3);
+                    let (dx, dy) = (pos.x - now.0, pos.y - now.1);
+                    if same_size && (dx != 0 || dy != 0) {
+                        *LAST_MOVE.lock().unwrap() = Some(Instant::now());
+                        // Where Roon shows through moves too (the next sync
+                        // pass will agree); the sidebar filter follows it
+                        let hole = VISIBLE_HOLE.lock().unwrap().as_mut().map(|hole| {
+                            hole[0] += dx;
+                            hole[1] += dy;
+                            *hole
+                        });
+                        if let Some(hole) = hole {
+                            crate::skin::follow(hole[0], hole[1]);
+                        }
+                    }
+                    let dragging = DRAGGING.load(Ordering::Relaxed);
+                    if same_size && (dx != 0 || dy != 0) && is_visible(roon) && !dragging {
+                        // Where Roon belongs next to the Wrapper's new spot
+                        let offset = *ROON_OFFSET.lock().unwrap();
+                        let target = match offset {
+                            Some((ox, oy)) => Some((pos.x + ox, pos.y + oy)),
+                            None => window_rect(roon).map(|r| (r.0 + dx, r.1 + dy)),
+                        };
+                        if let Some((x, y)) = target {
+                            // SAFETY: a valid window handle.
+                            unsafe {
+                                let _ = SetWindowPos(
+                                    roon,
+                                    None,
+                                    x,
+                                    y,
+                                    0,
+                                    0,
+                                    SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // SAFETY: passing the message on, as every subclass must.
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    /// The first step of a drag by the title bar: shows a live picture of
+    /// Roon where the hole is (one per piece of it not under a cover, so the
+    /// page's panels stay on top), closes the hole, and moves Roon just off
+    /// the screen, where it waits out the drag. Only when Roon is showing
+    /// through the hole right now.
+    fn start_drag(host: HWND) {
+        use windows::Win32::Foundation::TRUE;
+        use windows::Win32::Graphics::Dwm::{
+            DwmRegisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
+            DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION, DWM_TNP_RECTSOURCE,
+            DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        let Some(hole) = *VISIBLE_HOLE.lock().unwrap() else {
+            return;
+        };
+        let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
+            return;
+        };
+        let (Some(origin), Some(host_rect), Some((client_w, client_h))) =
+            (client_origin(host), window_rect(host), client_size(host))
+        else {
+            return;
+        };
+        // Somewhere off the screen for Roon to wait (none: no live picture,
+        // Roon just follows the drag as before)
+        let Some(away) = off_screen_spot(roon) else {
+            return;
+        };
+        let covers = VISIBLE_COVERS.lock().unwrap().clone();
+        let pieces = subtract(hole, &covers);
+
+        let mut thumbnails = Vec::new();
+        for piece in pieces.iter().take(16) {
+            // SAFETY: two valid top-level windows; the properties live for
+            // the call.
+            unsafe {
+                let Ok(thumbnail) = DwmRegisterThumbnail(host, roon) else {
+                    continue;
+                };
+                let props = DWM_THUMBNAIL_PROPERTIES {
+                    dwFlags: DWM_TNP_RECTDESTINATION
+                        | DWM_TNP_RECTSOURCE
+                        | DWM_TNP_OPACITY
+                        | DWM_TNP_VISIBLE
+                        | DWM_TNP_SOURCECLIENTAREAONLY,
+                    // Where on our window (from its client area's corner)
+                    rcDestination: RECT {
+                        left: piece[0] - origin.x,
+                        top: piece[1] - origin.y,
+                        right: piece[0] + piece[2] - origin.x,
+                        bottom: piece[1] + piece[3] - origin.y,
+                    },
+                    // The same piece of Roon (its client area starts at the
+                    // hole's corner)
+                    rcSource: RECT {
+                        left: piece[0] - hole[0],
+                        top: piece[1] - hole[1],
+                        right: piece[0] + piece[2] - hole[0],
+                        bottom: piece[1] + piece[3] - hole[1],
+                    },
+                    opacity: 255,
+                    fVisible: TRUE,
+                    fSourceClientAreaOnly: TRUE,
+                };
+                let _ = DwmUpdateThumbnailProperties(thumbnail, &props);
+                thumbnails.push(thumbnail);
+            }
+        }
+        if thumbnails.is_empty() {
+            return;
+        }
+        THUMBNAILS.lock().unwrap().extend(thumbnails);
+        DRAGGING.store(true, Ordering::Relaxed);
+
+        // Close the hole (the next sync pass after the drag opens it again)
+        let bounds = [origin.x - host_rect.0, origin.y - host_rect.1, client_w, client_h];
+        set_region(host, bounds, None, &[]);
+        *LAST_REGION.lock().unwrap() = None;
+        // Roon waits off the screen, still showing (so its live picture
+        // keeps working), without waiting on it
+        // SAFETY: a valid window handle.
+        unsafe {
+            let _ = SetWindowPos(
+                roon,
+                None,
+                away.0,
+                away.1,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS,
+            );
+        }
+    }
+
+    /// A spot just past an edge of the monitor Roon is on, touching no
+    /// monitor, where that monitor is still the nearest one (so Windows
+    /// keeps treating Roon as on it and doesn't rescale it for another
+    /// monitor's scaling). Returns the window's new top-left corner.
+    fn off_screen_spot(roon: HWND) -> Option<(i32, i32)> {
+        use windows::Win32::Graphics::Gdi::{
+            GetMonitorInfoW, MonitorFromRect, MonitorFromWindow, MONITORINFO,
+            MONITOR_DEFAULTTONEAREST, MONITOR_DEFAULTTONULL,
+        };
+        let (x, y, w, h) = window_rect(roon)?;
+        // SAFETY: plain monitor queries with valid pointers.
+        unsafe {
+            let monitor = MonitorFromWindow(roon, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+                return None;
+            }
+            let m = info.rcMonitor;
+            const GAP: i32 = 8;
+            let candidates = [
+                (x, m.bottom + GAP),
+                (x, m.top - h - GAP),
+                (m.right + GAP, y),
+                (m.left - w - GAP, y),
+            ];
+            candidates.into_iter().find(|&(cx, cy)| {
+                let rect = RECT { left: cx, top: cy, right: cx + w, bottom: cy + h };
+                MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid()
+                    && MonitorFromRect(&rect, MONITOR_DEFAULTTONEAREST) == monitor
+            })
+        }
+    }
+
+    /// The drag is over: Roon goes to its spot behind the hole, then a sync
+    /// pass opens the hole and removes the live pictures.
+    fn end_drag(host: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE};
+        if let (Some(roon), Some(now), Some((ox, oy))) =
+            (roon_window(), window_rect(host), *ROON_OFFSET.lock().unwrap())
+        {
+            // SAFETY: valid window handles.
+            unsafe {
+                let _ = SetWindowPos(roon, Some(host), now.0 + ox, now.1 + oy, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+        }
+        DRAGGING.store(false, Ordering::Relaxed);
+        *LAST_MOVE.lock().unwrap() = None;
+        if let Some(app) = APP.get() {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move { sync(&app) });
+        }
+    }
+
+    fn drop_thumbnails() {
+        use windows::Win32::Graphics::Dwm::DwmUnregisterThumbnail;
+        let thumbnails = std::mem::take(&mut *THUMBNAILS.lock().unwrap());
+        for thumbnail in thumbnails {
+            // SAFETY: a thumbnail we registered.
+            unsafe {
+                let _ = DwmUnregisterThumbnail(thumbnail);
+            }
+        }
+    }
+
+    /// `rect` minus `cuts`, as rectangles ([x, y, width, height]).
+    fn subtract(rect: [i32; 4], cuts: &[[i32; 4]]) -> Vec<[i32; 4]> {
+        let mut pieces = vec![rect];
+        for c in cuts {
+            let mut next = Vec::new();
+            for p in pieces {
+                let (l, t, r, b) = (p[0], p[1], p[0] + p[2], p[1] + p[3]);
+                let (cl, ct, cr, cb) = (c[0].max(l), c[1].max(t), (c[0] + c[2]).min(r), (c[1] + c[3]).min(b));
+                if cl >= cr || ct >= cb {
+                    next.push(p);
+                    continue;
+                }
+                if ct > t {
+                    next.push([l, t, p[2], ct - t]);
+                }
+                if cb < b {
+                    next.push([l, cb, p[2], b - cb]);
+                }
+                if cl > l {
+                    next.push([l, ct, cl - l, cb - ct]);
+                }
+                if cr < r {
+                    next.push([cr, ct, r - cr, cb - ct]);
+                }
+            }
+            pieces = next;
+        }
+        pieces
+    }
+
     /// Puts the Wrapper back above Roon the moment Roon becomes the active
     /// window (clicking in the hole). Set up on the main thread, whose
     /// message loop delivers the events.
@@ -922,7 +1605,9 @@ mod windows_wrapper {
             return;
         }
         if let (Some(host), Some(roon)) = (hwnd_of(&HOST_HWND), hwnd_of(&ROON_HWND)) {
-            if window == roon && is_visible(host) {
+            // Roon was clicked, or we were (by the title bar, say, while
+            // another window covered part of us: Roon has to come up too)
+            if (window == roon || window == host) && is_visible(host) && is_visible(roon) {
                 keep_order(host, roon);
             }
         }

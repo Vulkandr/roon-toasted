@@ -88,7 +88,8 @@
         "center": true,
         "visible": false,
         "decorations": false,
-        "shadow": true
+        "shadow": false,
+        "transparent": true
       }
     ],
     "security": {

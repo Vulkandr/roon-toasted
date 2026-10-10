@@ -65,6 +65,8 @@
   box-sizing: border-box;
 }
 
+/* The window itself is transparent; the panel below fills it, so its
+   rounded corners stay smooth */
 html,
 body {
   margin: 0;
@@ -88,10 +90,24 @@ button:disabled {
   cursor: default;
 }
 
+/* Rounded like Windows 11 (8 px), with a thin border; square when
+   maximized */
 .panel {
+  --edge: 7px; /* frame left and right of Roon, where the resize borders are */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.maximized .panel {
+  border: 0;
+  border-radius: 0;
 }
 
 /* ----- Title bar ----- */
@@ -100,7 +116,7 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 40px;
+  height: 39px; /* plus the window border: 40 */
   padding-left: 12px;
   background: var(--bg);
   border-bottom: 1px solid var(--border);
@@ -184,6 +200,7 @@ button:disabled {
 .hole {
   flex: 1;
   min-height: 0;
+  margin: 0 var(--edge);
   display: grid;
   place-items: center;
   background: var(--bg);
@@ -201,7 +218,7 @@ button:disabled {
   grid-template-columns: minmax(200px, 1fr) minmax(320px, 2fr) minmax(200px, 1fr);
   align-items: center;
   gap: 16px;
-  height: 110px;
+  height: 109px; /* plus the window border: 110 */
   padding: 0 16px;
   background: var(--bg);
   border-top: 1px solid var(--border);
@@ -460,6 +477,41 @@ input[type="range"]:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* Hearts & Library: a "+" until the track is in the library, then a
+   heart, filled once hearted; dimmed while waiting for Roon */
+.library .icon-heart,
+.library.in-library .icon-add {
+  display: none;
+}
+
+.library.in-library .icon-heart {
+  display: block;
+}
+
+.library.on {
+  color: var(--accent);
+}
+
+.library.on .icon-heart {
+  fill: currentColor;
+}
+
+.library.busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Feature off or nothing playing: keeps its space so the buttons stay
+   centered */
+.library.spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+#queue-btn.on {
+  color: var(--accent);
+}
+
 #mute .icon-muted,
 #mute.muted .icon-volume {
   display: none;
@@ -467,6 +519,156 @@ input[type="range"]:disabled {
 
 #mute.muted .icon-muted {
   display: block;
+}
+
+/* ----- Queue panel ----- */
+
+/* Over the right side of the hole, between the title bar and the player */
+.queue-panel {
+  position: absolute;
+  top: 39px;
+  bottom: 109px;
+  right: var(--edge);
+  z-index: 5;
+  width: 380px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+}
+
+.queue-panel[hidden] {
+  display: none;
+}
+
+.queue-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px 10px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.queue-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.queue-title {
+  font-family: var(--font-title);
+  font-size: 22px;
+}
+
+.queue-summary {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.queue-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 6px 8px 12px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
+}
+
+.queue-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.queue-item:hover {
+  background: var(--hover);
+}
+
+.queue-item.now,
+.queue-item.now:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  cursor: default;
+}
+
+.queue-art {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+}
+
+.queue-art img,
+.queue-art .art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 4px;
+  background: var(--card);
+}
+
+.queue-play {
+  position: absolute;
+  inset: 0;
+  display: none;
+  place-items: center;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+}
+
+.queue-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+.queue-item:not(.now):hover .queue-play {
+  display: grid;
+}
+
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.3;
+}
+
+.queue-item-title,
+.queue-item-artist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-item-title {
+  font-weight: 600;
+}
+
+.queue-item-artist {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.queue-length {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-empty,
+.queue-more {
+  color: var(--muted);
+  text-align: center;
+  font-size: 12px;
+  margin: 16px 0;
 }
 
 /* Zone picker dropdown (opens above the zone button) */

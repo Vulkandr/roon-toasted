@@ -56,6 +56,13 @@
 
         <div class="middle">
           <div class="transport">
+            <!-- Hearts & Library (experimental, Settings): "+" adds the track to
+                 the library, then it's a heart. Invisible (keeping the buttons
+                 centered) unless the feature is on and connected. -->
+            <button id="library-btn" class="icon-btn library spacer" title="Add to library">
+              <svg class="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+              <svg class="icon-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg>
+            </button>
             <button id="shuffle" class="icon-btn toggle" title="Shuffle">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>
             </button>
@@ -75,6 +82,9 @@
             </button>
             <button id="radio" class="icon-btn toggle" title="Roon Radio">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
+            </button>
+            <button id="queue-btn" class="icon-btn" title="Queue">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>
             </button>
           </div>
           <div class="progress">
@@ -99,6 +109,25 @@
           </div>
         </div>
       </div>
+
+      <!-- Queue panel: slides over the right side of Roon (wrapper.js tells
+           wrapper.rs to keep this part of the window) -->
+      <aside id="queue-panel" class="queue-panel" hidden>
+        <div class="queue-head">
+          <div class="queue-heading">
+            <div class="queue-title">Queue</div>
+            <div id="queue-summary" class="queue-summary"></div>
+          </div>
+          <button id="queue-close" class="icon-btn" title="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div class="queue-scroll">
+          <p id="queue-empty" class="queue-empty" hidden>The queue is empty.</p>
+          <ol id="queue-list" class="queue-list"></ol>
+          <p id="queue-more" class="queue-more" hidden></p>
+        </div>
+      </aside>
 
       <!-- Zone picker dropdown: filled and positioned by wrapper.js -->
       <div id="zone-menu" class="zone-menu" hidden></div>
