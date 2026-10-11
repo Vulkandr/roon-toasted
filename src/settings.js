@@ -1044,6 +1044,47 @@ invoke("get_settings").then(showStartWithWindows);
 listen("settings-changed", (event) => showStartWithWindows(event.payload));
 
 
+// ===== What's new ==========================================================
+//
+// The Changelog button (Updates card) opens the Changelog window. Things new
+// since an update (data-new="name" in settings.html) glow like the Roon Core
+// card does before a Core is paired, until the mouse goes over them once;
+// the names seen are kept in the settings (seenNew).
+
+document.querySelector("#open-changelog").addEventListener("click", () => {
+  invoke("open_window", { window: "changelog" }).catch((err) => console.error(err));
+});
+
+function showNew(settings) {
+  const seen = new Set(settings.seenNew || []);
+  document.querySelectorAll("[data-new]").forEach((node) => {
+    node.classList.toggle("is-new", !seen.has(node.dataset.new));
+  });
+}
+
+async function markSeen(name) {
+  try {
+    const settings = await invoke("get_settings");
+    const seen = new Set(settings.seenNew || []);
+    if (seen.has(name)) return;
+    seen.add(name);
+    await invoke("update_settings", { changes: { seenNew: [...seen] } });
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+document.querySelectorAll("[data-new]").forEach((node) => {
+  node.addEventListener("mouseenter", () => {
+    if (!node.classList.contains("is-new")) return;
+    node.classList.remove("is-new");
+    markSeen(node.dataset.new);
+  });
+});
+
+invoke("get_settings").then(showNew);
+listen("settings-changed", (event) => showNew(event.payload));
+
 // The footer link opens in the browser, not in this window
 document.querySelector("#plugin-link").addEventListener("click", (event) => {
   event.preventDefault();

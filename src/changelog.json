@@ -1,0 +1,71 @@
+[
+  {
+    "version": "1.2.0",
+    "date": "",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["Roon: Wrapped (experimental)", "The Roon app inside a Toasted window, with Toasted's player along the bottom, so everything Roon can do is right there. Switch it on in Settings > The Wrapper, then open it from the tray (double-click opens it while it's on), its hotkey (Ctrl+Alt+W) or Settings. Closing it keeps Roon running out of sight, so it reopens instantly."],
+          ["Return Roon", "Gives Roon its own window back. An Enable Wrapper button then sits in Roon's title bar to wrap it up again."],
+          ["Now Playing", "Click the album art in the player bar for a full-window player. Hit the pencil to move and resize the art, track info, controls, seek bar, zone and volume anywhere you like."],
+          ["Make it yours", "Fonts per piece (bundled or any installed font), icon packs (Lucide, Phosphor, Tabler, Material Symbols, Remix), a plain or circled play button, and bar styles for seek and volume: Line, Thick, Hairline, Segments and Wave. Bars can take the app's colors, the album's, or your own. The player bar can follow the same style."],
+          ["Profiles", "Save your layouts as profiles and switch between them. Start from the Default, Waves or Waves Large presets."],
+          ["Changelog", "This window. It opens after each update, and the Changelog button in Settings > Updates brings it back. New settings glow until you hover over them."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["Tray", "While the Wrapper is on, the tray shows the Wrapped icon and Open Wrapper comes first in its menu."]
+        ]
+      }
+    ]
+  },
+  {
+    "version": "1.1.1",
+    "date": "2026-10-01",
+    "sections": [
+      {
+        "title": "Fixes",
+        "items": [
+          ["Finding your Core", "On PCs with virtual or VPN network adapters (WSL, Docker, Hyper-V, Tailscale), Toasted could miss the Core until a reboot. It now searches on every network adapter and asks the Core's last known address directly."]
+        ]
+      },
+      {
+        "title": "What's new",
+        "items": [
+          ["Manual Core address", "Settings > Roon Core > Manual: type your Core's IP (and port, if you changed it in Roon) for networks where the search can't get through."],
+          ["Search and Diagnostics", "Search looks for Cores again right away. Diagnostics shows what the search sees, with a Copy button for bug reports."]
+        ]
+      }
+    ]
+  },
+  {
+    "version": "1.1.0",
+    "date": "2026-09-30",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["Hearts & Library (experimental)", "Heart the playing track, or add it (or its whole album) to your library, right from the Playing tab."],
+          ["Album pages", "Albums by the playing artist open in the Toaster, and artist pages split Albums from Singles & EPs."],
+          ["Automatic updates", "Toasted checks for new versions and installs them with one click."],
+          ["Settings", "Tidied up."]
+        ]
+      }
+    ]
+  },
+  {
+    "version": "1.0.0",
+    "date": "",
+    "sections": [
+      {
+        "title": "First release",
+        "items": [
+          ["Roon: Toasted", "A Roon companion for Windows: now playing, queue, browse and search, now-playing toasts, global hotkeys and a taskbar widget."]
+        ]
+      }
+    ]
+  }
+]

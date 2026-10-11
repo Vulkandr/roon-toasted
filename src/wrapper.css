@@ -113,6 +113,7 @@ button:disabled {
 /* ----- Title bar ----- */
 
 .titlebar {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -123,24 +124,25 @@ button:disabled {
   flex: none;
 }
 
+/* The Roon: Wrapped mark, in color. 16 and 24 px (100% and 150% scaling)
+   are drawn on the pixel grid, 32 px is 16 doubled, the in-betweens are
+   scaled from the artwork; the browser picks the one for the screen. */
 .titlebar-logo {
-  width: 18px;
-  height: 18px;
-  background: var(--muted);
-  -webkit-mask: url("assets/logo-mask-small.png") center / contain no-repeat;
-  mask: url("assets/logo-mask-small.png") center / contain no-repeat;
+  width: 16px;
+  height: 16px;
+  flex: none;
+  background: image-set(
+      url("assets/wrapped-16.png") 1x,
+      url("assets/wrapped-20.png") 1.25x,
+      url("assets/wrapped-24.png") 1.5x,
+      url("assets/wrapped-28.png") 1.75x,
+      url("assets/wrapped-32.png") 2x
+    )
+    center / 16px 16px no-repeat;
 }
 
 .titlebar-title {
   font-weight: 700;
-}
-
-.titlebar-tag {
-  color: var(--warn);
-  font-size: 11px;
-  padding: 2px 8px;
-  border: 1px solid var(--warn);
-  border-radius: 999px;
 }
 
 .titlebar-status {
@@ -148,15 +150,55 @@ button:disabled {
   font-size: 12px;
 }
 
+/* Minimize player: centered in the title bar while Now Playing is open */
+.titlebar-minimize {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 14px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--card) 70%, transparent);
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.titlebar-minimize svg {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.15s;
+}
+
+.titlebar-minimize:hover {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--hover);
+}
+
+.titlebar-minimize:hover svg {
+  transform: translateY(1px);
+}
+
+.titlebar-minimize[hidden] {
+  display: none;
+}
+
 .titlebar-spacer {
   flex: 1;
   height: 100%;
 }
 
+/* Return Roon, next to the title */
 .titlebar-action {
-  height: 26px;
-  padding: 0 12px;
-  margin-right: 8px;
+  height: 24px;
+  padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 6px;
   font-size: 12px;
@@ -166,6 +208,32 @@ button:disabled {
 .titlebar-action:hover {
   color: var(--text);
   background: var(--hover);
+}
+
+/* Settings, before the window buttons */
+.titlebar-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  margin-right: 6px;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.titlebar-icon svg {
+  width: 16px;
+  height: 16px;
+  transition: transform 0.3s;
+}
+
+.titlebar-icon:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.titlebar-icon:hover svg {
+  transform: rotate(45deg);
 }
 
 .win-btn {
@@ -211,6 +279,781 @@ button:disabled {
   font-size: 14px;
 }
 
+/* ----- Now Playing (the large player) ----- */
+
+/* Covers everything below the title bar: Roon's hole and the player bar.
+   Its pieces (art, the track's text, the transport, seek, zone and volume
+   controls, which move in from the player bar) are positioned by
+   wrapper.js from the saved layout: a fraction of the stage's free space
+   for where they sit (0 = at the left/top edge, 0.5 = centered, 1 = at the
+   right/bottom edge) and of its size for how big they are, so the layout
+   keeps its shape at any window size. */
+.stage {
+  position: absolute;
+  top: 39px; /* below the title bar */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4; /* over the player bar, under the queue panel and zone menu */
+  overflow: hidden;
+  background: var(--stage-bg, var(--bg));
+}
+
+.stage[hidden] {
+  display: none;
+}
+
+/* Album art, blurred and darkened, behind everything (Background: Album
+   art). Light text on it whatever the theme. */
+.stage-bg {
+  display: none;
+  position: absolute;
+  inset: -60px;
+  background: center / cover no-repeat;
+  filter: blur(50px) brightness(0.45) saturate(1.1);
+}
+
+.stage.art-bg .stage-bg {
+  display: block;
+}
+
+.stage.art-bg {
+  --text: #f2f2f6;
+  --muted: #b4b4c0;
+  --hover: rgba(255, 255, 255, 0.1);
+  --track: rgba(255, 255, 255, 0.25);
+}
+
+.stage-canvas {
+  position: absolute;
+  inset: 0;
+}
+
+.piece {
+  position: absolute;
+  z-index: 2;
+}
+
+/* Layers: the art at the back, the bars over it, everything else (text,
+   controls) on top; while editing, the selected piece comes forward */
+.piece-art {
+  z-index: 0;
+}
+
+.piece-seek,
+.piece-volume {
+  z-index: 1;
+}
+
+.stage-editing .piece.selected {
+  z-index: 3;
+}
+
+.piece.off {
+  display: none;
+}
+
+.piece-art .piece-content {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.piece-art img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.piece-art img[hidden] {
+  display: none;
+}
+
+.piece-art .art-placeholder {
+  position: absolute;
+  inset: 0;
+}
+
+.piece-art .art-placeholder[hidden] {
+  display: none;
+}
+
+/* The player bar's controls, while they're in here: the same elements,
+   sized from the piece's font size (em), which the layout sets */
+
+/* Track text, like Roon's Now Playing: the title in the accent color with
+   the heart right after it (wrapping to the layout's lines), then "On"
+   and the album, then "Performed by" and the artist (one line each) */
+.piece-info .text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2em;
+  line-height: 1.3;
+}
+
+.piece-info .title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  min-width: 0;
+}
+
+.piece-info[data-align="center"] .title-row {
+  justify-content: center;
+}
+
+.piece-info[data-align="right"] .title-row {
+  justify-content: flex-end;
+}
+
+.piece-info .title {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--lines, 1);
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 1.2em;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.piece-info .title-row .library {
+  flex: none;
+  width: 1.6em;
+  height: 1.6em;
+}
+
+.piece-info .title-row .library svg {
+  width: 1.15em;
+  height: 1.15em;
+}
+
+/* No heart (Hearts & Library off, or nothing playing): no gap for it */
+.piece-info .title-row .library.spacer {
+  display: none;
+}
+
+.piece-info .album {
+  order: 1;
+  color: var(--text);
+  font-size: 1em;
+}
+
+.piece-info .artist {
+  order: 2;
+  color: var(--text);
+  font-size: 0.88em;
+}
+
+.piece-info .track .album::before {
+  content: "On ";
+  color: var(--muted);
+}
+
+.piece-info .track .artist::before {
+  content: "Performed by ";
+  color: var(--muted);
+  font-size: 1.1em;
+}
+
+.piece-info .album:empty {
+  display: none;
+}
+
+.piece .transport {
+  gap: 0.75em;
+}
+
+.piece .icon-btn {
+  width: 2.6em;
+  height: 2.6em;
+}
+
+.piece .icon-btn svg {
+  width: 1.4em;
+  height: 1.4em;
+}
+
+.piece .play {
+  width: 3.4em;
+  height: 3.4em;
+}
+
+.piece .play svg {
+  width: 1.4em;
+  height: 1.4em;
+}
+
+/* Play button: Plain = like the other buttons, just a bigger icon */
+[data-play="plain"] .play {
+  background: transparent;
+  color: var(--text);
+}
+
+[data-play="plain"] .play svg {
+  width: 2em;
+  height: 2em;
+}
+
+[data-play="plain"] .play:hover:not(:disabled) {
+  filter: none;
+  background: var(--hover);
+}
+
+.piece .progress {
+  max-width: none;
+  gap: 0.75em;
+}
+
+.piece .time {
+  font-size: 0.85em;
+  min-width: 2.6em;
+}
+
+.piece input[type="range"] {
+  font-size: inherit; /* form controls don't by default; the bar's em sizes follow the piece */
+  height: 0.3em;
+  margin: 0.6em 0;
+  border-radius: 0.15em;
+}
+
+.piece input[type="range"]::-webkit-slider-thumb {
+  width: 0.92em;
+  height: 0.92em;
+}
+
+.piece .zone-button {
+  gap: 0.5em;
+  padding: 0.4em 0.7em;
+  font-size: 1em;
+  border-radius: 0.4em;
+}
+
+.piece .zone-button svg {
+  width: 1.5em;
+  height: 1.5em;
+}
+
+.piece-volume .piece-content {
+  height: 100%;
+}
+
+.piece .volume-row {
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  gap: 0.5em;
+}
+
+.piece .volume-row input[type="range"] {
+  margin: 0;
+}
+
+.piece .volume-value {
+  font-size: 0.85em;
+  min-width: 3.5em;
+}
+
+/* Vertical volume: the value on top, the mute button at the bottom */
+.piece-volume.vertical .volume-row {
+  flex-direction: column-reverse;
+  width: auto;
+}
+
+.piece-volume.vertical .volume-row input[type="range"] {
+  writing-mode: vertical-lr;
+  direction: rtl;
+  flex: 1;
+  width: 0.3em;
+  height: auto;
+  min-height: 0;
+  background:
+    linear-gradient(var(--accent), var(--accent)) bottom / 100% var(--fill, 0%) no-repeat,
+    var(--track);
+}
+
+.piece-volume.vertical .volume-value {
+  min-width: 0;
+  text-align: center;
+}
+
+/* ----- Bar styles (data-bar on the seek and volume controls, in Now
+   Playing and, when styled, in the player bar) ----- */
+
+/* Sizes follow the text around the bar (form controls don't by default) */
+[data-bar] input[type="range"] {
+  font-size: inherit;
+}
+
+/* Thick: a fat pill, no knob */
+[data-bar="thick"] input[type="range"] {
+  height: 1em;
+  border-radius: 0.5em;
+}
+
+.piece-volume.vertical [data-bar="thick"] input[type="range"] {
+  width: 1em;
+  height: auto;
+}
+
+[data-bar="thick"] input[type="range"]::-webkit-slider-thumb,
+[data-bar="segments"] input[type="range"]::-webkit-slider-thumb,
+[data-bar="wave"] input[type="range"]::-webkit-slider-thumb {
+  opacity: 0;
+}
+
+/* Hairline: very thin, the knob shows when the mouse is over the piece */
+[data-bar="hairline"] input[type="range"] {
+  height: 0.12em;
+}
+
+.piece-volume.vertical [data-bar="hairline"] input[type="range"] {
+  width: 0.12em;
+  height: auto;
+}
+
+[data-bar="hairline"] input[type="range"]::-webkit-slider-thumb {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+[data-bar="hairline"]:hover input[type="range"]::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+/* Segments: blocks that fill up, like a meter */
+/* Block, gap and thickness are snapped to whole pixels, so every block
+   comes out the same at any size */
+[data-bar="segments"] {
+  --seg: round(0.6em, 1px);
+  --seg-gap: max(1px, round(0.22em, 1px));
+}
+
+[data-bar="segments"] input[type="range"] {
+  height: var(--seg);
+  border-radius: 0;
+  -webkit-mask: repeating-linear-gradient(to right, #000 0 var(--seg), transparent var(--seg) calc(var(--seg) + var(--seg-gap)));
+  mask: repeating-linear-gradient(to right, #000 0 var(--seg), transparent var(--seg) calc(var(--seg) + var(--seg-gap)));
+}
+
+.piece-volume.vertical [data-bar="segments"] input[type="range"] {
+  width: var(--seg);
+  height: auto;
+  -webkit-mask: repeating-linear-gradient(to top, #000 0 var(--seg), transparent var(--seg) calc(var(--seg) + var(--seg-gap)));
+  mask: repeating-linear-gradient(to top, #000 0 var(--seg), transparent var(--seg) calc(var(--seg) + var(--seg-gap)));
+}
+
+/* Wave: drawn on a canvas behind the slider (bars.js); the slider itself
+   is invisible but still takes the mouse */
+.progress,
+.volume-row {
+  position: relative;
+}
+
+.bar-wave {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+}
+
+/* (also while disabled, e.g. between tracks, when sliders are normally
+   drawn half-transparent: the grey track would show under the wave) */
+[data-bar="wave"] input[type="range"],
+[data-bar="wave"] input[type="range"]:disabled {
+  position: relative;
+  z-index: 1;
+  opacity: 0;
+  height: 3.6em; /* the wave's room; the canvas covers exactly this */
+  margin: 0;
+}
+
+.piece-volume.vertical [data-bar="wave"] input[type="range"] {
+  width: 3.6em;
+  height: auto;
+}
+
+/* Buttons in the top-right corner: Edit layout, Back to Roon */
+.stage-tools {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: flex;
+  gap: 4px;
+}
+
+.stage-tools .icon-btn {
+  background: color-mix(in srgb, var(--bg) 70%, transparent);
+}
+
+.stage-tools .icon-btn.on {
+  color: var(--accent);
+}
+
+/* Edit layout: every piece shows its outline (hidden ones faintly), the
+   selected one gets resize handles; the controls inside don't react to
+   the mouse, the piece as a whole does */
+.stage-editing .piece {
+  cursor: move;
+  outline: 1px dashed color-mix(in srgb, var(--muted) 60%, transparent);
+  outline-offset: 2px;
+}
+
+.stage-editing .piece-content {
+  pointer-events: none;
+}
+
+.stage-editing .piece.off {
+  display: block;
+  opacity: 0.3;
+}
+
+.stage-editing .piece.selected {
+  outline: 2px solid var(--accent);
+}
+
+.handle {
+  display: none;
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  border: 2px solid var(--bg);
+  z-index: 1;
+}
+
+.stage-editing .piece.selected .handle {
+  display: block;
+}
+
+.handle.nw {
+  left: -7px;
+  top: -7px;
+  cursor: nwse-resize;
+}
+
+.handle.ne {
+  right: -7px;
+  top: -7px;
+  cursor: nesw-resize;
+}
+
+.handle.sw {
+  left: -7px;
+  bottom: -7px;
+  cursor: nesw-resize;
+}
+
+.handle.se {
+  right: -7px;
+  bottom: -7px;
+  cursor: nwse-resize;
+}
+
+.handle.w {
+  left: -7px;
+  top: calc(50% - 6px);
+  cursor: ew-resize;
+}
+
+.handle.n {
+  top: -7px;
+  left: calc(50% - 6px);
+  cursor: ns-resize;
+}
+
+.handle.s {
+  bottom: -7px;
+  left: calc(50% - 6px);
+  cursor: ns-resize;
+}
+
+.handle.e {
+  right: -7px;
+  top: calc(50% - 6px);
+  cursor: ew-resize;
+}
+
+/* Snap lines while dragging */
+.guide {
+  display: none;
+  position: absolute;
+  background: var(--accent);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.guide.show {
+  display: block;
+}
+
+.guide-v {
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+
+.guide-h {
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+
+/* The toolbar, floating at the top */
+.stage-editor {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px 10px;
+  max-width: calc(100% - 120px);
+  padding: 6px 10px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.editor-group[hidden] {
+  display: none;
+}
+
+.stage-editor[hidden] {
+  display: none;
+}
+
+.editor-hint {
+  color: var(--muted);
+}
+
+/* With a piece selected, the toolbar shows that piece's options instead
+   of the profile, Show and Background */
+.stage-editor.piece-selected .editor-global {
+  display: none;
+}
+
+.editor-unsaved {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 18%, transparent);
+  color: var(--warn);
+  font-size: 11px;
+}
+
+.editor-unsaved[hidden],
+.editor-btn[hidden] {
+  display: none;
+}
+
+/* ----- Questions while editing ----- */
+
+.stage-dialog {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.stage-dialog[hidden] {
+  display: none;
+}
+
+.dialog-box {
+  min-width: 320px;
+  max-width: min(460px, calc(100% - 40px));
+  padding: 18px 20px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.dialog-text {
+  margin: 0 0 14px;
+  line-height: 1.45;
+}
+
+.dialog-input {
+  width: 100%;
+  margin: 0 0 14px;
+  padding: 7px 9px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  outline: none;
+}
+
+.dialog-input:focus {
+  border-color: var(--accent);
+}
+
+.dialog-input[hidden] {
+  display: none;
+}
+
+.dialog-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+/* Grab here to move the toolbar (it may be over the piece you want) */
+.editor-grip {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 22px;
+  color: var(--muted);
+  cursor: grab;
+  touch-action: none;
+}
+
+.editor-grip svg {
+  width: 16px;
+  height: 16px;
+}
+
+.editor-grip:active {
+  cursor: grabbing;
+}
+
+.editor-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border);
+  flex: none;
+}
+
+.editor-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.editor-label {
+  color: var(--muted);
+  margin: 0 2px;
+}
+
+.chip {
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.chip:hover {
+  background: var(--hover);
+}
+
+.chip.on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.align-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  color: var(--muted);
+}
+
+.align-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.align-btn:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.align-btn.on {
+  color: var(--accent);
+}
+
+.editor-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.editor-check input {
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.editor-color {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.editor-color[hidden] {
+  display: none;
+}
+
+.editor-select {
+  max-width: 180px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 3px 4px;
+}
+
+.editor-btn {
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.editor-btn:hover {
+  background: var(--hover);
+}
+
+.editor-btn.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: transparent;
+}
+
+.editor-btn.primary:hover {
+  filter: brightness(1.1);
+  background: var(--accent);
+}
+
 /* ----- Player bar ----- */
 
 .player {
@@ -225,7 +1068,7 @@ button:disabled {
   flex: none;
 }
 
-/* What's playing: click to open the Toaster */
+/* What's playing: click to open Now Playing */
 .info {
   display: flex;
   align-items: center;
@@ -289,16 +1132,17 @@ button:disabled {
 
 .title {
   font-weight: 700;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .artist {
   color: var(--text);
+  font-size: 14px;
 }
 
 .album {
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 /* Transport and progress */
@@ -387,7 +1231,7 @@ button:disabled {
 
 .time {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   min-width: 34px;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -437,7 +1281,7 @@ input[type="range"]:disabled {
   padding: 6px 10px;
   border-radius: 6px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
 
 .zone-button svg {
@@ -473,7 +1317,7 @@ input[type="range"]:disabled {
   min-width: 48px;
   text-align: right;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -501,11 +1345,10 @@ input[type="range"]:disabled {
   pointer-events: none;
 }
 
-/* Feature off or nothing playing: keeps its space so the buttons stay
-   centered */
+/* Feature off or nothing playing: gone, leaving three buttons on each side
+   of play */
 .library.spacer {
-  visibility: hidden;
-  pointer-events: none;
+  display: none;
 }
 
 #queue-btn.on {

@@ -21,10 +21,17 @@
       <div class="titlebar" data-tauri-drag-region="deep">
         <span class="titlebar-logo" data-tauri-drag-region="deep"></span>
         <span class="titlebar-title" data-tauri-drag-region="deep">Roon: Wrapped</span>
-        <span class="titlebar-tag" data-tauri-drag-region="deep">Experimental</span>
+        <button id="detach" class="titlebar-action" title="Close the Wrapper and give Roon its own window back">Return Roon</button>
         <span id="status" class="titlebar-status" data-tauri-drag-region="deep" hidden></span>
         <span class="titlebar-spacer" data-tauri-drag-region="deep"></span>
-        <button id="detach" class="titlebar-action" title="Close the Wrapper and give Roon its own window back">Put Roon back</button>
+        <!-- While Now Playing is open: back to Roon (same as its X) -->
+        <button id="stage-minimize" class="titlebar-minimize" title="Minimize the player and go back to Roon" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          <span>Minimize player</span>
+        </button>
+        <button id="open-settings" class="titlebar-icon" title="Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
         <button id="win-min" class="win-btn" title="Minimize">
           <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" /></svg>
         </button>
@@ -39,10 +46,10 @@
       <!-- Shows only until Roon is behind it (the hole is cut once it is) -->
       <div id="hole" class="hole"><span id="hole-note" class="hole-note"></span></div>
 
-      <!-- Player bar: what's playing (left), transport and progress (middle),
-           zone and volume (right) -->
+      <!-- Player bar: what's playing (left, opens Now Playing), transport
+           and progress (middle), zone and volume (right) -->
       <div class="player">
-        <div id="info" class="info" title="Open the Toaster">
+        <div id="info" class="info" title="Now Playing">
           <div class="art-box">
             <img id="art" class="art" alt="" />
             <div id="art-missing" class="art art-placeholder" hidden></div>
@@ -57,14 +64,19 @@
         <div class="middle">
           <div class="transport">
             <!-- Hearts & Library (experimental, Settings): "+" adds the track to
-                 the library, then it's a heart. Invisible (keeping the buttons
-                 centered) unless the feature is on and connected. -->
+                 the library, then it's a heart. Hidden unless the feature is on
+                 and connected. Without it there are three buttons on each side
+                 of play, so they stay centered. -->
             <button id="library-btn" class="icon-btn library spacer" title="Add to library">
               <svg class="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
               <svg class="icon-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg>
             </button>
             <button id="shuffle" class="icon-btn toggle" title="Shuffle">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>
+            </button>
+            <button id="repeat" class="icon-btn toggle" title="Repeat">
+              <svg class="icon-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+              <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>
             </button>
             <button id="previous" class="icon-btn" title="Previous">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/></svg>
@@ -75,10 +87,6 @@
             </button>
             <button id="next" class="icon-btn" title="Next">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg>
-            </button>
-            <button id="repeat" class="icon-btn toggle" title="Repeat">
-              <svg class="icon-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
-              <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>
             </button>
             <button id="radio" class="icon-btn toggle" title="Roon Radio">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
@@ -109,6 +117,151 @@
           </div>
         </div>
       </div>
+
+      <!-- Now Playing: the large player, over Roon and the player bar. Big
+           art, an album-art background (optional), and the bar's own
+           controls, which move in here while it's open. Each is a "piece"
+           the user can move, resize and hide in Edit layout (wrapper.js
+           lays them out from the saved layout and adds the resize
+           handles). -->
+      <section id="stage" class="stage" hidden>
+        <div id="stage-bg" class="stage-bg"></div>
+        <div id="stage-canvas" class="stage-canvas">
+          <div class="piece piece-art" data-piece="art">
+            <div class="piece-content">
+              <img id="stage-art" alt="" />
+              <div id="stage-art-missing" class="art-placeholder" hidden></div>
+            </div>
+          </div>
+          <div class="piece piece-info" data-piece="info"><div class="piece-content"></div></div>
+          <div class="piece piece-transport" data-piece="transport"><div class="piece-content"></div></div>
+          <div class="piece piece-seek" data-piece="seek"><div class="piece-content"></div></div>
+          <div class="piece piece-zone" data-piece="zone"><div class="piece-content"></div></div>
+          <div class="piece piece-volume" data-piece="volume"><div class="piece-content"></div></div>
+          <div id="guide-v" class="guide guide-v"></div>
+          <div id="guide-h" class="guide guide-h"></div>
+        </div>
+
+        <div class="stage-tools">
+          <button id="stage-edit" class="icon-btn" title="Edit layout">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
+          </button>
+          <button id="stage-close" class="icon-btn" title="Back to Roon">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+
+        <!-- Edit layout toolbar -->
+        <div id="stage-editor" class="stage-editor" hidden>
+          <span id="editor-grip" class="editor-grip" title="Drag to move this toolbar">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
+          </span>
+          <span class="editor-hint">Drag to move, handles to resize</span>
+          <span class="editor-sep editor-global"></span>
+          <div id="editor-profile" class="editor-group editor-global">
+            <label class="editor-label" for="editor-profile-select">Profile</label>
+            <select id="editor-profile-select" class="editor-select"></select>
+            <span id="editor-unsaved" class="editor-unsaved" hidden>Unsaved</span>
+            <button id="profile-save" class="editor-btn" title="Save your changes to this profile">Save</button>
+            <button id="profile-save-as" class="editor-btn" title="Save this layout as a new profile">Save as new</button>
+            <button id="profile-rename" class="editor-btn">Rename</button>
+            <button id="profile-delete" class="editor-btn">Delete</button>
+          </div>
+          <span class="editor-sep editor-global"></span>
+          <div class="editor-group editor-global">
+            <span class="editor-label">Show</span>
+            <button class="chip" data-show="art">Art</button>
+            <button class="chip" data-show="info">Track</button>
+            <button class="chip" data-show="transport">Controls</button>
+            <button class="chip" data-show="seek">Seek</button>
+            <button class="chip" data-show="zone">Zone</button>
+            <button class="chip" data-show="volume">Volume</button>
+          </div>
+          <span class="editor-sep editor-global"></span>
+          <div class="editor-group editor-global">
+            <span class="editor-label">Background</span>
+            <button class="chip" data-bg="plain">Plain</button>
+            <button class="chip" data-bg="art">Album art</button>
+            <label class="editor-check" title="Use these fonts, icons and bar styles in the player bar too, when Now Playing is closed"><input id="editor-barstyle" type="checkbox" /> Style player bar</label>
+          </div>
+          <div id="editor-text" class="editor-group" hidden>
+            <span class="editor-sep"></span>
+            <button class="align-btn" data-align="left" title="Align left">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12H3"/><path d="M17 18H3"/><path d="M21 6H3"/></svg>
+            </button>
+            <button class="align-btn" data-align="center" title="Align center">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 12H7"/><path d="M19 18H5"/><path d="M21 6H3"/></svg>
+            </button>
+            <button class="align-btn" data-align="right" title="Align right">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H9"/><path d="M21 18H7"/><path d="M21 6H3"/></svg>
+            </button>
+            <label class="editor-label" for="editor-lines">Title lines</label>
+            <select id="editor-lines" class="editor-select">
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3">3</option>
+            </select>
+          </div>
+          <div id="editor-font" class="editor-group" hidden>
+            <span class="editor-sep"></span>
+            <label class="editor-label" for="editor-font-select">Font</label>
+            <select id="editor-font-select" class="editor-select"></select>
+            <label class="editor-check" title="Use this font for every piece with text"><input id="editor-font-all" type="checkbox" checked /> All</label>
+          </div>
+          <div id="editor-icons" class="editor-group" hidden>
+            <span class="editor-sep"></span>
+            <label class="editor-label" for="editor-icons-select">Icons</label>
+            <select id="editor-icons-select" class="editor-select"></select>
+            <label class="editor-check" title="Use this pack for every piece with icons"><input id="editor-icons-all" type="checkbox" checked /> All</label>
+          </div>
+          <div id="editor-play" class="editor-group" hidden>
+            <span class="editor-sep"></span>
+            <span class="editor-label">Play button</span>
+            <button class="chip" data-play="circle">Circle</button>
+            <button class="chip" data-play="plain">Plain</button>
+          </div>
+          <div id="editor-bar" class="editor-group" hidden>
+            <span class="editor-sep"></span>
+            <label class="editor-label" for="editor-bar-select">Bar</label>
+            <select id="editor-bar-select" class="editor-select">
+              <option value="line">Line</option>
+              <option value="thick">Thick</option>
+              <option value="hairline">Hairline</option>
+              <option value="segments">Segments</option>
+              <option value="wave">Wave</option>
+            </select>
+            <span class="editor-label">Color</span>
+            <button class="chip" data-color="app" title="The app's colors (for Wave: the rainbow)">App</button>
+            <button class="chip" data-color="album" title="The playing album's color">Album</button>
+            <button class="chip" data-color="custom">Custom</button>
+            <input id="editor-color" class="editor-color" type="color" value="#7b5fc7" hidden />
+            <span id="editor-wave" class="editor-group" hidden>
+              <label class="editor-check"><input id="editor-mirror" type="checkbox" /> Mirrored</label>
+              <span id="editor-side" class="editor-group">
+                <button class="chip" data-side="top">Top</button>
+                <button class="chip" data-side="bottom">Bottom</button>
+              </span>
+            </span>
+          </div>
+          <div id="editor-volume" class="editor-group" hidden>
+            <span class="editor-sep"></span>
+            <button class="chip" data-vertical="true">Vertical</button>
+            <button class="chip" data-vertical="false">Horizontal</button>
+          </div>
+          <span class="editor-sep"></span>
+          <button id="editor-reset" class="editor-btn" title="Undo your changes since the profile was last saved">Reset</button>
+          <button id="editor-done" class="editor-btn primary">Done</button>
+        </div>
+
+        <!-- Questions while editing (save changes, profile names) -->
+        <div id="stage-dialog" class="stage-dialog" hidden>
+          <div class="dialog-box" role="dialog" aria-modal="true">
+            <p id="dialog-text" class="dialog-text"></p>
+            <input id="dialog-input" class="dialog-input" type="text" maxlength="40" autocomplete="off" spellcheck="false" hidden />
+            <div id="dialog-buttons" class="dialog-buttons"></div>
+          </div>
+        </div>
+      </section>
 
       <!-- Queue panel: slides over the right side of Roon (wrapper.js tells
            wrapper.rs to keep this part of the window) -->

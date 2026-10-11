@@ -5,7 +5,9 @@
 //! The icon in the tray and on the Toaster's and Settings' taskbar buttons:
 //! Vulk's simplified toaster as a flat shape, white on a dark taskbar and
 //! black on a light one, like Windows' own tray icons. It switches when the
-//! taskbar's light/dark mode changes.
+//! taskbar's light/dark mode changes. While the Wrapper is switched on, the
+//! tray shows the Roon: Wrapped mark instead (in color, so it suits either
+//! taskbar).
 //!
 //! icons/tray.ico holds the white shape at 16 to 64 px; the size that fits the
 //! screen's scaling is picked, so it stays sharp. (The full-color app icon,
@@ -18,6 +20,25 @@ use tauri::image::Image;
 use tauri::{AppHandle, Manager};
 
 const TRAY_FILE: &[u8] = include_bytes!("../icons/tray.ico");
+
+/// The Roon: Wrapped mark, in the sizes Windows uses at each display
+/// scaling: the tray icon while the Wrapper is on, and the Wrapper window's
+/// own icons (wrapper.rs). 16 and 24 are drawn on the pixel grid; the rest
+/// are scaled from the full-size artwork.
+pub const WRAPPED_ICONS: &[(i32, &[u8])] = &[
+    (16, include_bytes!("../icons/wrapped/16.png")),
+    (20, include_bytes!("../icons/wrapped/20.png")),
+    (24, include_bytes!("../icons/wrapped/24.png")),
+    (28, include_bytes!("../icons/wrapped/28.png")),
+    (32, include_bytes!("../icons/wrapped/32.png")),
+    (40, include_bytes!("../icons/wrapped/40.png")),
+    (48, include_bytes!("../icons/wrapped/48.png")),
+    (56, include_bytes!("../icons/wrapped/56.png")),
+    (64, include_bytes!("../icons/wrapped/64.png")),
+    (96, include_bytes!("../icons/wrapped/96.png")),
+    (128, include_bytes!("../icons/wrapped/128.png")),
+    (256, include_bytes!("../icons/wrapped/256.png")),
+];
 
 /// The shape at about `size` pixels (the closest size in the file, bigger
 /// rather than smaller), white, or black when `light` is true.
@@ -48,20 +69,46 @@ fn screen_scale(app: &AppHandle) -> f64 {
         .unwrap_or(1.0)
 }
 
-/// The tray icon for the current taskbar mode: 16 px at 100% scaling.
-pub fn tray_icon(app: &AppHandle) -> Option<Image<'static>> {
+/// The Wrapped mark at about `size` pixels (the closest size, bigger rather
+/// than smaller).
+pub fn wrapped_icon(size: u32) -> Option<Image<'static>> {
+    let size = size as i32;
+    let &(_, png) = WRAPPED_ICONS
+        .iter()
+        .find(|(s, _)| *s >= size)
+        .or(WRAPPED_ICONS.last())?;
+    let image = ico::IconImage::read_png(Cursor::new(png)).ok()?;
+    Some(Image::new_owned(image.rgba_data().to_vec(), image.width(), image.height()))
+}
+
+/// The tray icon (16 px at 100% scaling): the Wrapped mark while the
+/// Wrapper is on, otherwise the toaster for the taskbar's mode (`light`).
+fn tray_image(app: &AppHandle, light: bool) -> Option<Image<'static>> {
     let size = (16.0 * screen_scale(app)).ceil() as u32;
-    taskbar_icon(size, taskbar_is_light())
+    if crate::wrapper::enabled(app) {
+        wrapped_icon(size)
+    } else {
+        taskbar_icon(size, light)
+    }
+}
+
+/// The tray icon for now (see `tray_image`).
+pub fn tray_icon(app: &AppHandle) -> Option<Image<'static>> {
+    tray_image(app, taskbar_is_light())
+}
+
+/// Puts the right icon in the tray, after the Wrapper is switched on or off.
+pub fn refresh_tray(app: &AppHandle) {
+    if let (Some(tray), Some(icon)) = (app.tray_by_id("tray"), tray_icon(app)) {
+        let _ = tray.set_icon(Some(icon));
+    }
 }
 
 /// Sets the tray icon and the windows' taskbar-button icons (24 px at 100%
 /// scaling) for the current taskbar mode.
 fn apply(app: &AppHandle, light: bool) {
     let scale = screen_scale(app);
-    if let (Some(tray), Some(icon)) = (
-        app.tray_by_id("tray"),
-        taskbar_icon((16.0 * scale).ceil() as u32, light),
-    ) {
+    if let (Some(tray), Some(icon)) = (app.tray_by_id("tray"), tray_image(app, light)) {
         let _ = tray.set_icon(Some(icon));
     }
     if let Some(icon) = taskbar_icon((24.0 * scale).ceil() as u32, light) {
@@ -123,7 +170,7 @@ fn taskbar_is_light() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::taskbar_icon;
+    use super::{taskbar_icon, wrapped_icon, WRAPPED_ICONS};
 
     #[test]
     fn icon_sizes_and_colors() {
@@ -139,5 +186,17 @@ mod tests {
         assert_eq!(opaque(white.rgba()), opaque(black.rgba()));
         assert!(white.rgba().chunks(4).filter(|p| p[3] > 128).all(|p| p[0] > 200));
         assert!(black.rgba().chunks(4).filter(|p| p[3] > 128).all(|p| p[0] == 0));
+    }
+
+    #[test]
+    fn wrapped_sizes() {
+        // Every embedded size decodes at its own size
+        for &(size, _) in WRAPPED_ICONS {
+            let icon = wrapped_icon(size as u32).expect("icon decodes");
+            assert_eq!((icon.width(), icon.height()), (size as u32, size as u32));
+        }
+        // In-between sizes round up; past the biggest, the biggest
+        assert_eq!(wrapped_icon(18).unwrap().width(), 20);
+        assert_eq!(wrapped_icon(1000).unwrap().width(), 256);
     }
 }

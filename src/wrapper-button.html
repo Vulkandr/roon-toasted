@@ -1,0 +1,87 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roon: Wrapped</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <style>
+      /* "Enable Wrapper", sitting in the middle of Roon's own title bar
+         while Roon has its own window (see wrapper_button.rs). The window
+         is transparent and exactly the button's size. Solid enough to read
+         on a dark or a light title bar. */
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+        user-select: none;
+      }
+
+      button {
+        all: unset;
+        box-sizing: border-box;
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        border: 1px solid #3c3c45;
+        border-radius: 999px;
+        background: #26262b;
+        color: #c9c9d2;
+        font-family: var(--font-ui);
+        font-size: 12px;
+        white-space: nowrap;
+        cursor: default;
+        transition: color 0.15s, border-color 0.15s, background 0.15s;
+      }
+
+      button:hover {
+        color: #fff;
+        border-color: #7b5fc7;
+        background: #302a40;
+      }
+
+      button:active {
+        background: #3a3150;
+      }
+
+      /* The Roon: Wrapped mark, sharp at each scaling (as in the Wrapper's
+         title bar) */
+      .logo {
+        width: 14px;
+        height: 14px;
+        flex: none;
+        background: image-set(
+            url("assets/wrapped-16.png") 1x,
+            url("assets/wrapped-20.png") 1.25x,
+            url("assets/wrapped-24.png") 1.5x,
+            url("assets/wrapped-28.png") 1.75x,
+            url("assets/wrapped-32.png") 2x
+          )
+          center / 14px 14px no-repeat;
+      }
+    </style>
+  </head>
+
+  <body>
+    <button id="enable" title="Put Roon back in the Wrapper">
+      <span class="logo"></span>
+      <span>Enable Wrapper</span>
+    </button>
+    <script type="module">
+      const { invoke } = window.__TAURI__.core;
+      document.getElementById("enable").addEventListener("click", () => {
+        invoke("open_window", { window: "wrapper" }).catch((err) => console.error(err));
+      });
+      // No right-click menu
+      document.addEventListener("contextmenu", (event) => event.preventDefault());
+    </script>
+  </body>
+</html>

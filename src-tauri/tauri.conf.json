@@ -90,6 +90,38 @@
         "decorations": false,
         "shadow": false,
         "transparent": true
+      },
+      {
+        "label": "changelog",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
+        "url": "changelog.html",
+        "title": "Roon: Toasted Changelog",
+        "width": 640,
+        "height": 780,
+        "minWidth": 460,
+        "minHeight": 400,
+        "center": true,
+        "visible": false,
+        "decorations": false,
+        "shadow": true
+      },
+      {
+        "label": "wrapper-button",
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
+        "url": "wrapper-button.html",
+        "title": "Roon: Wrapped",
+        "width": 140,
+        "height": 22,
+        "visible": false,
+        "focus": false,
+        "focusable": false,
+        "skipTaskbar": true,
+        "resizable": false,
+        "maximizable": false,
+        "minimizable": false,
+        "decorations": false,
+        "shadow": false,
+        "transparent": true
       }
     ],
     "security": {

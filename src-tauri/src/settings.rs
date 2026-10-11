@@ -91,6 +91,17 @@ pub struct AppSettings {
     /// Global hotkey that opens (or hides) the Wrapper; None = off. Only
     /// registered while the Wrapper is on. Changed through `set_hotkey`.
     pub hotkey_wrapper: Option<String>,
+    /// The Wrapper's Now Playing layout (where its pieces sit, how big they
+    /// are, which show): the page's own data, kept as it is (see
+    /// wrapper.js, "stage").
+    pub wrapper_stage: serde_json::Value,
+    /// The app version that ran last. A different one at startup means the
+    /// app was updated, and the Changelog opens (changelog.rs). Set there,
+    /// not through `update_settings`.
+    pub last_version: Option<String>,
+    /// The "new" highlights in Settings that have been seen (hovered), by
+    /// name (settings.js, `data-new`).
+    pub seen_new: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -124,6 +135,9 @@ impl Default for AppSettings {
             wrapper_enabled: false,
             wrapper_at_sign_in: true,
             hotkey_wrapper: Some("Ctrl+Alt+W".into()),
+            wrapper_stage: serde_json::Value::Object(Default::default()),
+            last_version: None,
+            seen_new: Vec::new(),
         }
     }
 }
@@ -277,6 +291,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         }
         if name == "hotkeyPlayer" || name == "hotkeySearch" || name == "hotkeyWrapper" {
             return Err("Use set_hotkey to change a hotkey.".into());
+        }
+        if name == "lastVersion" {
+            return Err("The last version is set by the app itself.".into());
         }
         if !fields.contains_key(name) {
             return Err(format!("Unknown setting: {name}"));

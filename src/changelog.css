@@ -1,0 +1,79 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+   License, v. 2.0. If a copy of the MPL was not distributed with this
+   file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+/* The Changelog: one column of version cards, newest first (colors, title
+   bar and cards come from settings.css) */
+main.changelog {
+  display: block;
+  max-width: 620px;
+  padding: 20px 24px 28px;
+}
+
+main.changelog > h1 {
+  margin-bottom: 16px;
+}
+
+#versions {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Version number, its date, and a tag on the one that's installed */
+.version-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.version-head h2 {
+  margin: 0;
+  text-align: left;
+}
+
+.version-date {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.version-tag {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--accent);
+  border: 1px solid var(--accent);
+}
+
+/* The installed version stands out a little */
+.version.installed {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.version h3 {
+  margin: 14px 0 6px;
+}
+
+.version ul {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.version li {
+  margin: 6px 0;
+  line-height: 1.45;
+}
+
+.version li strong {
+  font-weight: 700;
+}
+
+.changelog-error {
+  color: var(--muted);
+  text-align: center;
+}

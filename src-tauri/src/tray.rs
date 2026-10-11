@@ -2,10 +2,12 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The tray icon and its right-click menu: Open Toaster, Open Wrapper (only
-//! while the Wrapper is switched on), Settings, a few quick settings (Toasts,
-//! Auto-Hide, Remember Window, Start with Windows) and Quit. Double-clicking
-//! the icon opens the Toaster.
+//! The tray icon and its right-click menu: Open Wrapper (only while the
+//! Wrapper is switched on), Open Toaster, Settings, a few quick settings
+//! (Toasts, Auto-Hide, Remember Window, Start with Windows) and Quit.
+//! Double-clicking the icon opens the Wrapper while it's switched on,
+//! otherwise the Toaster. The icon itself is the Wrapped mark while the
+//! Wrapper is on (icon.rs).
 //!
 //! The quick settings change the same saved settings as the Settings window
 //! (through `update_settings`), and their check marks follow any change made
@@ -26,7 +28,7 @@ use crate::ToasterMode;
 /// The quick settings' menu items, kept so their check marks can be updated.
 pub struct TrayMenu {
     menu: Menu<Wry>,
-    /// "Open Wrapper", in the menu only while the Wrapper is on.
+    /// "Open Wrapper", first in the menu, only while the Wrapper is on.
     wrapper: MenuItem<Wry>,
     wrapper_shown: AtomicBool,
     toasts: CheckMenuItem<Wry>,
@@ -85,7 +87,8 @@ pub fn build(app: &App) -> tauri::Result<()> {
         ],
     )?;
 
-    // The flat toaster, white or black to suit the taskbar (see icon.rs)
+    // The flat toaster, white or black to suit the taskbar, or the Wrapped
+    // mark while the Wrapper is on (see icon.rs)
     let icon = crate::icon::tray_icon(app.handle())
         .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
 
@@ -97,20 +100,27 @@ pub fn build(app: &App) -> tauri::Result<()> {
         .show_menu_on_left_click(false)
         .on_menu_event(on_menu)
         .on_tray_icon_event(|tray, event| {
-            // Double-click opens the Toaster. Windows and Mac only; Linux trays
-            // don't report clicks, so the menu's "Open Toaster" covers it there.
+            // Double-click opens the Wrapper while it's on, otherwise the
+            // Toaster. Windows and Mac only; Linux trays don't report clicks,
+            // so the menu covers it there.
             if let TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
             } = event
             {
-                crate::open_toaster(tray.app_handle(), ToasterMode::Player);
+                let app = tray.app_handle();
+                if crate::wrapper::enabled(app) {
+                    crate::wrapper::open(app);
+                } else {
+                    crate::open_toaster(app, ToasterMode::Player);
+                }
             }
         })
         .build(app)?;
 
+    // "Open Wrapper" goes first, above "Open Toaster"
     if saved.wrapper_enabled {
-        menu.insert(&open_wrapper, 1)?;
+        menu.insert(&open_wrapper, 0)?;
     }
 
     app.manage(TrayMenu {
@@ -177,12 +187,14 @@ pub fn sync(app: &AppHandle, settings: &AppSettings) {
         .set_checked(settings.toaster_window == ToasterWindow::Remember);
     let _ = menu.start_with_windows.set_checked(settings.start_with_windows);
 
-    // "Open Wrapper" comes and goes with the Wrapper switch
+    // "Open Wrapper" and the Wrapped tray icon come and go with the
+    // Wrapper switch
     if menu.wrapper_shown.swap(settings.wrapper_enabled, Ordering::Relaxed) != settings.wrapper_enabled {
         let _ = if settings.wrapper_enabled {
-            menu.menu.insert(&menu.wrapper, 1)
+            menu.menu.insert(&menu.wrapper, 0)
         } else {
             menu.menu.remove(&menu.wrapper)
         };
+        crate::icon::refresh_tray(app);
     }
 }

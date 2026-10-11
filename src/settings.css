@@ -361,6 +361,24 @@ button:disabled {
   }
 }
 
+/* Something new since the last update (data-new in settings.html): the
+   same slow glow, until the mouse goes over it once (settings.js) */
+.is-new {
+  animation: attention 2.6s ease-in-out infinite;
+}
+
+.hotkey-row.is-new {
+  border-radius: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .is-new {
+    animation: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+}
+
 /* The "Enable ..." line under it takes the status dot's color, at the same
    speed, so the two pulses stay in step */
 #core-detail.attention {
@@ -893,6 +911,7 @@ button:disabled {
 /* Updates: the state line, download bar and release notes */
 .update-action-row {
   justify-content: flex-end;
+  gap: 8px;
 }
 
 .update-detail,

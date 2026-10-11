@@ -9,6 +9,7 @@ use tauri::{
 
 mod autostart;
 mod browse;
+mod changelog;
 mod hotkeys;
 mod icon;
 mod launch;
@@ -223,6 +224,7 @@ fn open_window(app: AppHandle, window: String) -> Result<(), String> {
         TOASTER_WINDOW => open_toaster(&app, ToasterMode::Player),
         SETTINGS_WINDOW => show(&app, SETTINGS_WINDOW),
         wrapper::WRAPPER_WINDOW => wrapper::open(&app),
+        changelog::CHANGELOG_WINDOW => changelog::open(&app),
         _ => return Err(format!("Unknown window: {window}")),
     }
     Ok(())
@@ -242,9 +244,11 @@ fn hide_if_app_unfocused(app: AppHandle) {
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
         let toaster = app.get_webview_window(TOASTER_WINDOW);
         let settings = app.get_webview_window(SETTINGS_WINDOW);
+        // The Changelog, opened from Settings, counts as part of the group
+        let changelog = app.get_webview_window(changelog::CHANGELOG_WINDOW);
         let focused =
             |w: &Option<WebviewWindow>| w.as_ref().is_some_and(|w| w.is_focused().unwrap_or(false));
-        if focused(&toaster) || focused(&settings) {
+        if focused(&toaster) || focused(&settings) || focused(&changelog) {
             return;
         }
         for window in [toaster, settings].into_iter().flatten() {
@@ -322,8 +326,10 @@ pub fn run() {
         // reopen where they were left. Restoring is done in setup() (the
         // Toaster only when the setting says "remember"; the Wrapper's
         // maximized state when it first opens, see wrapper.rs). Settings
-        // always opens centered, and the toast and the taskbar widget place
-        // themselves (toast.rs, widget.rs), so none of those are tracked.
+        // and the Changelog always open centered, and the toast, the
+        // taskbar widget and the "Enable Wrapper" button place themselves
+        // (toast.rs, widget.rs, wrapper_button.rs), so none of those are
+        // tracked.
         builder = builder.plugin(
             tauri_plugin_window_state::Builder::new()
                 .with_state_flags(WINDOW_STATE)
@@ -331,6 +337,8 @@ pub fn run() {
                     SETTINGS_WINDOW,
                     toast::TOAST_WINDOW,
                     widget::WIDGET_WINDOW,
+                    wrapper::BUTTON_WINDOW,
+                    changelog::CHANGELOG_WINDOW,
                 ])
                 .skip_initial_state(TOASTER_WINDOW)
                 .skip_initial_state(wrapper::WRAPPER_WINDOW)
@@ -374,7 +382,12 @@ pub fn run() {
             icon::start(app.handle());
 
             #[cfg(windows)]
-            for label in [TOASTER_WINDOW, SETTINGS_WINDOW, toast::TOAST_WINDOW] {
+            for label in [
+                TOASTER_WINDOW,
+                SETTINGS_WINDOW,
+                toast::TOAST_WINDOW,
+                changelog::CHANGELOG_WINDOW,
+            ] {
                 if let Some(window) = app.get_webview_window(label) {
                     round_corners(&window);
                 }
@@ -433,6 +446,9 @@ pub fn run() {
             // Hearts and add-to-library, if switched on (see library.rs)
             library::start(app.handle());
             update::start(app.handle());
+
+            // Just updated: the Changelog opens (see changelog.rs)
+            changelog::at_start(app.handle());
 
             // After switching Cores (the app restarts itself), bring Settings
             // back so the new connection can be seen
@@ -530,6 +546,7 @@ pub fn run() {
             wrapper::wrapper_hole,
             wrapper::wrapper_status,
             wrapper::wrapper_put_back,
+            wrapper::list_fonts,
             skin::wrapper_colors
         ])
         .build(tauri::generate_context!())

@@ -53,7 +53,7 @@
 //! Roon's window loses its resize borders (WS_THICKFRAME) while it's in
 //! the Wrapper. Otherwise its invisible borders, a few pixels outside what
 //! it draws, poke out past the Wrapper's edges, and grabbing there would
-//! resize Roon instead of the Wrapper. They come back with "Put Roon back".
+//! resize Roon instead of the Wrapper. They come back with "Return Roon".
 //!
 //! Roon's minimum size is measured when it's taken in (asked to be 1 x 1
 //! while hidden, it stops at its minimum), so the Wrapper's own minimum is
@@ -61,8 +61,10 @@
 //!
 //! While Open or Parked, Roon's window is a tool window: no taskbar button
 //! or Alt-Tab entry of its own (the Wrapper is the one you switch to).
-//! "Put Roon back" (and quitting Toasted) returns to Off: Roon gets its own
-//! window, taskbar button and old position back.
+//! "Return Roon" (and quitting Toasted) returns to Off: Roon gets its own
+//! window, taskbar button and old position back. While the Wrapper is still
+//! switched on, an "Enable Wrapper" button then sits in Roon's title bar to
+//! wrap it again (wrapper_button.rs).
 //!
 //! If Toasted stops without putting Roon back (a crash, a dev rebuild, an
 //! update), Roon is left hidden; the next start finds it (it still has the
@@ -84,6 +86,10 @@ pub(crate) fn visible_hole() -> Option<(windows::Win32::Foundation::HWND, [i32; 
 
 /// The Wrapper window's label, as set in tauri.conf.json.
 pub(crate) const WRAPPER_WINDOW: &str = "wrapper";
+
+/// The "Enable Wrapper" button's window (in Roon's title bar, see
+/// wrapper_button.rs), as set in tauri.conf.json.
+pub(crate) const BUTTON_WINDOW: &str = "wrapper-button";
 
 /// Whether the Wrapper is being moved right now (dragged, or within a
 /// moment of its last move step). The sidebar filter pauses its refreshes
@@ -138,7 +144,7 @@ pub fn wrapper_status(app: AppHandle) -> WrapperStatus {
     }
 }
 
-/// The page's "Put Roon back" button.
+/// The page's "Return Roon" button.
 #[tauri::command]
 pub fn wrapper_put_back(app: AppHandle) {
     put_back(&app);
@@ -183,7 +189,7 @@ pub fn park(app: &AppHandle) {
     let _ = app;
 }
 
-/// Gives Roon its own window back and hides the Wrapper ("Put Roon back",
+/// Gives Roon its own window back and hides the Wrapper ("Return Roon",
 /// switching the Wrapper off, quitting Toasted).
 pub fn put_back(app: &AppHandle) {
     #[cfg(windows)]
@@ -218,12 +224,36 @@ pub fn at_sign_in(app: &AppHandle) {
     }
 }
 
+/// The font families installed on this PC, sorted, for Now Playing's
+/// font choices (the page lists its bundled fonts first).
+#[tauri::command]
+pub fn list_fonts() -> Vec<String> {
+    #[cfg(windows)]
+    {
+        windows_wrapper::installed_fonts()
+    }
+    #[cfg(not(windows))]
+    {
+        Vec::new()
+    }
+}
+
 /// After a settings change: switching the Wrapper off puts Roon back.
+/// Either way, the "Enable Wrapper" button in Roon's title bar comes or
+/// goes with the switch.
 pub fn settings_changed(app: &AppHandle, before: &settings::AppSettings, after: &settings::AppSettings) {
     if before.wrapper_enabled && !after.wrapper_enabled {
         put_back(app);
     }
+    #[cfg(windows)]
+    if before.wrapper_enabled != after.wrapper_enabled {
+        button::refresh(app);
+    }
 }
+
+#[cfg(windows)]
+#[path = "wrapper_button.rs"]
+mod button;
 
 #[cfg(windows)]
 mod windows_wrapper {
@@ -356,9 +386,43 @@ mod windows_wrapper {
     /// Roon's window style before we took its resize borders (0 = not
     /// changed).
     static ROON_STYLE: AtomicIsize = AtomicIsize::new(0);
-    /// The smallest client area Roon allows (real pixels), measured when
-    /// it's taken in.
-    static ROON_MIN_CLIENT: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+    /// The smallest client area Roon allows, measured when it's taken in,
+    /// in logical pixels: in real pixels it depends on the screen's scaling,
+    /// so it's worked out again for whichever screen the Wrapper is on.
+    static ROON_MIN_CLIENT: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+
+    /// Every font family Windows knows, once each, sorted; the "@" ones
+    /// (vertical versions of East Asian fonts) left out.
+    pub fn installed_fonts() -> Vec<String> {
+        use std::collections::BTreeSet;
+        use windows::Win32::Foundation::LPARAM;
+        use windows::Win32::Graphics::Gdi::{
+            EnumFontFamiliesExW, GetDC, ReleaseDC, DEFAULT_CHARSET, LOGFONTW, TEXTMETRICW,
+        };
+
+        unsafe extern "system" fn each(font: *const LOGFONTW, _: *const TEXTMETRICW, _: u32, lparam: LPARAM) -> i32 {
+            // SAFETY: GDI passes a valid LOGFONTW; lparam is our set.
+            unsafe {
+                let name = &(*font).lfFaceName;
+                let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+                let name = String::from_utf16_lossy(&name[..len]);
+                if !name.starts_with('@') && !name.is_empty() {
+                    (*(lparam.0 as *mut BTreeSet<String>)).insert(name);
+                }
+            }
+            1
+        }
+
+        let mut names = BTreeSet::new();
+        let wanted = LOGFONTW { lfCharSet: DEFAULT_CHARSET, ..Default::default() };
+        // SAFETY: the screen DC, released after; the set outlives the call.
+        unsafe {
+            let dc = GetDC(None);
+            EnumFontFamiliesExW(dc, &wanted, Some(each), LPARAM(&mut names as *mut _ as isize), 0);
+            ReleaseDC(None, dc);
+        }
+        names.into_iter().collect()
+    }
 
     fn hwnd_of(cell: &AtomicIsize) -> Option<HWND> {
         let raw = cell.load(Ordering::Relaxed);
@@ -374,6 +438,12 @@ mod windows_wrapper {
         *NOTE.lock().unwrap() = text.into();
     }
 
+    /// The Wrapper isn't holding Roon (Roon has its own window, or isn't
+    /// running).
+    pub(super) fn is_off() -> bool {
+        STATE.load(Ordering::Relaxed) == OFF
+    }
+
     pub fn status(_app: &AppHandle) -> WrapperStatus {
         WrapperStatus {
             open: STATE.load(Ordering::Relaxed) == OPEN,
@@ -387,6 +457,8 @@ mod windows_wrapper {
         remember_host(app);
         watch_foreground();
         follow_moves();
+        // A Roon of its own while the Wrapper is on gets the title-bar button
+        super::button::refresh(app);
 
         // A Roon still marked as ours: an earlier run stopped without
         // putting it back
@@ -410,7 +482,50 @@ mod windows_wrapper {
     fn remember_host(app: &AppHandle) {
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
             if let Ok(hwnd) = window.hwnd() {
-                HOST_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
+                let hwnd = HWND(hwnd.0);
+                let first = HOST_HWND.swap(hwnd.0 as isize, Ordering::Relaxed) != hwnd.0 as isize;
+                if first {
+                    let dpi = (window.scale_factor().unwrap_or(1.0) * 96.0).round() as u32;
+                    set_icons(hwnd, dpi);
+                }
+            }
+        }
+    }
+
+    /// The Wrapper's own icon, in the sizes Windows uses (see icon.rs)
+    use crate::icon::WRAPPED_ICONS as ICONS;
+    /// The icons we gave the window (0 = none yet), to free when replaced.
+    static SMALL_ICON: AtomicIsize = AtomicIsize::new(0);
+    static BIG_ICON: AtomicIsize = AtomicIsize::new(0);
+
+    /// Gives the Wrapper's window its icons for a display scaling (`dpi`,
+    /// 96 = 100%): small (16 px at 100%) and big (32 px at 100%; the
+    /// taskbar and Alt+Tab), each made from the closest size that's at
+    /// least as big. Tauri would give one picture for every size, which
+    /// Windows shrinks and blurs.
+    fn set_icons(hwnd: HWND, dpi: u32) {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateIconFromResourceEx, DestroyIcon, SendMessageW, HICON, ICON_BIG, ICON_SMALL,
+            LR_DEFAULTCOLOR, WM_SETICON,
+        };
+        let dpi = dpi.clamp(96, 96 * 4) as i32;
+        for (kind, base, cell) in [(ICON_SMALL, 16, &SMALL_ICON), (ICON_BIG, 32, &BIG_ICON)] {
+            let size = (base * dpi + 48) / 96;
+            let Some(&(_, png)) = ICONS.iter().find(|(s, _)| *s >= size).or(ICONS.last()) else {
+                continue;
+            };
+            // SAFETY: a PNG icon image (supported since Vista) at the
+            // size wanted; the window keeps using it until it's replaced.
+            unsafe {
+                let Ok(icon) = CreateIconFromResourceEx(png, true, 0x0003_0000, size, size, LR_DEFAULTCOLOR) else {
+                    continue;
+                };
+                SendMessageW(hwnd, WM_SETICON, Some(WPARAM(kind as usize)), Some(LPARAM(icon.0 as isize)));
+                let old = cell.swap(icon.0 as isize, Ordering::Relaxed);
+                if old != 0 {
+                    let _ = DestroyIcon(HICON(old as *mut core::ffi::c_void));
+                }
             }
         }
     }
@@ -450,11 +565,15 @@ mod windows_wrapper {
         }
 
         STATE.store(OPEN, Ordering::Relaxed);
+        super::button::refresh(app);
         *LAST_REGION.lock().unwrap() = None;
         // A remembered size still has to fit the screen it opens on
         crate::fit_to_screen(app, WRAPPER_WINDOW, false);
         // fit_to_screen sets the configured minimum; Roon may need more
-        if let Some((w, h)) = *LEARNED_MIN.lock().unwrap() {
+        // (but never more than this screen has room for)
+        let learned = *LEARNED_MIN.lock().unwrap();
+        if let Some(min) = learned {
+            let (w, h) = within_screen(&window, min);
             let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(w, h))));
         }
         let _ = window.unminimize();
@@ -492,6 +611,7 @@ mod windows_wrapper {
             return;
         }
         STATE.store(PARKED, Ordering::Relaxed);
+        super::button::refresh(app);
         *VISIBLE_HOLE.lock().unwrap() = None;
         DRAGGING.store(false, Ordering::Relaxed);
         drop_thumbnails();
@@ -529,6 +649,8 @@ mod windows_wrapper {
         }
         ROON_HWND.store(0, Ordering::Relaxed);
         set_note("");
+        // Roon's title bar gets "Enable Wrapper" (if the Wrapper is still on)
+        super::button::refresh(app);
     }
 
     /// Runs `sync` every 150 ms until the Wrapper is switched Off.
@@ -692,6 +814,8 @@ mod windows_wrapper {
         // in the middle of a resize the Wrapper can't get smaller than that
         if !maximized {
             if let Some((min_w, min_h)) = *ROON_MIN_CLIENT.lock().unwrap() {
+                // In this screen's real pixels
+                let (min_w, min_h) = ((min_w * scale).ceil() as i32, (min_h * scale).ceil() as i32);
                 let extra = ((min_w - hole.2).max(0), (min_h - (hole.3 + bar)).max(0));
                 if extra.0 > 0 || extra.1 > 0 {
                     grow_minimum(&window, scale, extra.0, extra.1);
@@ -726,11 +850,18 @@ mod windows_wrapper {
             *ROON_OFFSET.lock().unwrap() = Some((r.0 - h.0, r.1 - h.1));
         }
         if open_hole {
-            report.0 = Some([hole.0, hole.1, hole.2, hole.3]);
-            *VISIBLE_COVERS.lock().unwrap() = covers
+            let hole = [hole.0, hole.1, hole.2, hole.3];
+            let covers: Vec<[i32; 4]> = covers
                 .iter()
                 .map(|c| [host_rect.0 + c[0], host_rect.1 + c[1], c[2], c[3]])
                 .collect();
+            // Nothing of Roon shows when the covers take the whole hole
+            // (the page's Now Playing view), and the sidebar filter should
+            // know that
+            if !subtract(hole, &covers).is_empty() {
+                report.0 = Some(hole);
+            }
+            *VISIBLE_COVERS.lock().unwrap() = covers;
         }
 
         // Roon still wouldn't get that small (its minimum wasn't measured,
@@ -747,9 +878,30 @@ mod windows_wrapper {
         }
     }
 
+    /// A minimum size (logical pixels) cut down to what the Wrapper's
+    /// screen has room for. A minimum bigger than the screen made Windows
+    /// push the Wrapper partly onto the next screen, where the scaling (and
+    /// so the minimum) changed, back and forth until the app locked up.
+    fn within_screen(window: &tauri::WebviewWindow, (w, h): (f64, f64)) -> (f64, f64) {
+        let room = window.current_monitor().ok().flatten().map(|monitor| {
+            let area = monitor.work_area();
+            let scale = monitor.scale_factor();
+            (
+                (area.size.width as f64 / scale).floor(),
+                (area.size.height as f64 / scale).floor(),
+            )
+        });
+        match room {
+            Some((room_w, room_h)) => (w.min(room_w), h.min(room_h)),
+            None => (w, h),
+        }
+    }
+
     /// Raises the Wrapper's minimum size so its hole fits Roon's minimum
     /// (`extra_w` / `extra_h` real pixels more than now), growing the
-    /// Wrapper if it's smaller than that.
+    /// Wrapper if it's smaller than that. Never past what the screen has
+    /// room for (`within_screen`): then Roon is a little bigger than the
+    /// hole instead.
     fn grow_minimum(window: &tauri::WebviewWindow, scale: f64, extra_w: i32, extra_h: i32) {
         use tauri::{LogicalSize, Size};
         let Ok(inner) = window.inner_size() else {
@@ -772,6 +924,7 @@ mod windows_wrapper {
             let mut learned = LEARNED_MIN.lock().unwrap();
             let current = learned.unwrap_or(configured);
             let min = (current.0.max(need.0).ceil(), current.1.max(need.1).ceil());
+            let min = within_screen(window, min);
             if Some(min) == *learned {
                 return;
             }
@@ -965,7 +1118,7 @@ mod windows_wrapper {
     /// bar that belongs to a process whose program is Roon.exe. Visible
     /// windows win; with `include_ours`, a hidden one counts too if it has
     /// the tool-window style we give Roon (one we parked earlier).
-    fn find_roon(include_ours: bool) -> Option<HWND> {
+    pub(super) fn find_roon(include_ours: bool) -> Option<HWND> {
         use windows::core::BOOL;
         use windows::Win32::Foundation::LPARAM;
         use windows::Win32::UI::WindowsAndMessaging::EnumWindows;
@@ -994,7 +1147,7 @@ mod windows_wrapper {
             .map(|(hwnd, _, _)| hwnd)
     }
 
-    fn is_roon_main_window(hwnd: HWND) -> bool {
+    pub(super) fn is_roon_main_window(hwnd: HWND) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::{
             GetWindow, GetWindowLongPtrW, GetWindowTextLengthW, GetWindowThreadProcessId,
             GWL_STYLE, GW_OWNER, WS_CAPTION,
@@ -1109,7 +1262,16 @@ mod windows_wrapper {
         }
         if let Some((w, h)) = client_size(roon) {
             if w > 50 && h > 50 {
-                *ROON_MIN_CLIENT.lock().unwrap() = Some((w, h));
+                // The scaling of the screen Roon is on (the Wrapper's, if
+                // Roon is somewhere off screen)
+                let app = APP.get();
+                let scale = app
+                    .zip(window_rect(roon))
+                    .and_then(|(app, (x, y, _, _))| app.monitor_from_point(x as f64 + 1.0, y as f64 + 1.0).ok().flatten())
+                    .map(|monitor| monitor.scale_factor())
+                    .or_else(|| app?.get_webview_window(WRAPPER_WINDOW)?.scale_factor().ok())
+                    .unwrap_or(1.0);
+                *ROON_MIN_CLIENT.lock().unwrap() = Some((w as f64 / scale, h as f64 / scale));
             }
         }
     }
@@ -1211,13 +1373,13 @@ mod windows_wrapper {
         }
     }
 
-    fn is_window(hwnd: HWND) -> bool {
+    pub(super) fn is_window(hwnd: HWND) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::IsWindow;
         // SAFETY: any handle value is fine to ask about.
         unsafe { IsWindow(Some(hwnd)).as_bool() }
     }
 
-    fn is_visible(hwnd: HWND) -> bool {
+    pub(super) fn is_visible(hwnd: HWND) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
         // SAFETY: any handle value is fine to ask about.
         unsafe { IsWindowVisible(hwnd).as_bool() }
@@ -1229,7 +1391,7 @@ mod windows_wrapper {
         unsafe { IsZoomed(hwnd).as_bool() }
     }
 
-    fn is_minimized(hwnd: HWND) -> bool {
+    pub(super) fn is_minimized(hwnd: HWND) -> bool {
         use windows::Win32::UI::WindowsAndMessaging::IsIconic;
         // SAFETY: a valid window handle.
         unsafe { IsIconic(hwnd).as_bool() }
@@ -1256,7 +1418,7 @@ mod windows_wrapper {
     }
 
     /// (x, y, width, height) of a window in real pixels on the screen.
-    fn window_rect(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+    pub(super) fn window_rect(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
         use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
         let mut rect = RECT::default();
         // SAFETY: a valid window handle and out-pointer.
@@ -1321,6 +1483,10 @@ mod windows_wrapper {
             SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
             SWP_NOZORDER, WINDOWPOS, WM_EXITSIZEMOVE, WM_MOVING, WM_WINDOWPOSCHANGING,
         };
+        // Moved to a screen with different scaling: icons for that size
+        if msg == windows::Win32::UI::WindowsAndMessaging::WM_DPICHANGED {
+            set_icons(hwnd, (wparam.0 & 0xFFFF) as u32);
+        }
         if STATE.load(Ordering::Relaxed) == OPEN {
             // Dragged by the title bar: the first step of the drag swaps
             // Roon for its live picture, letting go swaps it back
@@ -1377,8 +1543,45 @@ mod windows_wrapper {
                 }
             }
         }
+        // The smallest size Windows lets the Wrapper be: whatever Tauri
+        // says, but never bigger than the screen it's on. A minimum wider
+        // than the screen (dragged from a big screen onto a small one, a
+        // portrait one, say) left it hanging onto the next screen; with
+        // different scaling there, each screen's resize pushed it back to
+        // the other, endlessly, and the app locked up.
+        if msg == windows::Win32::UI::WindowsAndMessaging::WM_GETMINMAXINFO {
+            // SAFETY: Tauri fills in the sizes first, as every subclass must
+            // pass messages on.
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            if let Some((room_w, room_h)) = screen_room(hwnd) {
+                // SAFETY: for this message lparam points at a MINMAXINFO.
+                let info = unsafe { &mut *(lparam.0 as *mut windows::Win32::UI::WindowsAndMessaging::MINMAXINFO) };
+                info.ptMinTrackSize.x = info.ptMinTrackSize.x.min(room_w);
+                info.ptMinTrackSize.y = info.ptMinTrackSize.y.min(room_h);
+            }
+            return result;
+        }
         // SAFETY: passing the message on, as every subclass must.
         unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+    }
+
+    /// The size of the work area (the screen minus the taskbar, real
+    /// pixels) of the screen a window is mostly on.
+    fn screen_room(hwnd: HWND) -> Option<(i32, i32)> {
+        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        // SAFETY: a valid window handle, and an out-struct with its size set.
+        unsafe {
+            let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+                return None;
+            }
+            let work = info.rcWork;
+            Some((work.right - work.left, work.bottom - work.top))
+        }
     }
 
     /// The first step of a drag by the title bar: shows a live picture of
@@ -1601,6 +1804,7 @@ mod windows_wrapper {
         _thread: u32,
         _time: u32,
     ) {
+        super::button::on_foreground(window);
         if STATE.load(Ordering::Relaxed) != OPEN {
             return;
         }

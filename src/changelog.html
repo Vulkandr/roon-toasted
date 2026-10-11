@@ -1,0 +1,35 @@
+<!doctype html>
+<!-- This Source Code Form is subject to the terms of the Mozilla Public
+     License, v. 2.0. If a copy of the MPL was not distributed with this
+     file, You can obtain one at https://mozilla.org/MPL/2.0/. -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Roon: Toasted Changelog</title>
+    <link rel="stylesheet" href="fonts.css" />
+    <!-- Colors, title bar and cards from Settings -->
+    <link rel="stylesheet" href="settings.css" />
+    <link rel="stylesheet" href="changelog.css" />
+    <script type="module" src="/changelog.js" defer></script>
+  </head>
+
+  <body>
+    <!-- What's new in each version, from changelog.json (see changelog.rs).
+         Opens by itself after an update, and from Settings > Updates. -->
+    <div class="titlebar" data-tauri-drag-region="deep">
+      <span class="titlebar-logo"></span>
+      <span class="titlebar-title">Roon: Toasted Changelog</span>
+      <button id="win-close" class="win-btn close" title="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+    </div>
+
+    <div class="page-scroll">
+      <main class="changelog">
+        <h1>What's new</h1>
+        <div id="versions"></div>
+      </main>
+    </div>
+  </body>
+</html>
