@@ -496,6 +496,35 @@ blurGroup.querySelector(".label-on").addEventListener("click", () => setHideOnBl
 invoke("get_settings").then(showHideOnBlur);
 listen("settings-changed", (event) => showHideOnBlur(event.payload));
 
+// ===== Artists (all of them, or just the main one) =======================
+//
+// Some tracks list dozens of supporting artists. Main shows only the first
+// one Roon lists, everywhere (Toaster, Wrapper, toasts, widget, queue).
+
+const mainArtistOnly = document.querySelector("#main-artist-only");
+const artistsGroup = document.querySelector("#artists-group");
+
+function showMainArtistOnly(settings) {
+  mainArtistOnly.checked = settings.mainArtistOnly;
+}
+
+async function setMainArtistOnly(on) {
+  mainArtistOnly.checked = on;
+  try {
+    await invoke("update_settings", { changes: { mainArtistOnly: on } });
+  } catch (err) {
+    console.error(err);
+    showMainArtistOnly(await invoke("get_settings"));
+  }
+}
+
+mainArtistOnly.addEventListener("change", () => setMainArtistOnly(mainArtistOnly.checked));
+artistsGroup.querySelector(".label-off").addEventListener("click", () => setMainArtistOnly(false));
+artistsGroup.querySelector(".label-on").addEventListener("click", () => setMainArtistOnly(true));
+
+invoke("get_settings").then(showMainArtistOnly);
+listen("settings-changed", (event) => showMainArtistOnly(event.payload));
+
 // ===== Toaster colors =====================================================
 
 const toasterColors = document.querySelector("#toaster-colors");
@@ -920,7 +949,7 @@ function showLibrary(settings) {
 const LIBRARY_TEXT = {
   off: "Off",
   connecting: "Connecting to the Roon Core...",
-  ready: "Ready: the Playing tab has the button.",
+  ready: "Ready: the Playing tab has the button, and the quality light is on.",
   unsupported: "Not available with this Roon version.",
   unavailable: "Waiting for the Roon Core...",
 };
@@ -1049,7 +1078,11 @@ updateAction.addEventListener("click", async () => {
 librarySwitch(updatesEnabled, "#updates-group", (on) => ({ checkForUpdates: on }));
 invoke("get_settings").then(showUpdates);
 listen("settings-changed", (event) => showUpdates(event.payload));
-invoke("update_status").then(showUpdateStatus);
+// Opening Settings checks again if the last check is old (10 minutes)
+invoke("update_check_if_stale").then(showUpdateStatus);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") invoke("update_check_if_stale").then(showUpdateStatus);
+});
 listen("update-status", (event) => showUpdateStatus(event.payload));
 
 // ===== Version / update in the title bar ===================================

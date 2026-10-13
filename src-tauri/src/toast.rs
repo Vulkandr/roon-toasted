@@ -79,7 +79,7 @@ pub fn zones_updated(app: &AppHandle, payload: &ZonesPayload) {
         .as_ref()
         .and_then(|id| payload.zones.iter().find(|z| &z.zone_id == id));
     let now_playing = zone.and_then(|z| z.now_playing.as_ref());
-    let track = now_playing.map(|np| (np.title.clone(), np.artist.clone(), np.album.clone()));
+    let track = now_playing.map(|np| (np.title.clone(), np.artist_full.clone(), np.album.clone()));
 
     let new_track = {
         let state = app.state::<ToastState>();

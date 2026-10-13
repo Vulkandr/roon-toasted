@@ -57,6 +57,7 @@ const stageCanvas = $("#stage-canvas");
 const stageArt = $("#stage-art");
 const stageArtMissing = $("#stage-art-missing");
 const stageEditBtn = $("#stage-edit");
+const stageUnsaved = $("#stage-unsaved");
 const stageEditor = $("#stage-editor");
 const guideV = $("#guide-v");
 const guideH = $("#guide-h");
@@ -462,7 +463,10 @@ const PIECES = {
   info: { kind: "box", node: ".text", text: true },
   transport: { kind: "auto", node: ".transport", icons: true },
   seek: { kind: "box", node: ".progress", text: true, bar: true },
-  zone: { kind: "auto", node: "#zone-button", text: true, icons: true },
+  // (the light leaves the zone's row for a piece of its own; listed first so
+  // it's taken out before the row moves)
+  quality: { kind: "auto", node: "#quality", text: true },
+  zone: { kind: "auto", node: "#zone-row", text: true, icons: true },
   volume: { kind: "bar", node: ".volume-row", text: true, icons: true, bar: true },
 };
 const DEFAULT_ICONS = "lucide";
@@ -487,6 +491,9 @@ const DEFAULT_LAYOUT = {
     info: { visible: true, x: 0.02, y: 0.97, w: 0.3, size: 0.0173, align: "left", lines: 1, font: DEFAULT_FONT, ...NO_TEXT_EDGE },
     transport: { visible: true, x: 0.5, y: 0.942, size: 0.0173, icons: DEFAULT_ICONS, play: "circle", ...NO_ICON_EDGE },
     seek: { visible: true, x: 0.5, y: 0.988, w: 0.39, size: 0.0173, font: DEFAULT_FONT, bar: "line", mirror: true, side: "top", labelScale: 1, ...NO_TEXT_EDGE },
+    // anchor "transport": sits just right of the controls, whatever the
+    // window's size, until it's moved (then null, and x / y count)
+    quality: { visible: true, anchor: "transport", x: 0.87, y: 0.925, size: 0.016, format: false, formatSide: "right", font: DEFAULT_FONT, ...NO_TEXT_EDGE },
     zone: { visible: true, x: 0.985, y: 0.975, size: 0.024, font: DEFAULT_FONT, icons: DEFAULT_ICONS, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
     volume: { visible: true, x: 0.99, y: 0.45, len: 0.78, size: 0.0173, vertical: true, font: DEFAULT_FONT, icons: DEFAULT_ICONS, bar: "line", mirror: true, side: "top", labelScale: 1, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
   },
@@ -779,6 +786,7 @@ $("#stage-minimize").addEventListener("click", () => closeStage());
 // Puts every piece where the layout says, in pixels: first its size, then
 // (knowing how big it came out) its place
 function layoutStage() {
+  renderFormat();
   styleControls();
   const W = stageCanvas.clientWidth;
   const H = stageCanvas.clientHeight;
@@ -822,6 +830,16 @@ function layoutStage() {
     }
     el.style.left = `${fromFraction(p.x, W, el.offsetWidth)}px`;
     el.style.top = `${fromFraction(p.y, H, el.offsetHeight)}px`;
+  }
+  // Pieces anchored beside another (the Quality light by the controls)
+  for (const id of PIECE_IDS) {
+    const to = layout.pieces[id].anchor;
+    if (!to || !layout.pieces[to]?.visible) continue;
+    const el = pieces[id];
+    const by = pieces[to];
+    const gap = Math.round(layout.pieces[id].size * H * 0.4);
+    el.style.left = `${clamp(by.offsetLeft + by.offsetWidth + gap, 0, Math.max(0, W - el.offsetWidth))}px`;
+    el.style.top = `${clamp(by.offsetTop + Math.round((by.offsetHeight - el.offsetHeight) / 2), 0, Math.max(0, H - el.offsetHeight))}px`;
   }
   fitWaves();
 }
@@ -875,10 +893,14 @@ function styleControls() {
     if (spec.text) control.style.fontFamily = on ? fontStack(p.font) : "";
     if (spec.bar) {
       if (on) {
-        control.dataset.bar = p.bar || "line";
+        control.dataset.bar = barOf(id);
+        // The canvas styles share their slider rules (wrapper.css)
+        if (CANVAS_BARS.includes(control.dataset.bar)) control.dataset.canvasBar = "";
+        else delete control.dataset.canvasBar;
         control.style.setProperty("--accent", barColor(p).color);
       } else {
         delete control.dataset.bar;
+        delete control.dataset.canvasBar;
         control.style.removeProperty("--accent");
       }
     }
@@ -893,9 +915,42 @@ function styleControls() {
 //
 // The seek and volume sliders' looks (`bar`): Line, Thick, Hairline and
 // Segments are CSS on the slider itself (wrapper.css, by the piece's
-// data-bar); Wave is drawn on a canvas behind it (bars.js).
+// data-bar); Wave and the other drawn styles are painted on a canvas
+// behind it (bars.js).
 
-const waves = {}; // piece id -> WaveBar while that piece is a wave
+const waves = {}; // piece id -> WaveBar while that piece is drawn on a canvas
+// The bar styles drawn on a canvas (bars.js); the rest are CSS
+// The seek bar's Waveform looks (bars.js painters), drawn from Roon's own
+// waveform of the playing track
+// Any of them can be Alive too (`waveAlive`: bouncing gently near the
+// playhead) and colored by loudness (`waveLoud`)
+const WAVEFORM_LOOKS = {
+  roon: "roonwave",
+  pills: "wfpills",
+  shape: "wfshape",
+  neon: "wfneon",
+  led: "wfled",
+  art: "wfart",
+};
+// The piece's look, if it's one we have ("alive" and "<look>-alive" were
+// briefly separate looks while trying them out)
+function waveLookOf(p) {
+  const look = p.waveLook === "alive" ? "roon" : (p.waveLook || "").replace(/-alive$/, "");
+  return WAVEFORM_LOOKS[look] ? look : "roon";
+}
+const waveAliveOf = (p) => !!p.waveAlive || p.waveLook === "alive" || !!p.waveLook?.endsWith("-alive");
+// Looks Loudness doesn't change (Album art shows the cover)
+const LOUDNESS_FIXED = ["art"];
+const CANVAS_BARS = ["wave", "spectrum", "beam", "glow", "dots", "ribbon", "neon", "mountain", "particles", "plasma", "art", ...Object.values(WAVEFORM_LOOKS)];
+
+// The style a bar is drawn in: with Waveform on and a waveform for what's
+// playing, the picked waveform look; otherwise the Bar choice (which is
+// also the waveform's fallback)
+function barOf(id) {
+  const p = layout.pieces[id];
+  if (id === "seek" && p.waveform && currentWaveform()) return WAVEFORM_LOOKS[waveLookOf(p)];
+  return p.bar || "line";
+}
 const BAR_INPUTS = { seek, volume };
 
 // A bar's color: the app's, the playing album's, or one the user picked.
@@ -914,7 +969,8 @@ function fitWaves() {
     const { mode, color } = barColor(p);
     // In the player bar the sliders are always shown, horizontal, at the
     // bar's own size
-    const want = barStyled() && (!open || p.visible) && p.bar === "wave";
+    const style = barOf(id);
+    const want = barStyled() && (!open || p.visible) && CANVAS_BARS.includes(style);
     if (!want) {
       waves[id]?.remove();
       delete waves[id];
@@ -923,15 +979,26 @@ function fitWaves() {
     const input = BAR_INPUTS[id];
     waves[id] ??= new WaveBar(input.parentElement, input);
     waves[id].fit({
+      style,
+      // Roon's waveform, for the Waveform looks
+      waveform: Object.values(WAVEFORM_LOOKS).includes(style) ? currentWaveform() : null,
+      // Waveform colors by loudness, and the Alive versions
+      loudColor: id === "seek" && !!p.waveLoud,
+      alive: id === "seek" && waveAliveOf(p),
+      // The cover, for the Album art style (the small one is plenty)
+      art: artKey && !art.hidden ? art.src : null,
       vertical: open && id === "volume" && !!p.vertical,
       // One-sided waves are for edges; in the player bar it's mirrored
       mirror: !open || p.mirror !== false,
       side: p.side || "top",
+      // The app's look: the rainbow for Wave, blue-purple for the rest
       rainbow: mode === "app",
       color,
       // The playhead follows what's playing (or the picked color)
       dot: mode === "custom" ? color : albumAccent || APP_ACCENT,
       fontSize: open ? Math.max(MIN_TEXT_SIZE, p.size * H) : parseFloat(getComputedStyle(input.parentElement).fontSize) || 13,
+      // The times' and knob's scale, so the wave's ends line up with them
+      labelScale: open ? p.labelScale || 1 : 1,
     });
     waves[id].setPlaying(zone?.state === "playing");
   }
@@ -1017,6 +1084,7 @@ function loadLayout(saved) {
   layoutStage();
   applyIcons();
   fillProfiles();
+  showUnsaved();
 }
 
 let saveTimer;
@@ -1041,6 +1109,7 @@ function saveLayout() {
 const profileSelect = $("#editor-profile-select");
 const unsavedTag = $("#editor-unsaved");
 const profileSaveBtn = $("#profile-save");
+const profileSaveAsBtn = $("#profile-save-as");
 const profileRenameBtn = $("#profile-rename");
 const profileDeleteBtn = $("#profile-delete");
 
@@ -1067,8 +1136,14 @@ function showUnsaved() {
   const dirty = isDirty();
   const own = !isPreset(activeProfile);
   unsavedTag.hidden = !dirty;
+  // Outside the editor: the "Unsaved Style" tag by the pencil
+  stageUnsaved.hidden = !dirty || editing;
   profileSaveBtn.hidden = !own;
   profileSaveBtn.disabled = !dirty;
+  // The button that would keep the changes glows: Save for your own
+  // profiles, Save as new for a preset (those can't be overwritten)
+  profileSaveBtn.classList.toggle("unsaved", dirty && own);
+  profileSaveAsBtn.classList.toggle("unsaved", dirty && !own);
   profileRenameBtn.hidden = !own;
   profileDeleteBtn.hidden = !own;
 }
@@ -1173,7 +1248,7 @@ profileSelect.addEventListener("change", async () => {
   useProfile(wanted);
 });
 profileSaveBtn.addEventListener("click", saveProfile);
-$("#profile-save-as").addEventListener("click", saveAsNew);
+profileSaveAsBtn.addEventListener("click", saveAsNew);
 profileRenameBtn.addEventListener("click", async () => {
   const profile = profiles.find((p) => p.id === activeProfile);
   if (!profile) return;
@@ -1305,6 +1380,7 @@ function setEditing(on) {
   stageEditor.style.transform = "";
   stageEditBtn.classList.toggle("on", on);
   stageEditBtn.title = on ? "Done editing" : "Edit layout";
+  showUnsaved();
   select(null);
   if (on) {
     loadFonts();
@@ -1315,14 +1391,15 @@ function setEditing(on) {
   }
 }
 
-// Done (or anything else that ends editing): unsaved changes are asked about
+// Done (or anything else that ends editing): unsaved changes stay as they
+// are, in use, with "Unsaved Style" by the pencil until they're saved or
+// discarded (only switching profiles asks, since that would drop them)
 async function finishEditing() {
-  if (!(await settleChanges("Save your changes?"))) return false;
   setEditing(false);
   return true;
 }
 
-// Closing Now Playing while editing asks first, too
+// Closing Now Playing while editing just ends editing, too
 async function closeStage() {
   if (editing && !(await finishEditing())) return;
   await dropStage();
@@ -1346,6 +1423,7 @@ async function dropStage() {
 }
 
 stageEditBtn.addEventListener("click", () => (editing ? finishEditing() : setEditing(true)));
+stageUnsaved.addEventListener("click", () => setEditing(true));
 
 // The toolbar can be dragged by its grip, so it's never in the way of a
 // piece (it goes back to the top center each time editing starts)
@@ -1395,10 +1473,20 @@ function select(id) {
 const editorText = $("#editor-text");
 const editorFont = $("#editor-font");
 const editorIcons = $("#editor-icons");
+const editorQuality = $("#editor-quality");
+const qualityFormatCheck = $("#editor-quality-format");
+const formatSide = $("#editor-format-side");
 const editorPlay = $("#editor-play");
 const editorBar = $("#editor-bar");
 const barSelect = $("#editor-bar-select");
 const editorWave = $("#editor-wave");
+const editorWaveform = $("#editor-waveform");
+const waveformCheck = $("#editor-waveform-check");
+const waveformLook = $("#editor-waveform-look");
+const waveformLoud = $("#editor-waveform-loud");
+const waveformLoudLabel = $("#editor-waveform-loud-label");
+const waveformAlive = $("#editor-waveform-alive");
+const waveformAliveLabel = $("#editor-waveform-alive-label");
 const colorInput = $("#editor-color");
 const mirrorCheck = $("#editor-mirror");
 const editorSide = $("#editor-side");
@@ -1456,6 +1544,14 @@ function refreshEditor() {
   }
   const withIcons = selected && PIECES[selected].icons ? layout.pieces[selected] : null;
   editorIcons.hidden = !withIcons;
+  editorQuality.hidden = selected !== "quality";
+  qualityFormatCheck.checked = !!layout.pieces.quality.format;
+  // The side: greyed out (still in place) while File format is off
+  formatSide.classList.toggle("disabled", !qualityFormatCheck.checked);
+  for (const chip of formatSide.querySelectorAll(".chip")) {
+    chip.disabled = !qualityFormatCheck.checked;
+    chip.classList.toggle("on", chip.dataset.formatSide === (layout.pieces.quality.formatSide || "right"));
+  }
   if (withIcons) iconsSelect.value = withIcons.icons || DEFAULT_ICONS;
   const textEdgeOf = selected && PIECES[selected].text ? layout.pieces[selected] : null;
   editorTextEdge.hidden = !textEdgeOf;
@@ -1482,15 +1578,32 @@ function refreshEditor() {
   }
   const withBar = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
   editorBar.hidden = !withBar;
+  editorWaveform.hidden = selected !== "seek";
   if (withBar) {
     barSelect.value = withBar.bar || "line";
     const { mode, color } = barColor(withBar);
     for (const chip of editorBar.querySelectorAll(".chip[data-color]")) chip.classList.toggle("on", chip.dataset.color === mode);
-    colorInput.hidden = mode !== "custom";
-    if (mode === "custom") colorInput.value = toHex(color);
-    editorWave.hidden = barSelect.value !== "wave";
+    // The picker and Top / Bottom stay in place, greyed out while they don't
+    // apply, so nothing on the line moves when they come into play
+    colorInput.disabled = mode !== "custom";
+    colorInput.value = toHex(color);
+    // (Waveform: the seek bar's real waveform, drawn on the canvas too)
+    const waveform = selected === "seek" && !!withBar.waveform;
+    editorWave.hidden = !CANVAS_BARS.includes(barSelect.value) && !waveform;
+    waveformCheck.checked = waveform;
+    waveformLook.classList.toggle("off", !waveform);
+    waveformLook.value = waveLookOf(withBar);
+    // Loudness: with the picker; greyed out for the looks it doesn't change
+    waveformLoudLabel.classList.toggle("off", !waveform);
+    const fixed = LOUDNESS_FIXED.includes(waveformLook.value);
+    waveformLoudLabel.classList.toggle("disabled", fixed);
+    waveformLoud.disabled = fixed;
+    waveformLoud.checked = !!withBar.waveLoud;
+    waveformAliveLabel.classList.toggle("off", !waveform);
+    waveformAlive.checked = waveAliveOf(withBar);
     mirrorCheck.checked = withBar.mirror !== false;
-    editorSide.hidden = mirrorCheck.checked;
+    editorSide.classList.toggle("disabled", mirrorCheck.checked);
+    for (const chip of editorSide.querySelectorAll(".chip")) chip.disabled = mirrorCheck.checked;
     const vertical = selected === "volume" && withBar.vertical;
     for (const chip of editorSide.querySelectorAll(".chip")) {
       chip.classList.toggle("on", chip.dataset.side === (withBar.side || "top"));
@@ -1601,6 +1714,41 @@ colorInput.addEventListener("input", () => {
   layoutStage();
   scheduleSave();
 });
+for (const chip of formatSide.querySelectorAll(".chip")) {
+  chip.addEventListener("click", () => {
+    layout.pieces.quality.formatSide = chip.dataset.formatSide;
+    changed();
+  });
+}
+qualityFormatCheck.addEventListener("change", () => {
+  if (selected !== "quality") return;
+  layout.pieces.quality.format = qualityFormatCheck.checked;
+  changed();
+});
+waveformCheck.addEventListener("change", () => {
+  if (selected !== "seek") return;
+  layout.pieces.seek.waveform = waveformCheck.checked;
+  changed();
+});
+waveformLook.addEventListener("change", () => {
+  if (selected !== "seek") return;
+  const p = layout.pieces.seek;
+  p.waveAlive = waveAliveOf(p); // (an old "-alive" look keeps its Alive)
+  p.waveLook = waveformLook.value;
+  changed();
+});
+waveformAlive.addEventListener("change", () => {
+  if (selected !== "seek") return;
+  const p = layout.pieces.seek;
+  p.waveLook = waveLookOf(p);
+  p.waveAlive = waveformAlive.checked;
+  changed();
+});
+waveformLoud.addEventListener("change", () => {
+  if (selected !== "seek") return;
+  layout.pieces.seek.waveLoud = waveformLoud.checked;
+  changed();
+});
 mirrorCheck.addEventListener("change", () => {
   if (!selected || !PIECES[selected].bar) return;
   layout.pieces[selected].mirror = mirrorCheck.checked;
@@ -1689,6 +1837,7 @@ function dragTo(cx, cy) {
     let x = s.px + dx;
     let y = s.py + dy;
     ({ x, y } = snapTo(x, y, w, h, W, H, drag.id));
+    if (dx || dy) p.anchor = null; // moved by hand: its own place from now on
     p.x = toFraction(clamp(x, 0, Math.max(0, W - w)), W, w);
     p.y = toFraction(clamp(y, 0, Math.max(0, H - h)), H, h);
     layoutStage();
@@ -1714,24 +1863,27 @@ function dragTo(cx, cy) {
       height = clamp(s.ph + sy * dy, MIN_LENGTH, H);
       p.len = height / H;
     } else {
-      // Its thickness: the whole piece scales (the bar, its times or value
-      // and icon, and its length with them), around the middle of its
-      // length; the far side stays put
+      // Its thickness only: the bar gets taller (or thinner) while its
+      // length stays, and its times or value and icon keep their size
+      // (the "Text & icons" scale makes up for it, within its range); the
+      // far side stays put
       const extent = sx !== 0 ? s.pw : s.ph;
       const moved = sx !== 0 ? sx * dx : sy * dy;
       const sizePx = s.size * H;
       let factor = clamp((extent + moved) / extent, MIN_TEXT_SIZE / sizePx, (H * MAX_SIZE[kind]) / sizePx);
-      factor = Math.min(factor, W / s.pw, H / s.ph);
+      factor = Math.min(factor, alongX ? H / s.ph : W / s.pw);
       p.size = s.size * factor;
-      if (kind === "box") p.w = s.w * factor;
-      else p.len = s.len * factor;
-      width = s.pw * factor;
-      height = s.ph * factor;
-      const left = alongX ? s.px + (s.pw - width) / 2 : sx < 0 ? s.px + s.pw - width : s.px;
-      const top = alongX ? (sy < 0 ? s.py + s.ph - height : s.py) : s.py + (s.ph - height) / 2;
-      p.x = toFraction(clamp(left, 0, Math.max(0, W - width)), W, width);
-      p.y = toFraction(clamp(top, 0, Math.max(0, H - height)), H, height);
+      p.labelScale = clamp((s.labelScale || 1) / factor, 0.5, 2);
       layoutStage();
+      // Place it from its new size, keeping the side opposite the handle
+      const nw = el.offsetWidth;
+      const nh = el.offsetHeight;
+      const left = alongX ? s.px : sx < 0 ? s.px + s.pw - nw : s.px;
+      const top = alongX ? (sy < 0 ? s.py + s.ph - nh : s.py) : s.py;
+      p.x = toFraction(clamp(left, 0, Math.max(0, W - nw)), W, nw);
+      p.y = toFraction(clamp(top, 0, Math.max(0, H - nh)), H, nh);
+      layoutStage();
+      refreshEditor();
       return;
     }
   } else if (sx !== 0 && sy !== 0) {
@@ -1830,6 +1982,7 @@ document.addEventListener("keydown", (event) => {
   const el = pieces[selected];
   const dx = { ArrowLeft: -step, ArrowRight: step }[event.key] ?? 0;
   const dy = { ArrowUp: -step, ArrowDown: step }[event.key] ?? 0;
+  p.anchor = null;
   p.x = toFraction(clamp(el.offsetLeft + dx, 0, Math.max(0, W - el.offsetWidth)), W, el.offsetWidth);
   p.y = toFraction(clamp(el.offsetTop + dy, 0, Math.max(0, H - el.offsetHeight)), H, el.offsetHeight);
   layoutStage();
@@ -1845,9 +1998,96 @@ document.addEventListener("keydown", (event) => {
 
 let libraryReady = false;
 let libraryTracks = {}; // zoneId -> the zone's track state (null = loading)
+// zoneId -> { key, data }: the last waveform Roon sent for the zone's track.
+// Kept while that track stays loaded, in case Roon drops it on pause.
+let waveforms = {};
+let shownWaveform = null;
+
+const trackKey = (t) => (t ? t.trackId || t.title : null);
+
+// Roon's waveform of what the shown zone is playing (Hearts & Library),
+// or null
+function currentWaveform() {
+  if (!libraryReady || !zone?.nowPlaying) return null;
+  const held = waveforms[zone.zoneId];
+  const track = libraryTracks[zone.zoneId];
+  if (!held || (track && trackKey(track) !== held.key)) return null;
+  return held.data;
+}
+
+// Picks up new waveforms; redraws the seek bar when its waveform comes,
+// goes or changes
+function syncWaveform() {
+  for (const [zoneId, track] of Object.entries(libraryTracks)) {
+    if (track?.waveform) waveforms[zoneId] = { key: trackKey(track), data: track.waveform };
+  }
+  const now = currentWaveform();
+  if (now === shownWaveform) return;
+  shownWaveform = now;
+  if (!layout.pieces.seek.waveform) return;
+  styleControls();
+  fitWaves();
+}
 let libraryBusy = false;
 
+// The audio quality dot left of the zone icon (the track state carries the
+// zone's signal path source, grey while paused or stopped)
+const quality = $("#quality");
+const qualityDot = quality.querySelector(".quality-dot");
+const QUALITY_NAMES = { low: "Low Quality", cd: "CD Quality", hires: "Hi-Res" };
+
+function renderQuality() {
+  // Always there while connected; grey when there's nothing to read
+  const connected = libraryReady && zone != null;
+  const playing = connected && zone.nowPlaying ? libraryTracks[zone.zoneId]?.quality : null;
+  const kind = playing && QUALITY_NAMES[playing.class] ? playing.class : "none";
+  const wasHidden = quality.hidden;
+  quality.hidden = !connected;
+  qualityDot.classList.remove("low", "cd", "hires", "none");
+  qualityDot.classList.add(kind);
+  quality.dataset.tip = kind === "none" ? "No signal" : QUALITY_NAMES[kind];
+  // The zone piece in Now Playing changed width
+  if (wasHidden !== quality.hidden && !stage.hidden) layoutStage();
+}
+
+// The playing file's format next to the light: Now Playing only, with the
+// Quality piece's File format on. Kept while paused (Roon clears the
+// signal path then) as long as the same track is loaded.
+const qualityFormat = $("#quality-format");
+let formats = {}; // zoneId -> { key, text }
+
+// "FLAC 44.1kHz 16bit 2ch", "MP3 320kbps 44.1kHz 2ch", "DSF 2.8MHz 1bit 2ch"
+function formatText(q) {
+  const parts = [];
+  if (q.format) parts.push(q.format.toUpperCase());
+  if (q.class === "low" && q.bitRate) parts.push(`${q.bitRate > 10000 ? Math.round(q.bitRate / 1000) : q.bitRate}kbps`);
+  if (q.sampleRate) {
+    parts.push(q.sampleRate >= 1e6 ? `${+(q.sampleRate / 1e6).toFixed(1)}MHz` : `${+(q.sampleRate / 1000).toFixed(1)}kHz`);
+  }
+  if (q.bitsPerSample && q.class !== "low") parts.push(`${q.bitsPerSample}bit`);
+  if (q.channels) parts.push(`${q.channels}ch`);
+  return parts.join(" ");
+}
+
+function renderFormat() {
+  let text = "";
+  if (!stage.hidden && layout.pieces.quality.format && libraryReady && zone?.nowPlaying) {
+    const track = libraryTracks[zone.zoneId];
+    const live = track?.quality ? formatText(track.quality) : "";
+    if (live) formats[zone.zoneId] = { key: trackKey(track), text: live };
+    const held = formats[zone.zoneId];
+    if (held && (!track || trackKey(track) === held.key)) text = held.text;
+  }
+  quality.dataset.formatSide = layout.pieces.quality.formatSide || "right";
+  if (qualityFormat.textContent !== text) qualityFormat.textContent = text;
+  qualityFormat.hidden = !text;
+  // (it hangs off the light, so the piece's size doesn't change with it)
+}
+
 function renderLibrary() {
+  renderQuality();
+  renderFormat();
+  syncWaveform();
   const show = libraryReady && zone != null && zone.nowPlaying != null;
   libraryBtn.classList.toggle("spacer", !show);
   if (!show) return;
@@ -1900,7 +2140,11 @@ libraryBtn.addEventListener("click", async () => {
 
 function setLibraryStatus(status) {
   libraryReady = status.state === "ready";
-  if (!libraryReady) libraryTracks = {}; // states are only valid per connection
+  if (!libraryReady) {
+    libraryTracks = {}; // states are only valid per connection
+    waveforms = {};
+    formats = {};
+  }
   renderLibrary();
 }
 

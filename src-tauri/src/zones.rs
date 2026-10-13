@@ -17,6 +17,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use roon_api::zone::LoopMode;
@@ -64,7 +65,13 @@ pub struct ZoneView {
 #[serde(rename_all = "camelCase")]
 pub struct NowPlayingView {
     pub title: String,
+    /// What the pages show: every artist Roon lists, or just the first one
+    /// (General > Artists, see `shown_artist`).
     pub artist: String,
+    /// Every artist, as Roon sends it (toast.rs tells tracks apart by it, so
+    /// flipping the setting doesn't look like a new track).
+    #[serde(skip)]
+    pub artist_full: String,
     pub album: String,
     pub image_key: Option<String>,
     /// Track length in seconds.
@@ -118,6 +125,45 @@ fn play_state(state: PlayState) -> &'static str {
     }
 }
 
+/// General > Artists: "Main" shows only the first artist Roon lists for a
+/// track (some tracks list dozens of supporting artists).
+static MAIN_ARTIST_ONLY: AtomicBool = AtomicBool::new(true);
+
+/// The first of Roon's artists ("A / B / C" -> "A").
+pub fn main_artist(full: &str) -> &str {
+    full.split(" / ").next().unwrap_or(full).trim()
+}
+
+/// The artist line as the setting wants it.
+pub fn shown_artist(full: &str) -> String {
+    if MAIN_ARTIST_ONLY.load(Ordering::Relaxed) {
+        main_artist(full).to_string()
+    } else {
+        full.to_string()
+    }
+}
+
+/// Called at startup and when the setting changes: re-labels the zones and
+/// the queue the pages already have.
+pub fn set_main_artist_only(app: &AppHandle, on: bool) {
+    if MAIN_ARTIST_ONLY.swap(on, Ordering::Relaxed) == on {
+        return;
+    }
+    let zones = app.state::<Zones>();
+    let payload = {
+        let mut inner = zones.inner.lock().unwrap();
+        for zone in inner.zones.values_mut() {
+            if let Some(np) = zone.now_playing.as_mut() {
+                np.artist = shown_artist(&np.artist_full);
+            }
+        }
+        Zones::payload(&inner)
+    };
+    // Straight to the pages: not a zone change, so no toast
+    let _ = app.emit("roon-zones", &payload);
+    crate::queue::reshow_artists(app);
+}
+
 fn zone_view(zone: &Zone) -> ZoneView {
     let now_playing = zone.now_playing.as_ref().map(|np| {
         // Roon sends the same info at three detail levels; use the richest one available.
@@ -134,7 +180,8 @@ fn zone_view(zone: &Zone) -> ZoneView {
         };
         NowPlayingView {
             title,
-            artist,
+            artist: shown_artist(&artist),
+            artist_full: artist,
             album,
             image_key: np.image_key.clone(),
             length: np.length,
@@ -221,8 +268,9 @@ impl Zones {
     pub fn init(&self, app: &AppHandle) {
         let _ = self.app.set(app.clone());
         if let Some(path) = settings::path(app) {
-            let picked = settings::load(&path).selected_zone_id;
-            self.inner.lock().unwrap().picked_zone_id = picked;
+            let saved = settings::load(&path);
+            MAIN_ARTIST_ONLY.store(saved.main_artist_only, Ordering::Relaxed);
+            self.inner.lock().unwrap().picked_zone_id = saved.selected_zone_id;
             let _ = self.settings_path.set(path);
         }
     }

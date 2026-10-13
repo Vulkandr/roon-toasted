@@ -482,6 +482,22 @@ button:disabled {
   display: none;
 }
 
+/* Album and artist only as wide as their text (otherwise the whole width
+   of the piece is a link), lined up the way the piece is aligned */
+.piece-info .album,
+.piece-info .artist {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.piece-info[data-align="center"] :is(.album, .artist) {
+  align-self: center;
+}
+
+.piece-info[data-align="right"] :is(.album, .artist) {
+  align-self: flex-end;
+}
+
 /* Links to Roon's pages (wrapper.js): underlined on hover, the "On" and
    "Performed by" labels not (an inline-block isn't underlined with its
    parent) */
@@ -550,9 +566,11 @@ button:disabled {
   background: var(--hover);
 }
 
+/* The gaps follow the times' size, not the bar's thickness, so a taller
+   bar doesn't push its times away */
 .piece .progress {
   max-width: none;
-  gap: 0.75em;
+  gap: calc(0.75em * var(--label-scale, 1));
 }
 
 .piece .time {
@@ -592,7 +610,7 @@ button:disabled {
   max-width: none;
   width: 100%;
   height: 100%;
-  gap: 0.5em;
+  gap: calc(0.5em * var(--label-scale, 1));
 }
 
 .piece .volume-row input[type="range"] {
@@ -653,8 +671,14 @@ button:disabled {
 
 [data-bar="thick"] input[type="range"]::-webkit-slider-thumb,
 [data-bar="segments"] input[type="range"]::-webkit-slider-thumb,
-[data-bar="wave"] input[type="range"]::-webkit-slider-thumb {
+[data-canvas-bar] input[type="range"]::-webkit-slider-thumb {
   opacity: 0;
+}
+
+/* The drawn bars' (invisible) knob keeps the text size, like the times
+   (bars.js leaves the same room at the ends) */
+.piece [data-canvas-bar] input[type="range"]::-webkit-slider-thumb {
+  width: calc(0.92em * var(--label-scale, 1));
 }
 
 /* Hairline: very thin, the knob shows when the mouse is over the piece */
@@ -698,8 +722,8 @@ button:disabled {
   mask: repeating-linear-gradient(to top, #000 0 var(--seg), transparent var(--seg) calc(var(--seg) + var(--seg-gap)));
 }
 
-/* Wave: drawn on a canvas behind the slider (bars.js); the slider itself
-   is invisible but still takes the mouse */
+/* Wave, Spectrum, Beam, Glow line: drawn on a canvas behind the slider
+   (bars.js); the slider itself is invisible but still takes the mouse */
 .progress,
 .volume-row {
   position: relative;
@@ -713,8 +737,8 @@ button:disabled {
 
 /* (also while disabled, e.g. between tracks, when sliders are normally
    drawn half-transparent: the grey track would show under the wave) */
-[data-bar="wave"] input[type="range"],
-[data-bar="wave"] input[type="range"]:disabled {
+[data-canvas-bar] input[type="range"],
+[data-canvas-bar] input[type="range"]:disabled {
   position: relative;
   z-index: 1;
   opacity: 0;
@@ -722,7 +746,7 @@ button:disabled {
   margin: 0;
 }
 
-.piece-volume.vertical [data-bar="wave"] input[type="range"] {
+.piece-volume.vertical [data-canvas-bar] input[type="range"] {
   width: 3.6em;
   height: auto;
 }
@@ -743,6 +767,26 @@ button:disabled {
 
 .stage-tools .icon-btn.on {
   color: var(--accent);
+}
+
+/* Changes kept without saving, next to the pencil */
+.stage-unsaved {
+  align-self: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--warn) 22%, color-mix(in srgb, var(--bg) 70%, transparent));
+  color: var(--warn);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.stage-unsaved:hover {
+  background: color-mix(in srgb, var(--warn) 32%, color-mix(in srgb, var(--bg) 70%, transparent));
+}
+
+.stage-unsaved[hidden] {
+  display: none;
 }
 
 /* Edit layout: every piece shows its outline (hidden ones faintly), the
@@ -865,7 +909,7 @@ button:disabled {
   z-index: 2;
   display: flex;
   align-items: stretch;
-  width: min(760px, calc(100% - 120px));
+  width: min(900px, calc(100% - 120px));
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -890,6 +934,31 @@ button:disabled {
   justify-content: center;
   align-items: center;
   gap: 8px 16px;
+}
+
+/* The profile line, set off from the rest by a line under it */
+.editor-profile-row {
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* The bar's options: always a line of their own */
+#editor-bar {
+  flex-basis: 100%;
+  justify-content: center;
+}
+
+#editor-bar[hidden],
+#editor-waveform[hidden] {
+  display: none;
+}
+
+/* Waveform's look picker and Loudness keep their room while it's off, so
+   the line keeps its height and nothing moves when they appear */
+#editor-waveform-look.off,
+#editor-waveform-loud-label.off,
+#editor-waveform-alive-label.off {
+  visibility: hidden;
 }
 
 /* Reset and Done: their own row at the bottom, set off by a line */
@@ -1097,6 +1166,21 @@ button:disabled {
   display: none;
 }
 
+/* Options that don't apply right now (the picker unless Custom, Top /
+   Bottom while Mirrored): greyed out, still in their place */
+.editor-color:disabled,
+#editor-side.disabled,
+#editor-format-side.disabled,
+#editor-waveform-loud-label.disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+#editor-side.disabled .chip,
+#editor-format-side.disabled .chip {
+  pointer-events: none;
+}
+
 /* Edge thickness */
 .editor-range {
   width: 80px;
@@ -1128,6 +1212,30 @@ button:disabled {
 
 .editor-btn:hover {
   background: var(--hover);
+}
+
+/* The button that would save unsaved changes: a glowing orange */
+.editor-btn.unsaved {
+  border-color: var(--warn);
+  color: var(--warn);
+  animation: unsaved-glow 2.2s ease-in-out infinite;
+}
+
+@keyframes unsaved-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 10px 1px color-mix(in srgb, var(--warn) 65%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .editor-btn.unsaved {
+    animation: none;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--warn) 55%, transparent);
+  }
 }
 
 .editor-btn.primary {
@@ -1386,6 +1494,153 @@ input[type="range"]:disabled {
 .zone-button:hover {
   color: var(--text);
   background: var(--hover);
+}
+
+/* ===== Audio quality dot ===================================================
+   Left of the zone icon while Hearts & Library is connected: what the zone
+   is playing, as Roon's signal path receives it. Low Quality (lossy), CD
+   Quality (lossless up to 16-bit / 48 kHz) or Hi-Res (above that, or DSD).
+   A small glowing light in its own hover area (not part of the zone
+   button, so it doesn't open the zone menu); hover shows the name. */
+.quality {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.quality:hover {
+  background: var(--hover);
+}
+
+.quality[hidden] {
+  display: none;
+}
+
+.quality-dot {
+  --q: #8a8a93;
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 18%, var(--q) 60%);
+  box-shadow:
+    0 0 3px 1px color-mix(in srgb, var(--q) 75%, transparent),
+    0 0 9px 2px color-mix(in srgb, var(--q) 35%, transparent);
+}
+
+.quality-dot.low {
+  --q: #f2b03d;
+}
+
+.quality-dot.cd {
+  --q: #3ccf86;
+}
+
+.quality-dot.hires {
+  --q: #5cb6ff;
+}
+
+/* Connected, but nothing to read (paused, stopped): a plain grey dot */
+.quality-dot.none {
+  --q: #6e6e78;
+  background: var(--q);
+  box-shadow: none;
+}
+
+/* The name on hover, in a small bubble */
+.quality::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 50;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #111114;
+  color: #f2f2f5;
+  border: 1px solid #36363d;
+  font: 500 12px/1.2 "Segoe UI", system-ui, sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.quality:hover::after {
+  opacity: 1;
+}
+
+/* The zone button and the light, side by side (one piece in Now Playing) */
+.zone-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* The Wrapper's bar ends where Roon begins, so the name shows to the left */
+.quality::after {
+  right: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+/* In Now Playing the light scales with the zone piece */
+.piece .quality {
+  padding: 0.9em;
+  border-radius: 0.4em;
+}
+
+/* The playing file's format next to the light (Now Playing, the Quality
+   piece's File format), sized with the piece. It hangs off the light
+   instead of taking room in the piece, so the light stays put whatever
+   the text says (or when it goes); it grows away from the light, on the
+   side picked (`data-format-side`). */
+.quality-format {
+  position: absolute;
+  color: var(--muted);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.quality[data-format-side="right"] .quality-format,
+.quality:not([data-format-side]) .quality-format {
+  left: calc(100% - 0.3em);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.quality[data-format-side="left"] .quality-format {
+  right: calc(100% - 0.3em);
+  top: 50%;
+  transform: translateY(-50%);
+}
+
+.quality[data-format-side="above"] .quality-format {
+  bottom: calc(100% - 0.5em);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.quality[data-format-side="below"] .quality-format {
+  top: calc(100% - 0.5em);
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.quality-format[hidden] {
+  display: none;
+}
+
+.piece .quality-dot {
+  width: 1em;
+  height: 1em;
 }
 
 .volume-row {

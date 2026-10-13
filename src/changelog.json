@@ -1,18 +1,20 @@
 [
   {
     "version": "1.2.0",
-    "date": "",
+    "date": "2026-10-13",
     "sections": [
       {
         "title": "What's new",
         "items": [
           ["Roon: Wrapped (experimental)", "The Roon app inside a Toasted window, with Toasted's player along the bottom, so everything Roon can do is right there. Switch it on in Settings > The Wrapper, then open it from the tray (double-click opens it while it's on), its hotkey (Ctrl+Alt+W) or Settings. Closing it keeps Roon running out of sight, so it reopens instantly."],
           ["Return Roon", "Gives Roon its own window back. An Enable Wrapper button then sits in Roon's title bar to wrap it up again."],
-          ["Now Playing", "Click the album art in the player bar for a full-window player. Hit the pencil to move and resize the art, track info, controls, seek bar, zone and volume anywhere you like."],
-          ["Make it yours", "Fonts per piece (bundled or any installed font), icon packs (Lucide, Phosphor, Tabler, Material Symbols, Remix), a plain or circled play button, and bar styles for seek and volume: Line, Thick, Hairline, Segments and Wave. Bars can take the app's colors, the album's, or your own. The player bar can follow the same style."],
+          ["Now Playing", "Click the album art in the player bar for a full-window player. Hit the pencil to move and resize the art, track info, controls, seek bar, zone, quality light and volume anywhere you like."],
+          ["Make it yours", "Fonts per piece (bundled or any installed font), icon packs (Lucide, Phosphor, Tabler, Material Symbols, Remix), a plain or circled play button, and bar styles for seek and volume: Line, Thick, Hairline, Segments, Wave, Spectrum, Beam, Glow line, LED meter, Ribbon, Neon tube, Mountains, Particles, Plasma and Album art. Bars can take the app's colors, the album's, or your own. The player bar can follow the same style. With Hearts & Library on, the seek bar can show a local file's real waveform from Roon instead (Waveform: Roon, Pills, Solid shape, Neon outline, LED or Album art, optionally Alive (bouncing gently near the playhead) and colored by loudness), falling back to the bar style when Roon has none."],
           ["Profiles", "Save your layouts as profiles and switch between them. Start from the Default, Waves or Waves Large presets."],
           ["Toaster on or off", "Only want the Wrapper? Switch the Toaster off in Settings > Toaster, or from the tray. Its hotkeys, links, and toast and widget clicks then open the Wrapper instead."],
+          ["Audio quality", "With Hearts & Library on, a small light shows what's playing as Roon receives it: Low Quality, CD Quality or Hi-Res. Hover it for the name. It sits by the zone in the Wrapper's player bar and the Toaster, and is a piece of its own in Now Playing, where it can also show the file's format next to it (like FLAC 96kHz 24bit 2ch)."],
           ["Search in Roon", "With the Wrapper on, the Search hotkey and Stream Deck search can open Roon's own search instead of the Toaster's. Pick Roon or Toaster next to the Search hotkey in Settings > General."],
+          ["New look", "A new Toasted icon in the tray, the taskbar and every title bar, and a Roon: Wrapped logo of its own for the Wrapper."],
           ["Changelog", "This window. It opens after each update, and the Changelog button in Settings > Updates brings it back. New settings glow until you hover over them."]
         ]
       },
@@ -22,7 +24,10 @@
           ["Tray", "The tray menu has Toaster and Wrapper switches. While the Wrapper is on, Open Wrapper comes first and a double-click opens it."],
           ["Remember Player", "Settings > The Wrapper: Now Playing comes back as you left it, open or closed, even after a restart. Something Roon itself doesn't do."],
           ["Open at Launch", "Settings > The Wrapper and Settings > Toaster: open either one whenever Toasted starts, at sign-in or by hand. On for the Wrapper to begin with."],
-          ["Settings", "A new General card holds what applies to the whole app: Colors, Auto-Hide, Start with Windows and every hotkey. The Hotkeys switch sits on the Hotkeys heading, and the Toaster, Wrapper and Taskbar Widget switches sit next to their titles."]
+          ["Wrapper size", "The Wrapper opens where and at the size you left it (maximized excepted)."],
+          ["Main artist only", "Some tracks list a long line of supporting artists. Settings > General > Artists: Main shows just the first one Roon lists, in the Toaster, the Wrapper, toasts, the widget and the queue. On to begin with; All brings the full list back."],
+          ["Settings", "A new General card holds what applies to the whole app: Colors, Auto-Hide, Start with Windows and every hotkey. The Hotkeys switch sits on the Hotkeys heading, and the Toaster, Wrapper and Taskbar Widget switches sit next to their titles."],
+          ["Updates", "Toasted now looks for an update 10 seconds after it starts (it was a minute), and again when you open Settings if the last look is over 10 minutes old."]
         ]
       }
     ]

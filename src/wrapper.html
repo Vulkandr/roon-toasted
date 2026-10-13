@@ -103,10 +103,13 @@
         </div>
 
         <div class="right">
+          <div id="zone-row" class="zone-row">
+          <span id="quality" class="quality" hidden><i class="quality-dot"></i><span id="quality-format" class="quality-format" hidden></span></span>
           <button id="zone-button" class="zone-button" title="Choose zone">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="16" height="20" x="4" y="2" rx="2"/><path d="M12 6h.01"/><circle cx="12" cy="14" r="4"/><path d="M12 14h.01"/></svg>
             <span id="zone-name">No zone</span>
           </button>
+          </div>
           <div class="volume-row">
             <button id="mute" class="icon-btn" title="Mute">
               <svg class="icon-volume" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
@@ -136,6 +139,7 @@
           <div class="piece piece-info" data-piece="info"><div class="piece-content"></div></div>
           <div class="piece piece-transport" data-piece="transport"><div class="piece-content"></div></div>
           <div class="piece piece-seek" data-piece="seek"><div class="piece-content"></div></div>
+          <div class="piece piece-quality" data-piece="quality"><div class="piece-content"></div></div>
           <div class="piece piece-zone" data-piece="zone"><div class="piece-content"></div></div>
           <div class="piece piece-volume" data-piece="volume"><div class="piece-content"></div></div>
           <div id="guide-v" class="guide guide-v"></div>
@@ -143,6 +147,9 @@
         </div>
 
         <div class="stage-tools">
+          <!-- Changes kept without saving: shown while not editing; opens
+               the editor to save or discard them -->
+          <button id="stage-unsaved" class="stage-unsaved" title="Changes not saved to a profile yet. Click to edit, save or discard them." hidden>Unsaved Style</button>
           <button id="stage-edit" class="icon-btn" title="Edit layout">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/><path d="m15 5 4 4"/></svg>
           </button>
@@ -159,7 +166,8 @@
             <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
           </span>
           <div class="editor-rows">
-            <div class="editor-row editor-global">
+            <!-- The profile: its own line at the top, whatever is selected -->
+            <div class="editor-row editor-profile-row">
               <div id="editor-profile" class="editor-group">
                 <label class="editor-label" for="editor-profile-select">Profile</label>
                 <select id="editor-profile-select" class="editor-select"></select>
@@ -178,6 +186,7 @@
                 <button class="chip" data-show="transport">Controls</button>
                 <button class="chip" data-show="seek">Seek</button>
                 <button class="chip" data-show="zone">Zone</button>
+                <button class="chip" data-show="quality">Quality</button>
                 <button class="chip" data-show="volume">Volume</button>
               </div>
             </div>
@@ -218,25 +227,65 @@
                 <select id="editor-icons-select" class="editor-select"></select>
                 <label class="editor-check" title="Use this pack for every piece with icons"><input id="editor-icons-all" type="checkbox" checked /> All</label>
               </div>
+              <div id="editor-quality" class="editor-group" hidden>
+                <label class="editor-check" title="Show what the playing file is next to the light: format, sample rate, bit depth, channels (needs Hearts &amp; Library)"><input id="editor-quality-format" type="checkbox" /> File format</label>
+                <span id="editor-format-side" class="editor-group" title="Which side of the light the format goes">
+                  <button class="chip" data-format-side="left">Left</button>
+                  <button class="chip" data-format-side="right">Right</button>
+                  <button class="chip" data-format-side="above">Above</button>
+                  <button class="chip" data-format-side="below">Below</button>
+                </span>
+              </div>
               <div id="editor-play" class="editor-group" hidden>
                 <span class="editor-label">Play button</span>
                 <button class="chip" data-play="circle">Circle</button>
                 <button class="chip" data-play="plain">Plain</button>
               </div>
+              <div id="editor-volume" class="editor-group" hidden>
+                <button class="chip" data-vertical="true">Vertical</button>
+                <button class="chip" data-vertical="false">Horizontal</button>
+              </div>
+              <!-- Seek only, next to Font: Roon's real waveform of the track
+                   (local files), with the Bar as its fallback -->
+              <div id="editor-waveform" class="editor-group" hidden>
+                <label class="editor-check" title="Roon's own waveform of the playing track (local files, needs Hearts &amp; Library). When there isn't one, the Bar below is used."><input id="editor-waveform-check" type="checkbox" /> Waveform</label>
+                <select id="editor-waveform-look" class="editor-select off" title="The waveform's look">
+                  <option value="roon">Roon</option>
+                  <option value="pills">Pills</option>
+                  <option value="shape">Solid shape</option>
+                  <option value="neon">Neon outline</option>
+                  <option value="led">LED</option>
+                  <option value="art">Album art</option>
+                </select>
+                <label id="editor-waveform-loud-label" class="editor-check off" title="Color each part by how loud it is: quiet in the deep shade, loud in the hot one (not for Album art)"><input id="editor-waveform-loud" type="checkbox" /> Loudness</label>
+                <label id="editor-waveform-alive-label" class="editor-check off" title="Near the playhead the waveform bounces gently around its real height; the rest stays still"><input id="editor-waveform-alive" type="checkbox" /> Alive</label>
+              </div>
+              <!-- Always a line of its own, so the options that come and go
+                   (custom color, Mirrored's Top / Bottom) never reflow it -->
               <div id="editor-bar" class="editor-group" hidden>
                 <label class="editor-label" for="editor-bar-select">Bar</label>
-                <select id="editor-bar-select" class="editor-select">
+                <select id="editor-bar-select" class="editor-select" title="The bar's look (with Waveform on: when there's no waveform)">
                   <option value="line">Line</option>
                   <option value="thick">Thick</option>
                   <option value="hairline">Hairline</option>
                   <option value="segments">Segments</option>
                   <option value="wave">Wave</option>
+                  <option value="spectrum">Spectrum</option>
+                  <option value="beam">Beam</option>
+                  <option value="glow">Glow line</option>
+                  <option value="dots">LED meter</option>
+                  <option value="ribbon">Ribbon</option>
+                  <option value="neon">Neon tube</option>
+                  <option value="mountain">Mountains</option>
+                  <option value="particles">Particles</option>
+                  <option value="plasma">Plasma</option>
+                  <option value="art">Album art</option>
                 </select>
                 <span class="editor-label">Color</span>
-                <button class="chip" data-color="app" title="The app's colors (for Wave: the rainbow)">App</button>
+                <button class="chip" data-color="app" title="The app's colors (Wave: the rainbow; the other drawn bars: blue-purple)">App</button>
                 <button class="chip" data-color="album" title="The playing album's color">Album</button>
                 <button class="chip" data-color="custom">Custom</button>
-                <input id="editor-color" class="editor-color" type="color" value="#7b5fc7" hidden />
+                <input id="editor-color" class="editor-color" type="color" value="#7b5fc7" title="Custom color" />
                 <span id="editor-wave" class="editor-group" hidden>
                   <label class="editor-check"><input id="editor-mirror" type="checkbox" /> Mirrored</label>
                   <span id="editor-side" class="editor-group">
@@ -244,10 +293,6 @@
                     <button class="chip" data-side="bottom">Bottom</button>
                   </span>
                 </span>
-              </div>
-              <div id="editor-volume" class="editor-group" hidden>
-                <button class="chip" data-vertical="true">Vertical</button>
-                <button class="chip" data-vertical="false">Horizontal</button>
               </div>
             </div>
             <div class="editor-row editor-piece">

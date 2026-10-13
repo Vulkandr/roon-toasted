@@ -56,7 +56,7 @@ body {
 main {
   max-width: 1040px;
   margin: 0 auto;
-  padding: 24px;
+  padding: 16px 24px 12px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 16px;
@@ -67,7 +67,7 @@ main {
 .footer {
   text-align: center;
   font-size: 12px;
-  padding: 0 24px 20px;
+  padding: 0 24px 12px;
 }
 
 .footer a {
@@ -315,6 +315,32 @@ button.small {
   margin-top: 10px;
 }
 
+/* Roon Core, packed tighter: title, heading and list closer together, and
+   Diagnostics right under the list */
+.core-card h2 {
+  margin-bottom: 8px;
+}
+
+.core-card h3 {
+  margin: 12px 0 2px;
+}
+
+.core-card #core-list li {
+  padding: 6px 0;
+}
+
+.core-card #core-error {
+  margin-top: 4px;
+}
+
+.core-card #core-error:empty {
+  display: none;
+}
+
+.core-card .diag-bar {
+  margin-top: 6px;
+}
+
 .diag-box {
   display: flex;
   flex-direction: column;
@@ -473,6 +499,14 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   gap: 16px 40px;
+}
+
+/* General's four switches: two rows of two */
+.general-card > .setting-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  justify-items: center;
+  gap: 16px 24px;
 }
 
 /* One setting: a 3-column grid, with the name centered over the switch
@@ -974,6 +1008,23 @@ button:disabled {
 .wrapper-detail {
   text-align: center;
   margin-top: 12px;
+}
+
+/* The line at the bottom of Updates, The Wrapper and Hearts & Library:
+   closer to what's above it, and no extra room under it */
+.update-detail,
+.wrapper-detail,
+.library-detail {
+  margin: 8px 0 0;
+}
+
+/* General: the hotkey error line only takes room when there's an error */
+.general-card #hotkey-error {
+  margin-top: 4px;
+}
+
+.general-card #hotkey-error:empty {
+  display: none;
 }
 
 .update-detail.available {

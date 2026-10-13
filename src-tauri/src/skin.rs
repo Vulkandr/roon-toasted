@@ -422,35 +422,6 @@ mod imp {
         *PLACED.lock().unwrap() = None;
     }
 
-    // DEBUG (temporary): what the filter is doing, printed to the dev
-    // terminal whenever it changes
-    static DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
-    static DEBUG_DETECT: Mutex<String> = Mutex::new(String::new());
-    static DEBUG_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    fn debug(cell: &Mutex<String>, line: String) {
-        let mut last = cell.lock().unwrap();
-        if *last != line {
-            let ms = DEBUG_START.get_or_init(std::time::Instant::now).elapsed().as_millis();
-            eprintln!("[skin {ms:>7} ms] {line}");
-            *last = line;
-        }
-    }
-
-    /// DEBUG: a window's class and title.
-    fn debug_window(window: HWND) -> String {
-        use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowTextW};
-        let mut class = [0u16; 128];
-        let mut title = [0u16; 128];
-        // SAFETY: buffers sized as passed.
-        let (c, t) = unsafe { (GetClassNameW(window, &mut class), GetWindowTextW(window, &mut title)) };
-        format!(
-            "{:?} class \"{}\" title \"{}\"",
-            window.0,
-            String::from_utf16_lossy(&class[..c.max(0) as usize]),
-            String::from_utf16_lossy(&title[..t.max(0) as usize])
-        )
-    }
-
     /// Every frame: keep the filter over Roon's sidebar (or hidden), with
     /// the current colors, and refresh its picture. False when hidden.
     fn tick(wrapper: HWND) -> bool {
@@ -467,7 +438,6 @@ mod imp {
                 Some((roon, hole)) => (roon, hole, true),
                 None => {
                     // (The sidebar stays known: see SIDEBAR)
-                    debug(&DEBUG_STATE, "no hole: filter hidden".into());
                     STANDBY_LOOKED.store(false, Ordering::Relaxed);
                     STANDBY_TICKS.store(0, Ordering::Relaxed);
                     OVER_ROON.store(false, Ordering::Relaxed);
@@ -514,7 +484,6 @@ mod imp {
             .take()
             .filter(|(found, at)| at.elapsed() < PRIMED_FOR && (found.is_some() || known.is_none()))
             .is_some_and(|(found, _)| {
-                debug(&DEBUG_DETECT, format!("primed: {found:?}"));
                 *SIDEBAR.lock().unwrap() = found;
                 known = found;
                 TICKS.store(1, Ordering::Relaxed);
@@ -571,18 +540,8 @@ mod imp {
                 // sidebar counts here; the screen settles "none" once
                 // the hole opens)
                 match found {
-                    Some(Some(found)) => {
-                        debug(&DEBUG_DETECT, format!("picture: {found:?}"));
-                        take(Some(found))
-                    }
-                    Some(None) => {
-                        debug(&DEBUG_DETECT, "picture: no sidebar (ignored)".into());
-                        known
-                    }
-                    None => {
-                        debug(&DEBUG_DETECT, "picture: none taken, or wrong size".into());
-                        known
-                    }
+                    Some(Some(found)) => take(Some(found)),
+                    Some(None) | None => known,
                 }
             } else {
                 known
@@ -593,52 +552,14 @@ mod imp {
             || (ticks.is_multiple_of(DETECT_EVERY) && !primed)
         {
             match find_sidebar(hole, roon) {
-                Detect::Found(found) => {
-                    let taken = take(found);
-                    debug(
-                        &DEBUG_DETECT,
-                        format!("screen{}: found {found:?}, using {taken:?}", if entering { " (hole opened)" } else { "" }),
-                    );
-                    taken
-                }
+                Detect::Found(found) => take(found),
                 // Too much of it covered by other windows to tell: keep
                 // what we knew
-                Detect::Covered => {
-                    debug(&DEBUG_DETECT, "screen: covered".into());
-                    known
-                }
+                Detect::Covered => known,
             }
         } else {
             known
         };
-        {
-            use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDNEXT, GW_HWNDPREV};
-            // SAFETY: plain window queries.
-            let (above, below) = unsafe {
-                (
-                    GetWindow(wrapper, GW_HWNDPREV).ok() == Some(host),
-                    GetWindow(wrapper, GW_HWNDNEXT).ok() == Some(host),
-                )
-            };
-            let order = match (above, below) {
-                (true, _) => "above Wrapper",
-                (_, true) => "below Wrapper",
-                _ => "elsewhere",
-            };
-            debug(
-                &DEBUG_STATE,
-                format!(
-                    "{} | sidebar {:?} | shown {} | see-through {} | miss pending {} | player busy {} | filter {}",
-                    if standby { "covered" } else { "visible" },
-                    sidebar,
-                    SHOWN.load(Ordering::Relaxed),
-                    WAITING.load(Ordering::Relaxed),
-                    MISSED_AT.lock().unwrap().is_some(),
-                    crate::wrapper::player_busy(),
-                    order,
-                ),
-            );
-        }
         let Some((width, roon_bg)) = sidebar else {
             hide();
             return false;
@@ -791,21 +712,6 @@ mod imp {
             .filter(|&y| clear(y))
             .collect();
         if rows.len() < 6 {
-            // DEBUG: which window is in the way
-            let blocker = (0..24)
-                .map(|i| height * 30 / 100 + i * (height * 65 / 100) / 24)
-                .find_map(|y| {
-                    [(hole[0] + 4, hole[1] + y), (hole[0] + width - 1, hole[1] + y)].into_iter().find_map(|(x, y)| {
-                        // SAFETY: plain window queries.
-                        unsafe {
-                            let w = WindowFromPoint(POINT { x, y });
-                            let root = GetAncestor(w, GA_ROOT);
-                            (root != roon).then(|| debug_window(root))
-                        }
-                    })
-                })
-                .unwrap_or_default();
-            debug(&DEBUG_DETECT, format!("screen: covered by {blocker}"));
             return Detect::Covered;
         }
         let all_clear = rows.len() >= 20;

@@ -34,7 +34,10 @@ pub struct QueueItemView {
     /// Pass to `roon_play_from_here` to jump to this track.
     pub queue_item_id: u64,
     pub title: String,
+    /// Every artist, or just the first (General > Artists, see zones.rs).
     pub artist: String,
+    #[serde(skip)]
+    pub artist_full: String,
     pub album: String,
     pub image_key: Option<String>,
     /// Track length in seconds.
@@ -65,7 +68,8 @@ fn item_view(item: QueueItem) -> QueueItemView {
     QueueItemView {
         queue_item_id: item.queue_item_id,
         title,
-        artist,
+        artist: crate::zones::shown_artist(&artist),
+        artist_full: artist,
         album,
         image_key: item.image_key,
         length: item.length,
@@ -108,6 +112,19 @@ impl Queue {
             let _ = app.emit("roon-queue", payload);
         }
     }
+}
+
+/// General > Artists changed: re-labels the queue the pages have.
+pub fn reshow_artists(app: &AppHandle) {
+    let queue = app.state::<Queue>();
+    let payload = {
+        let mut inner = queue.inner.lock().unwrap();
+        for item in inner.items.iter_mut() {
+            item.artist = crate::zones::shown_artist(&item.artist_full);
+        }
+        Queue::payload(&inner)
+    };
+    queue.emit(&payload);
 }
 
 /// Starts following `zone_id`'s queue on `core`, or stops following when

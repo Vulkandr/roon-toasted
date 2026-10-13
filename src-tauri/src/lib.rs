@@ -58,6 +58,24 @@ pub(crate) fn save_window_state(app: &AppHandle) {
     let _ = app;
 }
 
+/// Saves the window state a second after the Wrapper stops moving or
+/// resizing, so its size sticks even when the app doesn't get to quit
+/// cleanly (a dev rebuild, a crash, Windows shutting down). Maximized and
+/// minimized never overwrite the size (the window-state plugin keeps the
+/// last normal one).
+fn save_window_state_soon(app: &AppHandle) {
+    static TICKET: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    use std::sync::atomic::Ordering;
+    let ticket = TICKET.fetch_add(1, Ordering::Relaxed) + 1;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        if TICKET.load(Ordering::Relaxed) == ticket {
+            save_window_state(&app);
+        }
+    });
+}
+
 /// Brings a window to the front, un-hiding and un-minimizing it if needed.
 pub(crate) fn show(app: &AppHandle, label: &str) {
     if label == SETTINGS_WINDOW {
@@ -369,8 +387,9 @@ pub fn run() {
 
         // Tracks the Toaster's and the Wrapper's size/position so they can
         // reopen where they were left. Restoring is done in setup() (the
-        // Toaster only when the setting says "remember"; the Wrapper's
-        // maximized state when it first opens, see wrapper.rs). Settings
+        // Toaster only when the setting says "remember"; the Wrapper always,
+        // but never maximized). The Wrapper is also saved whenever it stops
+        // moving or resizing (`save_window_state_soon`). Settings
         // and the Changelog always open centered, and the toast, the
         // taskbar widget and the "Enable Wrapper" button place themselves
         // (toast.rs, widget.rs, wrapper_button.rs), so none of those are
@@ -448,8 +467,8 @@ pub fn run() {
                         let _ = toaster.restore_state(WINDOW_STATE);
                     }
                 }
-                // The Wrapper's size and position (maximizing a hidden window
-                // would show it, so that waits until it opens)
+                // The Wrapper's size and position (never maximized: it reopens
+                // at the size it last had un-maximized)
                 if let Some(wrapper) = app.get_webview_window(wrapper::WRAPPER_WINDOW) {
                     use tauri_plugin_window_state::StateFlags;
                     let _ = wrapper.restore_state(StateFlags::SIZE | StateFlags::POSITION);
@@ -536,11 +555,14 @@ pub fn run() {
                 hide_if_app_unfocused(window.app_handle().clone());
             }
             // Roon follows the Wrapper as it moves, and waits out resizing
+            // (and its size and place are saved once it settles)
             WindowEvent::Moved(_) if window.label() == wrapper::WRAPPER_WINDOW => {
                 wrapper::sync(window.app_handle());
+                save_window_state_soon(window.app_handle());
             }
             WindowEvent::Resized(_) if window.label() == wrapper::WRAPPER_WINDOW => {
                 wrapper::resized(window.app_handle());
+                save_window_state_soon(window.app_handle());
             }
             _ => {}
         })
@@ -587,6 +609,7 @@ pub fn run() {
             library::library_album_add_for,
             update::update_status,
             update::update_check,
+            update::update_check_if_stale,
             update::update_install,
             library::library_album_tracks,
             library::library_track_heart,

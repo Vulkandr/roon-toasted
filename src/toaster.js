@@ -411,7 +411,25 @@ let libraryTracks = {}; // zoneId -> the zone's track state from Rust (null = no
 let libraryBusy = false; // a change is waiting for Roon's answer
 let discography = null; // the playing artist's albums, see 6d: { zoneId, artist, albums }
 
+// The audio quality dot left of the zone icon in the footer (the track state
+// carries the zone's signal path source, grey while paused or stopped)
+const quality = $("#quality");
+const qualityDot = quality.querySelector(".quality-dot");
+const QUALITY_NAMES = { low: "Low Quality", cd: "CD Quality", hires: "Hi-Res" };
+
+function renderQuality() {
+  // Always there while connected; grey when there's nothing to read
+  const connected = libraryReady && zone != null;
+  const playing = connected && zone.nowPlaying ? libraryTracks[zone.zoneId]?.quality : null;
+  const kind = playing && QUALITY_NAMES[playing.class] ? playing.class : "none";
+  quality.hidden = !connected;
+  qualityDot.classList.remove("low", "cd", "hires", "none");
+  qualityDot.classList.add(kind);
+  quality.dataset.tip = kind === "none" ? "No signal" : QUALITY_NAMES[kind];
+}
+
 function renderLibrary() {
+  renderQuality();
   const show = libraryReady && zone != null && zone.nowPlaying != null;
   libraryBtn.hidden = !show;
   // "Go to" shows whenever something plays; while the library button is hidden

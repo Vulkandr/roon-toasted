@@ -34,9 +34,8 @@
 
     <!-- Everything below the bar scrolls; the bar stays put -->
     <div class="page-scroll">
+    <!-- No "Settings" heading: the title bar already says it -->
     <main>
-      <h1>Settings</h1>
-
       <!-- Left column -->
       <div class="column">
       <section class="card core-card">
@@ -106,6 +105,18 @@
                 <span class="slider"></span>
               </label>
               <span class="switch-label label-on">Album Art</span>
+            </div>
+          </div>
+          <!-- Tracks with many supporting artists: just the first one -->
+          <div class="setting" data-new="main-artist">
+            <span class="setting-name">Artists</span>
+            <div class="switch-group" id="artists-group">
+              <span class="switch-label label-off">All</span>
+              <label class="switch">
+                <input type="checkbox" id="main-artist-only" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Main</span>
             </div>
           </div>
           <div class="setting">
@@ -274,7 +285,8 @@
           <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts
           the track in your library (the Add to Library switch decides whether that's just the
           song or its whole album), then a heart. The same buttons show on album pages by the
-          playing artist. It uses a part of Roon that isn't officially open to apps, so a Roon
+          playing artist. A light next to the zone shows what's playing: Low Quality, CD Quality
+          or Hi-Res (hover for the name). It uses a part of Roon that isn't officially open to apps, so a Roon
           update may break it until I'm able to repair it.
         </p>
         <p>

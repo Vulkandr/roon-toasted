@@ -18,7 +18,8 @@
 //! Object-typed members are a flexLong: 0 = null, 1 = an inline value struct
 //! follows (type id, length, sparse fields), anything else = another object's
 //! id. `DataList<T>` objects (the Core's lists) declare no members; their body
-//! is `flexInt(count)` then `count` object ids.
+//! is `flexInt(count)` then `count` object ids (`DataList<int>`: `count`
+//! flexInt numbers).
 //!
 //! Object ids are handles that only mean something within this session.
 
@@ -189,6 +190,8 @@ pub struct RoonObject {
     pub items: Option<Vec<u64>>,
     /// `DataList<T>` only: items sent by value (inline structs), in list order.
     pub structs: Option<Vec<InlineStruct>>,
+    /// `DataList<int>` only: the numbers (e.g. a zone's WaveformData).
+    pub ints: Option<Vec<u32>>,
 }
 
 impl RoonObject {
@@ -279,10 +282,22 @@ impl ObjectGraph {
         let mut fields = HashMap::new();
         let mut items = None;
         let mut structs = None;
+        let mut ints = None;
 
         if populate {
             if let Some(def) = &def {
-                if is_data_list(&type_name) {
+                if type_name.ends_with("DataList<int>") {
+                    // A list of plain numbers: flexInt(count), then each a flexInt
+                    let count = r.flex_int()?;
+                    let mut list = Vec::with_capacity(count.min(100_000) as usize);
+                    for _ in 0..count {
+                        if r.remaining() == 0 {
+                            break;
+                        }
+                        list.push(r.flex_int()?);
+                    }
+                    ints = Some(list);
+                } else if is_data_list(&type_name) {
                     // Each item is an Object: a reference, or a struct by value.
                     let count = r.flex_int()?;
                     let mut list = Vec::with_capacity(count as usize);
@@ -316,6 +331,9 @@ impl ObjectGraph {
                     if structs.is_some() {
                         existing.structs = structs;
                     }
+                    if ints.is_some() {
+                        existing.ints = ints;
+                    }
                 }
             }
             None => {
@@ -328,6 +346,7 @@ impl ObjectGraph {
                         fields,
                         items,
                         structs,
+                        ints,
                     },
                 );
             }

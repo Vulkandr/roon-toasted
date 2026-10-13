@@ -598,6 +598,99 @@ input[type="range"]:disabled {
   background: var(--hover);
 }
 
+/* ===== Audio quality dot ===================================================
+   Left of the zone icon while Hearts & Library is connected: what the zone
+   is playing, as Roon's signal path receives it. Low Quality (lossy), CD
+   Quality (lossless up to 16-bit / 48 kHz) or Hi-Res (above that, or DSD).
+   A small glowing light in its own hover area (not part of the zone
+   button, so it doesn't open the zone menu); hover shows the name. */
+.quality {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 10px;
+  border-radius: 6px;
+  cursor: default;
+}
+
+.quality:hover {
+  background: var(--hover);
+}
+
+.quality[hidden] {
+  display: none;
+}
+
+.quality-dot {
+  --q: #8a8a93;
+  position: relative;
+  display: inline-block;
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #fff 0 18%, var(--q) 60%);
+  box-shadow:
+    0 0 3px 1px color-mix(in srgb, var(--q) 75%, transparent),
+    0 0 9px 2px color-mix(in srgb, var(--q) 35%, transparent);
+}
+
+.quality-dot.low {
+  --q: #f2b03d;
+}
+
+.quality-dot.cd {
+  --q: #3ccf86;
+}
+
+.quality-dot.hires {
+  --q: #5cb6ff;
+}
+
+/* Connected, but nothing to read (paused, stopped): a plain grey dot */
+.quality-dot.none {
+  --q: #6e6e78;
+  background: var(--q);
+  box-shadow: none;
+}
+
+/* The name on hover, in a small bubble */
+.quality::after {
+  content: attr(data-tip);
+  position: absolute;
+  z-index: 50;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #111114;
+  color: #f2f2f5;
+  border: 1px solid #36363d;
+  font: 500 12px/1.2 "Segoe UI", system-ui, sans-serif;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s ease;
+}
+
+.quality:hover::after {
+  opacity: 1;
+}
+
+/* At the footer's left edge, like the zone button; the name shows above */
+.output .quality {
+  margin: -6px -6px -6px -10px;
+}
+
+.output .quality:not([hidden]) + .output-zone {
+  margin-left: 0;
+}
+
+.quality::after {
+  bottom: calc(100% + 6px);
+  left: 0;
+}
+
 .output-icon {
   width: 16px;
   height: 16px;

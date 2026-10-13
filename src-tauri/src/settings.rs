@@ -47,6 +47,9 @@ pub struct AppSettings {
     pub hide_on_blur: bool,
     /// The Toaster's colors: the default purple, or taken from the album art.
     pub toaster_colors: ToasterColors,
+    /// General > Artists: show only a track's first artist (Main) instead of
+    /// every artist Roon lists (All), everywhere (zones.rs).
+    pub main_artist_only: bool,
     /// Whether the global hotkeys are on at all (off: both released, e.g. for
     /// people who only open the Toaster from the Stream Deck).
     pub hotkeys_enabled: bool,
@@ -134,6 +137,7 @@ impl Default for AppSettings {
             zoom: 1.0,
             zoom_hotkeys: true,
             hide_on_blur: true,
+            main_artist_only: true,
             toaster_colors: ToasterColors::default(),
             hotkeys_enabled: true,
             hotkey_player: Some("Ctrl+Alt+Z".into()),
@@ -370,6 +374,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     }
     if updated.zoom != before.zoom {
         apply_zoom(&app);
+    }
+    if updated.main_artist_only != before.main_artist_only {
+        crate::zones::set_main_artist_only(&app, updated.main_artist_only);
     }
     if updated.hide_on_blur != before.hide_on_blur {
         apply_taskbar(&app);

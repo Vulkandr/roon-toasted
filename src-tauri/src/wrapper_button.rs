@@ -18,7 +18,9 @@
 //! - It's kept directly above Roon in the stacking order, so a window over
 //!   Roon covers the button too. When Roon is clicked it comes up over the
 //!   button, and the foreground hook in wrapper.rs puts the button back
-//!   above it.
+//!   above it, again a moment later (Windows can finish raising Roon after
+//!   telling us it came to the front, which left the button under Roon
+//!   until Roon moved).
 //!
 //! Hidden while Roon is minimized, on another virtual desktop, full screen
 //! (no title bar), or too narrow for the button to stay clear of its title.
@@ -81,6 +83,7 @@ pub(super) fn on_foreground(window: HWND) {
     let Some(app) = APP.get() else { return };
     if hwnd(ROON.load(Ordering::Relaxed)) == Some(window) {
         place(app);
+        place_again_soon(app);
     } else if ROON.load(Ordering::Relaxed) == 0
         && super::enabled(app)
         && wrapper::is_off()
@@ -88,6 +91,18 @@ pub(super) fn on_foreground(window: HWND) {
     {
         attach(app, window);
     }
+}
+
+/// Places the button again after Roon has surely finished coming up.
+fn place_again_soon(app: &AppHandle) {
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        for wait in [80, 320] {
+            std::thread::sleep(std::time::Duration::from_millis(wait));
+            let app = handle.clone();
+            let _ = handle.run_on_main_thread(move || place(&app));
+        }
+    });
 }
 
 fn attach(app: &AppHandle, roon: HWND) {

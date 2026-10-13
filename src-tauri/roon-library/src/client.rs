@@ -57,6 +57,13 @@ const WATCHED_TYPES: &[&str] = &[
     ".AlbumLite",
     ".Profile",
     ".DataList<Sooloos.Broker.Api.TransportTrack>",
+    // The signal path, for the audio quality
+    ".SignalPath",
+    ".SignalPathElement",
+    ".SourceSignalPathElement",
+    ".DataList<Sooloos.Broker.Api.SignalPathElement>",
+    // The waveform of what's playing
+    ".DataList<int>",
 ];
 
 /// Pushes arrive in bursts; changes are reported once they settle.
@@ -125,6 +132,32 @@ pub struct TrackInfo {
     /// "local" for files, "streaming" for TIDAL/Qobuz/KKBOX, None if unknown.
     pub source: Option<&'static str>,
     pub album: Option<AlbumInfo>,
+    /// What the zone is actually playing, from the first step of Roon's
+    /// signal path. None while nothing plays (Roon clears the path when paused).
+    pub quality: Option<Box<AudioQuality>>,
+    /// The whole track's waveform as Roon draws it in its seek bar: about
+    /// 2000 loudness values, 0 to 255, start to end. None if Roon has none
+    /// (radio, a track it hasn't analyzed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waveform: Option<Vec<u8>>,
+}
+
+/// The source step of a zone's signal path: the stream or file as Roon
+/// receives it, before any DSP or conversion.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AudioQuality {
+    /// "low" (lossy), "cd" (lossless up to 16-bit / 48 kHz) or "hires"
+    /// (lossless above that, and DSD).
+    pub class: &'static str,
+    /// As Roon names it: "Flac", "Mp3", "Aac", "Dsf", ...
+    pub format: Option<String>,
+    pub bits_per_sample: Option<u32>,
+    pub sample_rate: Option<u32>,
+    /// Lossy streams only, in kbps.
+    pub bit_rate: Option<u32>,
+    /// 2 for stereo.
+    pub channels: Option<u32>,
 }
 
 /// One track of the playing album (see `album_tracks`).
@@ -244,6 +277,10 @@ struct Inner {
     /// Performer object id -> its discography, once browsed.
     discographies: Mutex<HashMap<u64, Vec<DiscoEntry>>>,
     recompute_pending: AtomicBool,
+    /// Zone id -> which track the zone's current waveform belongs to. Roon
+    /// leaves a zone's last waveform in place when the next track has none
+    /// (streaming), so a waveform only counts for the track it arrived with.
+    waveform_owners: Mutex<HashMap<String, WaveformOwner>>,
     events: broadcast::Sender<LibraryEvent>,
     /// Woken whenever a watched object changes (for confirm waits) and on disconnect.
     changed: Arc<Notify>,
@@ -319,6 +356,7 @@ impl LibraryClient {
                 last_reported: Mutex::new(HashMap::new()),
                 discographies: Mutex::new(HashMap::new()),
                 recompute_pending: AtomicBool::new(false),
+                waveform_owners: Mutex::new(HashMap::new()),
                 events,
                 changed: Arc::clone(&changed),
                 connected: AtomicBool::new(false),
@@ -429,6 +467,37 @@ impl LibraryClient {
                 in_library: a.has_field("LibraryAlbumId"),
                 favorite: read_state(a.field("IsFavorite"), profile.as_deref()),
             }),
+            quality: self.zone_object(g, zone_id).and_then(|z| source_quality(g, z)).map(Box::new),
+            waveform: self.zone_object(g, zone_id).and_then(|z| zone_waveform(g, z)).and_then(|w| self.own_waveform(zone_id, track, w)),
+        }
+    }
+
+    /// The zone's waveform if it belongs to `track`. A waveform that's new
+    /// (by its values) is the playing track's; the same one still there
+    /// after the track changed is the last track's, left behind. (Within a
+    /// couple of seconds of arriving it may still move to the next track, in
+    /// case it came just before the track change did.)
+    fn own_waveform(&self, zone_id: &str, track: &RoonObject, waveform: Vec<u8>) -> Option<Vec<u8>> {
+        let key = format!("{:?}|{}", track.long_field("TrackId"), track.str_field("Title").unwrap_or_default());
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        std::hash::Hash::hash(&waveform, &mut hasher);
+        let hash = std::hash::Hasher::finish(&hasher);
+        let mut owners = self.inner.waveform_owners.lock().unwrap();
+        match owners.get_mut(zone_id) {
+            Some(owner) if owner.hash == hash => {
+                if owner.track == key {
+                    return Some(waveform);
+                }
+                if owner.since.elapsed() < Duration::from_secs(3) {
+                    owner.track = key;
+                    return Some(waveform);
+                }
+                None
+            }
+            _ => {
+                owners.insert(zone_id.to_string(), WaveformOwner { track: key, hash, since: Instant::now() });
+                Some(waveform)
+            }
         }
     }
 
@@ -1375,6 +1444,54 @@ fn describe_album(a: &RoonObject, group: &str, profile: Option<&[u8]>, playing: 
 }
 
 /// The zone id string (the extension API's zone_id) from a Zone object.
+/// Zone -> SignalPath -> Elements (DataList<SignalPathElement>) -> the element
+/// with a Source (SourceSignalPathElement): format, bit depth, sample rate.
+fn source_quality(g: &ObjectGraph, zone: &RoonObject) -> Option<AudioQuality> {
+    let path = g.deref(zone.field("SignalPath"))?;
+    let elements = g.deref(path.field("Elements"))?;
+    let (element, source) = elements.items.as_ref()?.iter().find_map(|oid| {
+        let element = g.get(*oid)?;
+        Some((element, g.deref(element.field("Source"))?))
+    })?;
+    let format = source.str_field("Format").map(str::to_string);
+    let positive = |name: &str| source.field(name).and_then(Value::as_int).filter(|v| *v > 0).map(|v| v as u32);
+    let bits_per_sample = positive("BitsPerSample");
+    let sample_rate = positive("SampleRate");
+    let bit_rate = positive("BitRate");
+    let channels = positive("Channels");
+    // Roon's own verdict for this step: 1 LowQuality, 2 HighQuality (both lossy), 3 Lossless, 4 Enhanced
+    let roon = element.field("Quality").and_then(Value::as_int);
+    let name = format.as_deref().unwrap_or_default().to_ascii_lowercase();
+    let lossy = matches!(roon, Some(1 | 2)) || ["mp3", "aac", "ogg", "vorbis", "opus", "wma"].iter().any(|f| name.starts_with(f));
+    let dsd = name == "dsf" || name == "dff" || name.contains("dsd");
+    let class = if lossy {
+        "low"
+    } else if dsd || bits_per_sample.is_some_and(|b| b > 16) || sample_rate.is_some_and(|r| r > 48_000) {
+        "hires"
+    } else if bits_per_sample.is_some() || sample_rate.is_some() {
+        "cd"
+    } else {
+        return None;
+    };
+    Some(AudioQuality { class, format, bits_per_sample, sample_rate, bit_rate, channels })
+}
+
+struct WaveformOwner {
+    track: String,
+    hash: u64,
+    since: Instant,
+}
+
+/// Zone -> WaveformData (DataList<int>): Roon's waveform of the playing
+/// track, the same one its own seek bar shows.
+fn zone_waveform(g: &ObjectGraph, zone: &RoonObject) -> Option<Vec<u8>> {
+    let values = g.deref(zone.field("WaveformData"))?.ints.as_ref()?;
+    if values.len() < 16 || values.iter().all(|v| *v == 0) {
+        return None;
+    }
+    Some(values.iter().map(|v| (*v).min(255) as u8).collect())
+}
+
 fn zone_id_of(zone: &RoonObject) -> Option<String> {
     zone.field("ZoneId")
         .and_then(Value::as_bytes)

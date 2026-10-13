@@ -398,9 +398,6 @@ mod windows_wrapper {
     static NOTE: Mutex<String> = Mutex::new(String::new());
     /// Whether the keep-in-sync loop is running (it stops itself when Off).
     static LOOP_RUNNING: AtomicBool = AtomicBool::new(false);
-    /// Whether the saved maximized state has been applied this run (only
-    /// possible once the window is showing).
-    static MAXIMIZE_RESTORED: AtomicBool = AtomicBool::new(false);
     /// When the Wrapper last changed size (None = not since it opened).
     static LAST_RESIZE: Mutex<Option<Instant>> = Mutex::new(None);
     /// When the Wrapper was last dragged by its title bar. While that's
@@ -559,150 +556,9 @@ mod windows_wrapper {
         }
     }
 
-    // DEBUG (temporary): what the main thread was last doing, and a
-    // watchdog that prints it if the main thread stops answering
-    static MAIN_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
-    static STEP: Mutex<(&str, Option<Instant>)> = Mutex::new(("", None));
-    static HEARTBEAT: Mutex<Option<Instant>> = Mutex::new(None);
-
-    fn step(name: &'static str) {
-        if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
-            *STEP.lock().unwrap() = (name, Some(Instant::now()));
-        }
-    }
-
-    fn watchdog(app: &AppHandle) {
-        let app = app.clone();
-        std::thread::spawn(move || {
-            let mut stuck = false;
-            loop {
-                std::thread::sleep(Duration::from_millis(500));
-                let _ = app.run_on_main_thread(|| {
-                    *HEARTBEAT.lock().unwrap() = Some(Instant::now());
-                });
-                let since = HEARTBEAT.lock().unwrap().map(|at| at.elapsed());
-                let Some(since) = since else { continue };
-                if since > Duration::from_secs(3) {
-                    if !stuck {
-                        let (name, at) = *STEP.lock().unwrap();
-                        eprintln!(
-                            "[watchdog] main thread not answering for {:.1} s; its last step: {} ({:.1} s ago)",
-                            since.as_secs_f64(),
-                            name,
-                            at.map(|at| at.elapsed().as_secs_f64()).unwrap_or(-1.0),
-                        );
-                        stuck = true;
-                    }
-                } else if stuck {
-                    eprintln!("[watchdog] main thread answering again");
-                    stuck = false;
-                }
-            }
-        });
-    }
-
-    // DEBUG (temporary): Roon's windows coming and going, and which window
-    // has the focus, to see what the Wrapper changes about Roon's search
-    fn watch_windows_debug() {
-        use windows::Win32::UI::Accessibility::SetWinEventHook;
-        use windows::Win32::UI::WindowsAndMessaging::{
-            EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
-        };
-        // SAFETY: a valid callback that lives for the whole program.
-        unsafe {
-            let _ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(on_window_debug), 0, 0, WINEVENT_OUTOFCONTEXT);
-            let _ = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, None, Some(on_window_debug), 0, 0, WINEVENT_OUTOFCONTEXT);
-        }
-    }
-
-    unsafe extern "system" fn on_window_debug(
-        _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
-        event: u32,
-        window: HWND,
-        object: i32,
-        child: i32,
-        _thread: u32,
-        _time: u32,
-    ) {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId, GW_OWNER, OBJID_CLIENT, OBJID_WINDOW,
-        };
-        let name = match event {
-            0x0003 => "foreground",
-            0x8000 => "create",
-            0x8001 => "destroy",
-            0x8002 => "show",
-            0x8003 => "hide",
-            0x8005 => "focus",
-            0x800B => "moved",
-            _ => return,
-        };
-        if window.is_invalid() || (object != OBJID_WINDOW.0 && object != OBJID_CLIENT.0) || child != 0 {
-            return;
-        }
-        let pid_of = |w: HWND| {
-            let mut pid = 0u32;
-            // SAFETY: a plain query.
-            unsafe { GetWindowThreadProcessId(w, Some(&mut pid)) };
-            pid
-        };
-        let pid = pid_of(window);
-        // Roon's process by its program's name (Roon may not be in the
-        // Wrapper), remembered for the last process asked about
-        static LAST: Mutex<(u32, bool)> = Mutex::new((0, false));
-        let is_roon = {
-            let cached = *LAST.lock().unwrap();
-            if cached.0 == pid {
-                cached.1
-            } else {
-                let roon = pid != 0 && process_exe_name(pid).is_some_and(|n| n.eq_ignore_ascii_case("roon.exe"));
-                *LAST.lock().unwrap() = (pid, roon);
-                roon
-            }
-        };
-        let who = if pid == std::process::id() {
-            "ours"
-        } else if is_roon {
-            "roon"
-        } else {
-            "other"
-        };
-        // Everything about Roon's windows (but not its main window moving,
-        // which the Wrapper does all the time); for others, only who's in
-        // front
-        if who != "roon" && event != 0x0003 {
-            return;
-        }
-        if event == 0x800B && is_roon_main_window(window) {
-            return;
-        }
-        let mut class = [0u16; 128];
-        let mut title = [0u16; 128];
-        // SAFETY: buffers sized as passed; plain queries.
-        let (c, t, owner) = unsafe {
-            (
-                GetClassNameW(window, &mut class),
-                GetWindowTextW(window, &mut title),
-                GetWindow(window, GW_OWNER).ok(),
-            )
-        };
-        let ms = STEP_START.get_or_init(Instant::now).elapsed().as_millis();
-        eprintln!(
-            "[win {ms:>7} ms] {name:<10} {who:<5} {:?} class \"{}\" title \"{}\"{}{}",
-            window.0,
-            String::from_utf16_lossy(&class[..c.max(0) as usize]),
-            String::from_utf16_lossy(&title[..t.max(0) as usize]),
-            owner.filter(|o| !o.is_invalid()).map(|o| format!(" owner {:?}", o.0)).unwrap_or_default(),
-            if hwnd_of(&ROON_HWND) == Some(window) { " (Roon's main window)" } else { "" },
-        );
-    }
-    static STEP_START: OnceLock<Instant> = OnceLock::new();
 
     pub fn start(app: &AppHandle) {
         let _ = APP.set(app.clone());
-        let _ = MAIN_THREAD.set(std::thread::current().id());
-        watchdog(app);
-        watch_windows_debug();
         remember_host(app);
         watch_foreground();
         follow_moves();
@@ -835,11 +691,8 @@ mod windows_wrapper {
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
-        // Maximized last time: only possible now that it's showing
-        if !MAXIMIZE_RESTORED.swap(true, Ordering::Relaxed) {
-            use tauri_plugin_window_state::{StateFlags, WindowExt};
-            let _ = window.restore_state(StateFlags::MAXIMIZED);
-        }
+        // Maximized isn't remembered (Vulk's call): it opens at the last
+        // size it had un-maximized (restored at startup, lib.rs)
         sync(app);
         ensure_loop(app);
     }
@@ -963,7 +816,6 @@ mod windows_wrapper {
     }
 
     fn sync_open(app: &AppHandle) {
-        step("sync_open: start");
         let mut report = HoleReport(None, None);
         // Being dragged: everything is already moving along (see LAST_MOVE
         // and DRAGGING)
@@ -1076,9 +928,7 @@ mod windows_wrapper {
         // and solid again just before the hole opens, so it shows (and
         // hides) in the same frame as Roon
         let exposed = open_hole && !subtract(hole, &covers).is_empty();
-        step("sync_open: filter see-through/solid");
         crate::skin::wait(!exposed);
-        step("sync_open: window shape");
         let mut region_key = bounds.to_vec();
         region_key.push(open_hole as i32);
         if open_hole {
@@ -1119,7 +969,6 @@ mod windows_wrapper {
                 let (min_w, min_h) = ((min_w * scale).ceil() as i32, (min_h * scale).ceil() as i32);
                 let extra = ((min_w - hole.2).max(0), (min_h - (hole.3 + bar)).max(0));
                 if extra.0 > 0 || extra.1 > 0 {
-                    step("sync_open: grow minimum (Roon's minimum)");
                     grow_minimum(&window, scale, extra.0, extra.1);
                 }
             }
@@ -1146,11 +995,8 @@ mod windows_wrapper {
         let client = (hole.0, hole.1, hole.2, hole.3 + bar);
         // Roon goes right below us (the sidebar filter sits right above
         // us, see skin.rs)
-        step("sync_open: place Roon");
         place_roon(roon, client, host);
-        step("sync_open: keep order");
         keep_order(host, roon);
-        step("sync_open: after keep order");
         if let (Some(r), Some(h)) = (window_rect(roon), window_rect(host)) {
             *ROON_OFFSET.lock().unwrap() = Some((r.0 - h.0, r.1 - h.1));
         }
@@ -1242,10 +1088,7 @@ mod windows_wrapper {
             (min, changed)
         };
         if changed {
-            eprintln!("[wrapper] minimum size now {:.0} x {:.0} (scale {scale})", min.0, min.1);
-            step("grow_minimum: set_min_size");
             let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(min.0, min.1))));
-            step("grow_minimum: done");
         }
         // Smaller than that: grown to it, but not while it's being resized
         // (Windows' resizing would put it right back where the mouse is,
@@ -1822,31 +1665,8 @@ mod windows_wrapper {
             WMSZ_TOPRIGHT, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVING, WM_SIZING,
             WM_WINDOWPOSCHANGING,
         };
-        // DEBUG: which message the main thread is in
-        step(match msg {
-            0x0005 => "host message: WM_SIZE",
-            0x0024 => "host message: WM_GETMINMAXINFO",
-            0x0046 => "host message: WM_WINDOWPOSCHANGING",
-            0x0047 => "host message: WM_WINDOWPOSCHANGED",
-            0x0214 => "host message: WM_SIZING",
-            0x0216 => "host message: WM_MOVING",
-            0x0231 => "host message: WM_ENTERSIZEMOVE",
-            0x0232 => "host message: WM_EXITSIZEMOVE",
-            0x02E0 => "host message: WM_DPICHANGED",
-            _ => "host message: other",
-        });
         // Moved to a screen with different scaling: icons for that size
         if msg == windows::Win32::UI::WindowsAndMessaging::WM_DPICHANGED {
-            // SAFETY: for this message lparam points at the suggested RECT.
-            let r = unsafe { &*(lparam.0 as *const RECT) };
-            eprintln!(
-                "[wrapper] scaling changed: dpi {} suggested {}x{} at {},{}",
-                wparam.0 & 0xFFFF,
-                r.right - r.left,
-                r.bottom - r.top,
-                r.left,
-                r.top
-            );
             set_icons(hwnd, (wparam.0 & 0xFFFF) as u32);
         }
         if STATE.load(Ordering::Relaxed) == OPEN {
@@ -1951,24 +1771,13 @@ mod windows_wrapper {
             if let Some((room_w, room_h)) = screen_room(hwnd) {
                 // SAFETY: for this message lparam points at a MINMAXINFO.
                 let info = unsafe { &mut *(lparam.0 as *mut windows::Win32::UI::WindowsAndMessaging::MINMAXINFO) };
-                let asked = (info.ptMinTrackSize.x, info.ptMinTrackSize.y);
                 info.ptMinTrackSize.x = info.ptMinTrackSize.x.min(room_w);
                 info.ptMinTrackSize.y = info.ptMinTrackSize.y.min(room_h);
-                // DEBUG: only when it changes
-                type Sizes = ((i32, i32), (i32, i32));
-                static LAST: Mutex<Option<Sizes>> = Mutex::new(None);
-                let now = (asked, (room_w, room_h));
-                if LAST.lock().unwrap().replace(now) != Some(now) {
-                    eprintln!("[wrapper] minimum asked {}x{}, screen room {}x{}", asked.0, asked.1, room_w, room_h);
-                }
             }
-            step("host message: WM_GETMINMAXINFO done");
             return result;
         }
         // SAFETY: passing the message on, as every subclass must.
-        let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
-        step("host message: done");
-        result
+        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
     }
 
     /// The learned minimum (see LEARNED_MIN) as a whole-window size in real
@@ -2014,7 +1823,6 @@ mod windows_wrapper {
     /// the screen, where it waits out the drag. Only when Roon is showing
     /// through the hole right now.
     fn start_drag(host: HWND) {
-        step("start_drag");
         use windows::Win32::Foundation::TRUE;
         use windows::Win32::Graphics::Dwm::{
             DwmRegisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
@@ -2142,7 +1950,6 @@ mod windows_wrapper {
     /// The drag is over: Roon goes to its spot behind the hole, then a sync
     /// pass opens the hole and removes the live pictures.
     fn end_drag(host: HWND) {
-        step("end_drag");
         use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE};
         if let (Some(roon), Some(now), Some((ox, oy))) =
             (roon_window(), window_rect(host), *ROON_OFFSET.lock().unwrap())
@@ -2642,8 +2449,6 @@ mod windows_wrapper {
             CHECK_DUE.store(false, Ordering::Relaxed);
             return;
         }
-        // DEBUG (temporary)
-        eprintln!("[wrapper] Roon's player looked {}, clicking to match ours", if arrow.is_some() { "open" } else { "closed" });
         match arrow {
             Some(arrow) => click_at(roon, arrow),
             None => roon_click(roon, SPOT_OPEN),

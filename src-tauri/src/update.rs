@@ -11,8 +11,9 @@
 //! (per-user, passive: a progress bar, no questions) and relaunches the app.
 //! Nothing downloads without the person pressing Install.
 //!
-//! Timing: the first check runs a minute after launch, then every 6 hours,
-//! only while the "Check for updates" setting is on. Settings has the card
+//! Timing: the first check runs 10 seconds after launch, then every 6
+//! hours, and again when Settings opens if the last one is over 10 minutes
+//! old; only while the "Check for updates" setting is on. Settings has the card
 //! (status, notes, Install / Check now); the tray menu gets an "Update to x"
 //! entry when one is waiting. Pages listen to `update-status`.
 
@@ -26,7 +27,9 @@ use tauri_plugin_updater::{Update, UpdaterExt};
 use crate::settings;
 
 /// Wait after launch before the first check (never slows the start).
-const FIRST_CHECK_AFTER: Duration = Duration::from_secs(60);
+const FIRST_CHECK_AFTER: Duration = Duration::from_secs(10);
+/// Opening Settings checks again when the last check is older than this.
+const STALE_AFTER: u64 = 10 * 60;
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -221,6 +224,22 @@ pub fn from_tray(app: &AppHandle) {
 
 #[tauri::command]
 pub fn update_status(app: AppHandle, updates: State<'_, Updates>) -> UpdateStatus {
+    updates.status(&app)
+}
+
+/// Settings opened: checks in the background if checking is on and the last
+/// check is more than 10 minutes old (or there hasn't been one), so the
+/// card is current right after a release.
+#[tauri::command]
+pub fn update_check_if_stale(app: AppHandle, updates: State<'_, Updates>) -> UpdateStatus {
+    let stale = {
+        let inner = updates.inner.lock().unwrap();
+        !inner.busy && inner.checked_at.is_none_or(|at| now_epoch().saturating_sub(at) > STALE_AFTER)
+    };
+    if stale && settings::get_settings(app.clone()).check_for_updates {
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move { check(&app).await });
+    }
     updates.status(&app)
 }
 

@@ -2,7 +2,8 @@
 
 A Roon companion for Windows that lives in the tray. Press a hotkey to open a
 small player with now playing, your queue, browse and search, get a "now
-playing" toast when the track changes, or put a mini player on your taskbar.
+playing" toast when the track changes, put a mini player on your taskbar, or
+wrap the Roon app itself in a window with a player you can style your way.
 It works on its own, no Stream Deck needed, and pairs with
 [Roon: Dialed Up](https://marketplace.elgato.com/product/roon-dialed-up-f76699d9-4266-4d4a-ad94-eaddd148daa9)
 if you have a Stream Deck.
@@ -28,8 +29,34 @@ if you have a Stream Deck.
   from the album that's playing.
 - **Auto-Hide:** the Toaster goes back to the tray when you click elsewhere
   (or stays on the taskbar if you turn that off).
+- **Hearts & Library** (experimental): heart the playing track or album, or
+  add it to your library, plus an audio quality light (Low Quality, CD Quality,
+  Hi-Res) and real waveforms for local files.
 - Tray quick settings, Start with Windows, zoom, light and dark themes, and a
   window that fits your screen.
+
+## Roon: Wrapped (experimental)
+
+The Wrapper puts the Roon app inside a Toasted window, with Toasted's player
+along the bottom, so everything Roon can do is right there. Switch it on in
+**Settings > The Wrapper**, then open it from the tray, with Ctrl + Alt + W, or
+from Settings. Closing it keeps Roon running out of sight, so it reopens
+instantly.
+
+- **Now Playing:** click the album art in the player bar for a full-window
+  player. The pencil lets you move and resize every piece (art, track info,
+  controls, seek bar, zone, quality light, volume) and pick fonts, icon packs
+  and bar styles, in the app's colors, the album's or your own. Save layouts as
+  profiles, or start from the presets.
+- **Waveform:** with Hearts & Library on, the seek bar can show a local file's
+  real waveform from Roon, in several looks.
+- **Return Roon** gives Roon its own window back; an **Enable Wrapper** button
+  then sits in Roon's title bar to wrap it up again.
+- Only want the Wrapper? Switch the Toaster off in **Settings > Toaster**, and
+  its hotkeys and links open the Wrapper instead.
+
+The Wrapper works with Roon's own window, so a Roon update could change how it
+behaves. It's experimental for that reason.
 
 ## Install
 
@@ -97,9 +124,11 @@ once connected, otherwise `null`. No answer means it isn't running.
 
 ## Good to know
 
-- Roon doesn't share everything with extensions. There's no audio quality or
-  signal path info, no queue reordering or clearing, and no way to open a
-  specific page in the Roon app, so Roon: Toasted doesn't show or do those.
+- Roon doesn't share everything with extensions. Hearts, library, audio
+  quality and waveforms come from Roon's internal protocol instead, which is
+  why they're experimental (Settings > Hearts & Library). There's still no
+  queue reordering or clearing, and the Toaster can't open a specific page in
+  the Roon app (the Wrapper can, since Roon is right there).
 - Toasts are skipped while a game runs in exclusive full-screen mode, because
   showing one would minimize the game. Borderless windowed games get them.
 - The taskbar widget is experimental. Windows doesn't officially allow apps to
