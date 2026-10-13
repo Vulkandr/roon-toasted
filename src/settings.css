@@ -129,6 +129,65 @@ h3 {
   margin: 20px 0 8px;
 }
 
+/* A card's title with its own on/off switch beside it (and its
+   Experimental badge before it), centered together */
+.card-head {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 0 0 12px;
+}
+
+.card-head h2 {
+  margin: 0;
+}
+
+.card-head .badge {
+  margin-left: 0;
+}
+
+.card-head .switch-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* The Hotkeys heading with its switch beside it */
+.hotkeys-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 20px 0 8px;
+}
+
+.hotkeys-head h3 {
+  margin: 0;
+  /* Stands out from the small grey labels: it heads the whole list */
+  color: var(--text);
+  font-size: 13px;
+}
+
+.hotkeys-head .switch-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Where Search goes (Roon or Toaster), at the end of its hotkey row (a
+   box of its own, unlike a switch group inside a setting's grid) */
+.hotkey-row .search-opens {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
+.hotkey-row .search-opens.disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 /* The rounded panel each settings section sits in */
 .card {
   background: var(--card);
@@ -594,13 +653,21 @@ button:disabled {
   user-select: none;
 }
 
+/* The Roon: Toasted logo, in color. 16, 20, 24 and 32 px are drawn on the
+   pixel grid, 28 is scaled from the artwork; the browser picks the one for
+   the screen's scaling. */
 .titlebar-logo {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
-  background: var(--text);
-  -webkit-mask: url("assets/logo-mask-small.png") center / contain no-repeat;
-  mask: url("assets/logo-mask-small.png") center / contain no-repeat;
+  background: image-set(
+      url("assets/toasted-16.png") 1x,
+      url("assets/toasted-20.png") 1.25x,
+      url("assets/toasted-24.png") 1.5x,
+      url("assets/toasted-28.png") 1.75x,
+      url("assets/toasted-32.png") 2x
+    )
+    center / 16px 16px no-repeat;
 }
 
 .titlebar-title {
@@ -660,12 +727,13 @@ button:disabled {
 }
 
 .hotkey-name {
-  width: 110px;
+  width: 100px;
+  flex: none;
 }
 
 .hotkey,
 .hotkey:hover {
-  min-width: 170px;
+  min-width: 140px;
   text-align: left;
   color: var(--text);
   background: transparent;
@@ -691,7 +759,9 @@ button:disabled {
   padding: 3px 10px;
 }
 
-.hotkey-row[hidden] {
+.hotkey-row[hidden],
+#hotkeys-heading[hidden],
+#hotkey-list[hidden] {
   display: none;
 }
 
@@ -717,6 +787,7 @@ button:disabled {
 }
 
 /* Switched off: its options are dimmed and locked */
+.toaster-option.disabled,
 .widget-option.disabled,
 .library-option.disabled,
 .wrapper-option.disabled {
@@ -763,18 +834,11 @@ button:disabled {
   color: var(--muted);
 }
 
-/* Toasts: the switch, Position and Time on Screen side by side */
-.toast-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px 28px;
-  flex-wrap: wrap;
-}
-
+/* Position, Time on Screen and Monitor side by side, across the card */
 .toast-options {
   display: flex;
-  gap: 28px;
+  justify-content: space-between;
+  gap: 20px;
 }
 
 /* Switched off: the options are dimmed and locked (like Hotkeys) */
@@ -881,17 +945,9 @@ button:disabled {
   margin-top: 6px;
 }
 
-/* Monitor: a dropdown under the other toast options */
-.monitor-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 16px;
-}
-
+/* Monitor: a dropdown beside the other toast options */
 #toast-monitor {
-  flex: 1;
-  min-width: 0;
+  width: 152px;
   font: inherit;
   padding: 5px 8px;
   border-radius: 6px;

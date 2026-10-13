@@ -11,13 +11,18 @@
           ["Now Playing", "Click the album art in the player bar for a full-window player. Hit the pencil to move and resize the art, track info, controls, seek bar, zone and volume anywhere you like."],
           ["Make it yours", "Fonts per piece (bundled or any installed font), icon packs (Lucide, Phosphor, Tabler, Material Symbols, Remix), a plain or circled play button, and bar styles for seek and volume: Line, Thick, Hairline, Segments and Wave. Bars can take the app's colors, the album's, or your own. The player bar can follow the same style."],
           ["Profiles", "Save your layouts as profiles and switch between them. Start from the Default, Waves or Waves Large presets."],
+          ["Toaster on or off", "Only want the Wrapper? Switch the Toaster off in Settings > Toaster, or from the tray. Its hotkeys, links, and toast and widget clicks then open the Wrapper instead."],
+          ["Search in Roon", "With the Wrapper on, the Search hotkey and Stream Deck search can open Roon's own search instead of the Toaster's. Pick Roon or Toaster next to the Search hotkey in Settings > General."],
           ["Changelog", "This window. It opens after each update, and the Changelog button in Settings > Updates brings it back. New settings glow until you hover over them."]
         ]
       },
       {
         "title": "Good to know",
         "items": [
-          ["Tray", "While the Wrapper is on, the tray shows the Wrapped icon and Open Wrapper comes first in its menu."]
+          ["Tray", "The tray menu has Toaster and Wrapper switches. While the Wrapper is on, Open Wrapper comes first and a double-click opens it."],
+          ["Remember Player", "Settings > The Wrapper: Now Playing comes back as you left it, open or closed, even after a restart. Something Roon itself doesn't do."],
+          ["Open at Launch", "Settings > The Wrapper and Settings > Toaster: open either one whenever Toasted starts, at sign-in or by hand. On for the Wrapper to begin with."],
+          ["Settings", "A new General card holds what applies to the whole app: Colors, Auto-Hide, Start with Windows and every hotkey. The Hotkeys switch sits on the Hotkeys heading, and the Toaster, Wrapper and Taskbar Widget switches sit next to their titles."]
         ]
       }
     ]

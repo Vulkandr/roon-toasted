@@ -20,6 +20,16 @@ use tauri::{AppHandle, Emitter, Manager};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
+    /// The Toaster: on, or off for people who only use the Wrapper (or
+    /// just toasts and the widget). Off hides its tray entry and releases
+    /// its hotkeys; anything that would open it opens the Wrapper instead
+    /// (or Settings, with the Wrapper off too).
+    pub toaster_enabled: bool,
+    /// Where the Search hotkey and roon-toasted://search go when the
+    /// Toaster and the Wrapper are both on: Roon's own search (through the
+    /// Wrapper) or the Toaster's Search tab. With only one of them on, it's
+    /// that one (`search_in_roon`).
+    pub search_opens: SearchOpens,
     /// The zone the Toaster controls, when the user has picked one.
     /// Changed through `roon_select_zone`, not `update_settings`.
     pub selected_zone_id: Option<String>,
@@ -86,8 +96,18 @@ pub struct AppSettings {
     /// The Wrapper (experimental, see wrapper.rs): Roon desktop inside a
     /// Toasted window. Off hides its tray entry and releases its hotkey.
     pub wrapper_enabled: bool,
-    /// Open the Wrapper when Windows starts the app at sign-in.
-    pub wrapper_at_sign_in: bool,
+    /// "Open at Launch" for the Wrapper: open it whenever the app starts
+    /// (at sign-in, or by hand), and when it's started again while running.
+    pub wrapper_at_launch: bool,
+    /// "Remember Player": the Wrapper's Now Playing comes back as it was
+    /// left (open or closed), even after a restart. Off, it's closed
+    /// whenever the Wrapper opens, as in Roon itself.
+    pub wrapper_remember_player: bool,
+    /// "Open at Launch" for the Toaster, the same way. Takes over the
+    /// Wrapper's earlier "Open at Sign-in" choice (`wrapperAtSignIn`), so a
+    /// choice already made carries over.
+    #[serde(alias = "wrapperAtSignIn")]
+    pub toaster_at_launch: bool,
     /// Global hotkey that opens (or hides) the Wrapper; None = off. Only
     /// registered while the Wrapper is on. Changed through `set_hotkey`.
     pub hotkey_wrapper: Option<String>,
@@ -107,6 +127,8 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            toaster_enabled: true,
+            search_opens: SearchOpens::default(),
             selected_zone_id: None,
             toaster_window: ToasterWindow::default(),
             zoom: 1.0,
@@ -133,7 +155,9 @@ impl Default for AppSettings {
             manual_core_port: DEFAULT_CORE_PORT,
             last_core_host: None,
             wrapper_enabled: false,
-            wrapper_at_sign_in: true,
+            wrapper_at_launch: true,
+            wrapper_remember_player: true,
+            toaster_at_launch: false,
             hotkey_wrapper: Some("Ctrl+Alt+W".into()),
             wrapper_stage: serde_json::Value::Object(Default::default()),
             last_version: None,
@@ -205,6 +229,22 @@ pub enum ToasterWindow {
     Default,
     /// Reopen at the size, position and maximized state it was last left in.
     Remember,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchOpens {
+    /// The Toaster's Search tab, ready to type.
+    #[default]
+    Toaster,
+    /// Roon's own search, in the Wrapper.
+    Roon,
+}
+
+/// Whether Search goes to Roon: the Wrapper is on, and either the Toaster
+/// is off or Search is set to Roon.
+pub fn search_in_roon(settings: &AppSettings) -> bool {
+    settings.wrapper_enabled && (!settings.toaster_enabled || settings.search_opens == SearchOpens::Roon)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -336,8 +376,12 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     }
     if updated.hotkeys_enabled != before.hotkeys_enabled
         || updated.wrapper_enabled != before.wrapper_enabled
+        || updated.toaster_enabled != before.toaster_enabled
     {
         crate::hotkeys::register_saved(&app);
+    }
+    if before.toaster_enabled && !updated.toaster_enabled {
+        crate::hide_toaster(&app);
     }
     crate::wrapper::settings_changed(&app, &before, &updated);
     crate::library::settings_changed(&app, &before, &updated);

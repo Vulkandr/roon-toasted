@@ -151,106 +151,139 @@
           </button>
         </div>
 
-        <!-- Edit layout toolbar -->
+        <!-- Edit layout toolbar: the grip down its left side, then its rows.
+             Nothing selected: the profile, what shows and the background.
+             A piece selected: that piece's own options. -->
         <div id="stage-editor" class="stage-editor" hidden>
           <span id="editor-grip" class="editor-grip" title="Drag to move this toolbar">
             <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="6" r="1.6"/><circle cx="15" cy="6" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="9" cy="18" r="1.6"/><circle cx="15" cy="18" r="1.6"/></svg>
           </span>
-          <span class="editor-hint">Drag to move, handles to resize</span>
-          <span class="editor-sep editor-global"></span>
-          <div id="editor-profile" class="editor-group editor-global">
-            <label class="editor-label" for="editor-profile-select">Profile</label>
-            <select id="editor-profile-select" class="editor-select"></select>
-            <span id="editor-unsaved" class="editor-unsaved" hidden>Unsaved</span>
-            <button id="profile-save" class="editor-btn" title="Save your changes to this profile">Save</button>
-            <button id="profile-save-as" class="editor-btn" title="Save this layout as a new profile">Save as new</button>
-            <button id="profile-rename" class="editor-btn">Rename</button>
-            <button id="profile-delete" class="editor-btn">Delete</button>
+          <div class="editor-rows">
+            <div class="editor-row editor-global">
+              <div id="editor-profile" class="editor-group">
+                <label class="editor-label" for="editor-profile-select">Profile</label>
+                <select id="editor-profile-select" class="editor-select"></select>
+                <span id="editor-unsaved" class="editor-unsaved" hidden>Unsaved</span>
+                <button id="profile-save" class="editor-btn" title="Save your changes to this profile">Save</button>
+                <button id="profile-save-as" class="editor-btn" title="Save this layout as a new profile">Save as new</button>
+                <button id="profile-rename" class="editor-btn">Rename</button>
+                <button id="profile-delete" class="editor-btn">Delete</button>
+              </div>
+            </div>
+            <div class="editor-row editor-global">
+              <div class="editor-group">
+                <span class="editor-label">Show</span>
+                <button class="chip" data-show="art">Art</button>
+                <button class="chip" data-show="info">Track</button>
+                <button class="chip" data-show="transport">Controls</button>
+                <button class="chip" data-show="seek">Seek</button>
+                <button class="chip" data-show="zone">Zone</button>
+                <button class="chip" data-show="volume">Volume</button>
+              </div>
+            </div>
+            <div class="editor-row editor-global">
+              <div class="editor-group">
+                <span class="editor-label">Background</span>
+                <button class="chip" data-bg="plain">Plain</button>
+                <button class="chip" data-bg="art">Album art</button>
+                <label class="editor-check" title="Use these fonts, icons and bar styles in the player bar too, when Now Playing is closed"><input id="editor-barstyle" type="checkbox" /> Style player bar</label>
+                <label class="editor-check" title="What's white takes the app's or album's color, and what has that color turns white (the title, the play button, buttons that are on)"><input id="editor-invert" type="checkbox" /> Invert colors</label>
+              </div>
+            </div>
+            <div class="editor-row editor-piece">
+              <div id="editor-text" class="editor-group" hidden>
+                <button class="align-btn" data-align="left" title="Align left">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12H3"/><path d="M17 18H3"/><path d="M21 6H3"/></svg>
+                </button>
+                <button class="align-btn" data-align="center" title="Align center">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 12H7"/><path d="M19 18H5"/><path d="M21 6H3"/></svg>
+                </button>
+                <button class="align-btn" data-align="right" title="Align right">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H9"/><path d="M21 18H7"/><path d="M21 6H3"/></svg>
+                </button>
+                <label class="editor-label" for="editor-lines">Title lines</label>
+                <select id="editor-lines" class="editor-select">
+                  <option value="1">1</option>
+                  <option value="2">2</option>
+                  <option value="3">3</option>
+                </select>
+              </div>
+              <div id="editor-font" class="editor-group" hidden>
+                <label class="editor-label" for="editor-font-select">Font</label>
+                <select id="editor-font-select" class="editor-select"></select>
+                <label class="editor-check" title="Use this font for every piece with text"><input id="editor-font-all" type="checkbox" checked /> All</label>
+              </div>
+              <div id="editor-icons" class="editor-group" hidden>
+                <label class="editor-label" for="editor-icons-select">Icons</label>
+                <select id="editor-icons-select" class="editor-select"></select>
+                <label class="editor-check" title="Use this pack for every piece with icons"><input id="editor-icons-all" type="checkbox" checked /> All</label>
+              </div>
+              <div id="editor-play" class="editor-group" hidden>
+                <span class="editor-label">Play button</span>
+                <button class="chip" data-play="circle">Circle</button>
+                <button class="chip" data-play="plain">Plain</button>
+              </div>
+              <div id="editor-bar" class="editor-group" hidden>
+                <label class="editor-label" for="editor-bar-select">Bar</label>
+                <select id="editor-bar-select" class="editor-select">
+                  <option value="line">Line</option>
+                  <option value="thick">Thick</option>
+                  <option value="hairline">Hairline</option>
+                  <option value="segments">Segments</option>
+                  <option value="wave">Wave</option>
+                </select>
+                <span class="editor-label">Color</span>
+                <button class="chip" data-color="app" title="The app's colors (for Wave: the rainbow)">App</button>
+                <button class="chip" data-color="album" title="The playing album's color">Album</button>
+                <button class="chip" data-color="custom">Custom</button>
+                <input id="editor-color" class="editor-color" type="color" value="#7b5fc7" hidden />
+                <span id="editor-wave" class="editor-group" hidden>
+                  <label class="editor-check"><input id="editor-mirror" type="checkbox" /> Mirrored</label>
+                  <span id="editor-side" class="editor-group">
+                    <button class="chip" data-side="top">Top</button>
+                    <button class="chip" data-side="bottom">Bottom</button>
+                  </span>
+                </span>
+              </div>
+              <div id="editor-volume" class="editor-group" hidden>
+                <button class="chip" data-vertical="true">Vertical</button>
+                <button class="chip" data-vertical="false">Horizontal</button>
+              </div>
+            </div>
+            <div class="editor-row editor-piece">
+              <div id="editor-labels" class="editor-group" hidden title="The size of this bar's times or level and its icons, apart from the bar itself (double-click for 100%)">
+                <label class="editor-label" for="editor-label-scale">Text &amp; icons</label>
+                <input id="editor-label-scale" class="editor-range" type="range" min="50" max="200" step="5" />
+                <span id="editor-label-scale-value" class="editor-value"></span>
+              </div>
+              <div id="editor-text-edge" class="editor-group" hidden>
+                <label class="editor-label" for="editor-text-edge-select">Text edge</label>
+                <select id="editor-text-edge-select" class="editor-select">
+                  <option value="none">None</option>
+                  <option value="stroke">Black outline</option>
+                  <option value="glow">Black glow</option>
+                </select>
+                <input id="editor-text-edge-size" class="editor-range" type="range" min="1" max="6" step="1" title="Thickness" />
+                <span id="editor-text-edge-value" class="editor-value"></span>
+                <label class="editor-check" title="Use this edge for every piece with text"><input id="editor-text-edge-all" type="checkbox" checked /> All</label>
+              </div>
+              <div id="editor-icon-edge" class="editor-group" hidden>
+                <label class="editor-label" for="editor-icon-edge-select">Icon edge</label>
+                <select id="editor-icon-edge-select" class="editor-select">
+                  <option value="none">None</option>
+                  <option value="stroke">Black outline</option>
+                  <option value="glow">Black glow</option>
+                </select>
+                <input id="editor-icon-edge-size" class="editor-range" type="range" min="1" max="6" step="1" title="Thickness" />
+                <span id="editor-icon-edge-value" class="editor-value"></span>
+                <label class="editor-check" title="Use this edge for every piece with icons"><input id="editor-icon-edge-all" type="checkbox" checked /> All</label>
+              </div>
+            </div>
+            <div class="editor-row editor-actions">
+              <button id="editor-reset" class="editor-btn" title="Undo your changes since the profile was last saved">Reset</button>
+              <button id="editor-done" class="editor-btn primary">Done</button>
+            </div>
           </div>
-          <span class="editor-sep editor-global"></span>
-          <div class="editor-group editor-global">
-            <span class="editor-label">Show</span>
-            <button class="chip" data-show="art">Art</button>
-            <button class="chip" data-show="info">Track</button>
-            <button class="chip" data-show="transport">Controls</button>
-            <button class="chip" data-show="seek">Seek</button>
-            <button class="chip" data-show="zone">Zone</button>
-            <button class="chip" data-show="volume">Volume</button>
-          </div>
-          <span class="editor-sep editor-global"></span>
-          <div class="editor-group editor-global">
-            <span class="editor-label">Background</span>
-            <button class="chip" data-bg="plain">Plain</button>
-            <button class="chip" data-bg="art">Album art</button>
-            <label class="editor-check" title="Use these fonts, icons and bar styles in the player bar too, when Now Playing is closed"><input id="editor-barstyle" type="checkbox" /> Style player bar</label>
-          </div>
-          <div id="editor-text" class="editor-group" hidden>
-            <span class="editor-sep"></span>
-            <button class="align-btn" data-align="left" title="Align left">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 12H3"/><path d="M17 18H3"/><path d="M21 6H3"/></svg>
-            </button>
-            <button class="align-btn" data-align="center" title="Align center">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 12H7"/><path d="M19 18H5"/><path d="M21 6H3"/></svg>
-            </button>
-            <button class="align-btn" data-align="right" title="Align right">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12H9"/><path d="M21 18H7"/><path d="M21 6H3"/></svg>
-            </button>
-            <label class="editor-label" for="editor-lines">Title lines</label>
-            <select id="editor-lines" class="editor-select">
-              <option value="1">1</option>
-              <option value="2">2</option>
-              <option value="3">3</option>
-            </select>
-          </div>
-          <div id="editor-font" class="editor-group" hidden>
-            <span class="editor-sep"></span>
-            <label class="editor-label" for="editor-font-select">Font</label>
-            <select id="editor-font-select" class="editor-select"></select>
-            <label class="editor-check" title="Use this font for every piece with text"><input id="editor-font-all" type="checkbox" checked /> All</label>
-          </div>
-          <div id="editor-icons" class="editor-group" hidden>
-            <span class="editor-sep"></span>
-            <label class="editor-label" for="editor-icons-select">Icons</label>
-            <select id="editor-icons-select" class="editor-select"></select>
-            <label class="editor-check" title="Use this pack for every piece with icons"><input id="editor-icons-all" type="checkbox" checked /> All</label>
-          </div>
-          <div id="editor-play" class="editor-group" hidden>
-            <span class="editor-sep"></span>
-            <span class="editor-label">Play button</span>
-            <button class="chip" data-play="circle">Circle</button>
-            <button class="chip" data-play="plain">Plain</button>
-          </div>
-          <div id="editor-bar" class="editor-group" hidden>
-            <span class="editor-sep"></span>
-            <label class="editor-label" for="editor-bar-select">Bar</label>
-            <select id="editor-bar-select" class="editor-select">
-              <option value="line">Line</option>
-              <option value="thick">Thick</option>
-              <option value="hairline">Hairline</option>
-              <option value="segments">Segments</option>
-              <option value="wave">Wave</option>
-            </select>
-            <span class="editor-label">Color</span>
-            <button class="chip" data-color="app" title="The app's colors (for Wave: the rainbow)">App</button>
-            <button class="chip" data-color="album" title="The playing album's color">Album</button>
-            <button class="chip" data-color="custom">Custom</button>
-            <input id="editor-color" class="editor-color" type="color" value="#7b5fc7" hidden />
-            <span id="editor-wave" class="editor-group" hidden>
-              <label class="editor-check"><input id="editor-mirror" type="checkbox" /> Mirrored</label>
-              <span id="editor-side" class="editor-group">
-                <button class="chip" data-side="top">Top</button>
-                <button class="chip" data-side="bottom">Bottom</button>
-              </span>
-            </span>
-          </div>
-          <div id="editor-volume" class="editor-group" hidden>
-            <span class="editor-sep"></span>
-            <button class="chip" data-vertical="true">Vertical</button>
-            <button class="chip" data-vertical="false">Horizontal</button>
-          </div>
-          <span class="editor-sep"></span>
-          <button id="editor-reset" class="editor-btn" title="Undo your changes since the profile was last saved">Reset</button>
-          <button id="editor-done" class="editor-btn primary">Done</button>
         </div>
 
         <!-- Questions while editing (save changes, profile names) -->

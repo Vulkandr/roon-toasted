@@ -25,3 +25,7 @@ dist-ssr
 
 # Release notes for the build in progress (they go on the GitHub release)
 RELEASE_NOTES.md
+
+# Temporary debug output from the Wrapper (goes away with the debug logging)
+skin-log.txt
+skin-none.bmp

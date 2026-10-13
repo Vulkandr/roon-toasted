@@ -25,6 +25,7 @@ mod toast;
 mod tray;
 mod widget;
 mod wrapper;
+mod zonekeeper;
 mod zones;
 
 // Window labels, as set in tauri.conf.json.
@@ -181,11 +182,36 @@ fn reset_toaster_size(app: &AppHandle) {
     fit_to_screen(app, TOASTER_WINDOW, true);
 }
 
+/// What opens instead of the Toaster while it's switched off: the Wrapper
+/// if it's on, otherwise Settings, so a hotkey, link, toast or widget click
+/// always lands somewhere.
+fn open_instead_of_toaster(app: &AppHandle) {
+    if wrapper::enabled(app) {
+        wrapper::open(app);
+    } else {
+        show(app, SETTINGS_WINDOW);
+    }
+}
+
+/// The Toaster was switched off: out of sight if it was open.
+pub(crate) fn hide_toaster(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(TOASTER_WINDOW) {
+        if window.is_visible().unwrap_or(false) {
+            let _ = window.hide();
+            save_window_state(app);
+        }
+    }
+}
+
 /// Shows the Toaster and tells its page which mode it was opened in, via the
-/// `toaster-open` event (payload "player" or "search").
+/// `toaster-open` event (payload "player" or "search"). While the Toaster is
+/// switched off, opens the Wrapper (or Settings) instead.
 pub(crate) fn open_toaster(app: &AppHandle, mode: ToasterMode) {
     // "Default" window size means every opening, not just the first one.
     let saved = settings::get_settings(app.clone());
+    if !saved.toaster_enabled {
+        return open_instead_of_toaster(app);
+    }
     if saved.toaster_window == settings::ToasterWindow::Default {
         reset_toaster_size(app);
     } else {
@@ -201,9 +227,29 @@ pub(crate) fn open_toaster(app: &AppHandle, mode: ToasterMode) {
     let _ = app.emit_to(TOASTER_WINDOW, "toaster-open", mode);
 }
 
+/// The Search hotkey or link: Roon's own search through the Wrapper, or
+/// the Toaster's Search tab (Settings decides while both are on, see
+/// `settings::search_in_roon`).
+pub(crate) fn open_search(app: &AppHandle) {
+    if settings::search_in_roon(&settings::get_settings(app.clone())) {
+        wrapper::search(app);
+    } else {
+        open_toaster(app, ToasterMode::Search);
+    }
+}
+
 /// The Player hotkey: hides the Toaster when it's open and in front,
-/// otherwise opens it as the player.
+/// otherwise opens it as the player. (With the Toaster switched off, a
+/// roon-toasted://toggle link toggles the Wrapper instead.)
 pub(crate) fn toggle_toaster(app: &AppHandle) {
+    if !settings::get_settings(app.clone()).toaster_enabled {
+        if wrapper::enabled(app) {
+            wrapper::toggle(app);
+        } else {
+            show(app, SETTINGS_WINDOW);
+        }
+        return;
+    }
     if let Some(window) = app.get_webview_window(TOASTER_WINDOW) {
         let in_front = window.is_visible().unwrap_or(false) && window.is_focused().unwrap_or(false);
         if in_front {
@@ -261,10 +307,11 @@ fn hide_if_app_unfocused(app: AppHandle) {
 }
 
 /// Asks Windows 11 for rounded corners on a frameless window (Windows doesn't
-/// round frameless windows on its own; maximized windows stay square).
+/// round frameless windows on its own; maximized windows stay square). Also
+/// after Zonekeeper lets go of one (zonekeeper.rs).
 /// Does nothing on Windows 10, which has no rounded corners.
 #[cfg(windows)]
-fn round_corners(window: &WebviewWindow) {
+pub(crate) fn round_corners(window: &WebviewWindow) {
     use windows::Win32::Graphics::Dwm::{
         DwmSetWindowAttribute, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
     };
@@ -317,9 +364,7 @@ pub fn run() {
     #[cfg(desktop)]
     {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
-            let request = launch::request(&args)
-                .unwrap_or(launch::Request::Open(ToasterMode::Player));
-            launch::handle(app, request);
+            launch::relaunched(app, &args);
         }));
 
         // Tracks the Toaster's and the Wrapper's size/position so they can
@@ -376,8 +421,8 @@ pub fn run() {
             }
         })
         .setup(move |app| {
-            // Tray icon and its right-click menu (see tray.rs); the tray and
-            // taskbar-button icons follow the taskbar's light/dark mode
+            // Tray icon and its right-click menu (see tray.rs), and the
+            // logo on the tray and taskbar buttons (icon.rs)
             tray::build(app)?;
             icon::start(app.handle());
 
@@ -450,6 +495,9 @@ pub fn run() {
             // Just updated: the Changelog opens (see changelog.rs)
             changelog::at_start(app.handle());
 
+            // Square corners while in a Zonekeeper zone (see zonekeeper.rs)
+            zonekeeper::start(app.handle());
+
             // After switching Cores (the app restarts itself), bring Settings
             // back so the new connection can be seen
             if restarted {
@@ -499,6 +547,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_window,
             hide_window,
+            zonekeeper::zone_squared,
             settings::get_settings,
             settings::update_settings,
             roon::roon_status,
@@ -547,6 +596,10 @@ pub fn run() {
             wrapper::wrapper_status,
             wrapper::wrapper_put_back,
             wrapper::list_fonts,
+            wrapper::wrapper_roon_player,
+            wrapper::wrapper_roon_link,
+            wrapper::wrapper_roon_close,
+            wrapper::wrapper_roon_search,
             skin::wrapper_colors
         ])
         .build(tauri::generate_context!())

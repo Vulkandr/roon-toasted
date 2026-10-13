@@ -91,43 +91,12 @@
           </div>
         </div>
       </section>
-      <section class="card toaster-card">
-        <h2>Toaster</h2>
+      <!-- Settings for the whole app: colors, Auto-Hide, starting with
+           Windows, and every hotkey -->
+      <section class="card general-card" data-new="general-card">
+        <h2>General</h2>
 
         <div class="setting-row">
-          <div class="setting">
-            <span class="setting-name">Window Size</span>
-            <div class="switch-group">
-              <span class="switch-label label-off">Default</span>
-              <label class="switch">
-                <input type="checkbox" id="toaster-window" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">Last Position</span>
-            </div>
-          </div>
-          <div class="setting">
-            <span class="setting-name">Zoom</span>
-            <div class="switch-group" id="zoom-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="zoom-hotkeys" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
-          </div>
-          <div class="setting">
-            <span class="setting-name">Auto-Hide</span>
-            <div class="switch-group" id="blur-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="hide-on-blur" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
-          </div>
           <div class="setting">
             <span class="setting-name">Colors</span>
             <div class="switch-group" id="colors-group">
@@ -140,11 +109,11 @@
             </div>
           </div>
           <div class="setting">
-            <span class="setting-name">Hotkeys</span>
-            <div class="switch-group" id="hotkeys-group">
+            <span class="setting-name">Auto-Hide</span>
+            <div class="switch-group" id="blur-group">
               <span class="switch-label label-off">Off</span>
               <label class="switch">
-                <input type="checkbox" id="hotkeys-enabled" />
+                <input type="checkbox" id="hide-on-blur" />
                 <span class="slider"></span>
               </label>
               <span class="switch-label label-on">On</span>
@@ -163,19 +132,42 @@
           </div>
         </div>
 
-        <h3>Hotkeys</h3>
+        <!-- The Hotkeys switch sits on its heading, next to what it
+             turns on and off -->
+        <div class="hotkeys-head" id="hotkeys-heading">
+          <h3>Hotkeys</h3>
+          <div class="switch-group" id="hotkeys-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="hotkeys-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
         <div id="hotkey-list">
-        <div class="hotkey-row">
+        <!-- Only while the Toaster is on (Settings > Toaster) -->
+        <div class="hotkey-row toaster-hotkey-row">
           <span class="hotkey-name">Open Toaster</span>
           <button id="hotkey-player" class="hotkey" data-which="player"></button>
           <button class="hotkey-clear" data-which="player">Clear</button>
         </div>
-        <div class="hotkey-row">
+        <!-- While the Toaster or the Wrapper is on. Its switch picks where
+             Search goes while both are on (otherwise it's whichever is) -->
+        <div id="search-hotkey-row" class="hotkey-row">
           <span class="hotkey-name">Search</span>
           <button id="hotkey-search" class="hotkey" data-which="search"></button>
           <button class="hotkey-clear" data-which="search">Clear</button>
+          <div class="switch-group search-opens" id="search-opens-group" data-new="search-opens">
+            <span class="switch-label label-off">Roon</span>
+            <label class="switch">
+              <input type="checkbox" id="search-opens" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">Toaster</span>
+          </div>
         </div>
-        <!-- Only while the Wrapper is on (see the Wrapper card) -->
+        <!-- Only while the Wrapper is on (Settings > The Wrapper) -->
         <div id="wrapper-hotkey-row" class="hotkey-row" data-new="wrapper-hotkey" hidden>
           <span class="hotkey-name">Open Wrapper</span>
           <button id="hotkey-wrapper" class="hotkey" data-which="wrapper"></button>
@@ -184,52 +176,120 @@
         </div>
         <p id="hotkey-error" class="error"></p>
       </section>
-
       <section class="card toasts-card">
-        <h2>Toasts</h2>
-
-        <div class="toast-row">
-          <div class="setting">
-            <span class="setting-name">Show Toasts</span>
-            <div class="switch-group" id="toasts-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="toasts-enabled" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
-          </div>
-
-          <!-- Dimmed and locked while toasts are off -->
-          <div id="toast-options" class="toast-options">
-            <div class="toast-option">
-              <span class="option-name">Position</span>
-              <!-- A little screen: click the corner the toast should appear in -->
-              <div class="screen">
-                <button class="corner" data-corner="top-left" title="Top left"></button>
-                <button class="corner" data-corner="top-right" title="Top right"></button>
-                <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
-                <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
-              </div>
-            </div>
-            <div class="toast-option">
-              <span class="option-name">Time on Screen</span>
-              <div class="time-row">
-                <input type="range" id="toast-seconds" min="2" max="30" step="1" />
-                <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
-              </div>
-              <button id="toast-test">Test</button>
-            </div>
+        <!-- The card's own switch sits next to its title -->
+        <div class="card-head">
+          <h2>Toasts</h2>
+          <div class="switch-group" id="toasts-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="toasts-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
           </div>
         </div>
 
-        <!-- Which screen (names as Windows shows them in Display settings) -->
-        <div id="monitor-row" class="monitor-row">
-          <span class="option-name">Monitor</span>
-          <select id="toast-monitor"></select>
+        <!-- Dimmed and locked while toasts are off -->
+        <div id="toast-options" class="toast-options">
+          <div class="toast-option">
+            <span class="option-name">Position</span>
+            <!-- A little screen: click the corner the toast should appear in -->
+            <div class="screen">
+              <button class="corner" data-corner="top-left" title="Top left"></button>
+              <button class="corner" data-corner="top-right" title="Top right"></button>
+              <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
+              <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
+            </div>
+          </div>
+          <div class="toast-option">
+            <span class="option-name">Time on Screen</span>
+            <div class="time-row">
+              <input type="range" id="toast-seconds" min="2" max="30" step="1" />
+              <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
+            </div>
+            <button id="toast-test">Test</button>
+          </div>
+          <!-- Which screen (names as Windows shows them in Display settings) -->
+          <div id="monitor-row" class="toast-option monitor-row">
+            <span class="option-name">Monitor</span>
+            <select id="toast-monitor"></select>
+          </div>
         </div>
       </section>
+      <details class="card legend">
+        <summary><h2>Legend</h2></summary>
+        <p>
+          <strong>Toaster:</strong> The compact Roon player. Switch it off if you only use the
+          Wrapper; its hotkeys and links then open the Wrapper instead. Open at Launch opens it
+          whenever Roon: Toasted starts.
+        </p>
+        <p>
+          <strong>Window Size:</strong> Default opens the Toaster at its normal size in the
+          middle of the screen every time. Last Position reopens it where you left it, at the
+          same size. Called "Remember Window" in the tray's quick settings.
+        </p>
+        <p>
+          <strong>Zoom:</strong> When on, Ctrl + and Ctrl &minus; (or Ctrl + mouse wheel) make
+          the Toaster text bigger or smaller in 5% steps, and Ctrl + Enter resets to 100%. Now
+          at <span id="zoom-now">100%</span>
+          <button id="zoom-reset">Reset to 100%</button>
+        </p>
+        <p>
+          <strong>Auto-Hide:</strong> When on, clicking anywhere outside the Toaster
+          sends it back to the tray, like pressing &times;, along with Settings if open. When
+          off, both get taskbar buttons. It starts working once a Roon Core is connected.
+        </p>
+        <p>
+          <strong>Colors:</strong> Default keeps the Toaster's color scheme. Album Art takes its
+          colors from the album that's playing.
+        </p>
+        <p>
+          <strong>Hotkeys:</strong> Work anywhere in Windows, even when the Toaster is closed.
+          Open Toaster opens it, or hides it if it's currently open. Search opens it on the
+          Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
+          up the Toaster.
+        </p>
+        <p>
+          <strong>Start with Windows:</strong> Puts Roon: Toasted in the tray when you sign in,
+          so hotkeys, toasts and the widget are always ready.
+        </p>
+        <p>
+          <strong>The Wrapper:</strong> Shows the Roon app inside a Roon: Toasted window
+          (Roon: Wrapped), with Toasted's player along the bottom, so everything Roon can do,
+          its settings included, is right there. Open it from the tray menu, its hotkey or the
+          button above; it starts Roon if needed. Closing it keeps Roon running out of sight,
+          so it reopens instantly. Return Roon gives Roon its own window again, with an
+          Enable Wrapper button in its title bar to wrap it back up. Open at Launch opens it
+          whenever Roon: Toasted starts, at sign-in (with Start with Windows on) or by hand.
+          Remember Player brings Now Playing back as you left it, even after a restart; off,
+          the Wrapper always opens on Roon's page, as Roon does.
+        </p>
+        <p>
+          <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
+          then slide Position and Width until it sits in a free spot; One Line suits small
+          taskbars. Windows doesn't officially allow this, so it may misbehave.
+        </p>
+        <p>
+          <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts
+          the track in your library (the Add to Library switch decides whether that's just the
+          song or its whole album), then a heart. The same buttons show on album pages by the
+          playing artist. It uses a part of Roon that isn't officially open to apps, so a Roon
+          update may break it until I'm able to repair it.
+        </p>
+        <p>
+          <strong>Updates:</strong> Looks on GitHub for a newer Roon: Toasted (a minute after it
+          starts, then every 6 hours) and shows it here and in the tray menu. Nothing downloads
+          or installs until you press Install; the update installs the same way as the first
+          install, then the app restarts.
+        </p>
+        <p>
+          <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
+          on the monitor you pick, in the Toaster's colors. Primary Monitor follows whichever
+          one Windows has as main. Clicking the toast opens the Toaster. Mousing over it pauses
+          the timer.
+        </p>
+      </details>
 
       <!-- What each setting does -->
       </div>
@@ -266,26 +326,38 @@
 
       <!-- Roon desktop inside a Toasted window (see wrapper.rs) -->
       <section class="card wrapper-card" data-new="wrapper-card">
-        <h2>The Wrapper <span class="badge">Experimental</span></h2>
+        <!-- The card's own switch sits next to its title -->
+        <div class="card-head">
+          <span class="badge">Experimental</span>
+          <h2>The Wrapper</h2>
+          <div class="switch-group" id="wrapper-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="wrapper-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
 
         <div class="setting-row">
-          <div class="setting">
-            <span class="setting-name">Wrapper</span>
-            <div class="switch-group" id="wrapper-group">
+          <div class="setting wrapper-option">
+            <span class="setting-name">Open at Launch</span>
+            <div class="switch-group" id="wrapper-launch-group">
               <span class="switch-label label-off">Off</span>
               <label class="switch">
-                <input type="checkbox" id="wrapper-enabled" />
+                <input type="checkbox" id="wrapper-at-launch" />
                 <span class="slider"></span>
               </label>
               <span class="switch-label label-on">On</span>
             </div>
           </div>
-          <div class="setting wrapper-option">
-            <span class="setting-name">Open at Sign-in</span>
-            <div class="switch-group" id="wrapper-signin-group">
+          <div class="setting wrapper-option" data-new="remember-player" title="Now Playing comes back as you left it, even after a restart">
+            <span class="setting-name">Remember Player</span>
+            <div class="switch-group" id="wrapper-remember-group">
               <span class="switch-label label-off">Off</span>
               <label class="switch">
-                <input type="checkbox" id="wrapper-at-sign-in" />
+                <input type="checkbox" id="wrapper-remember-player" />
                 <span class="slider"></span>
               </label>
               <span class="switch-label label-on">On</span>
@@ -301,21 +373,73 @@
         </p>
       </section>
 
-      <section class="card widget-card">
-        <h2>Taskbar Widget <span class="badge">Experimental</span></h2>
+      <section class="card toaster-card">
+        <!-- The card's own switch sits next to its title -->
+        <div class="card-head">
+          <h2>Toaster</h2>
+          <div class="switch-group" id="toaster-group" data-new="toaster-switch">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="toaster-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
 
         <div class="setting-row">
-          <div class="setting">
-            <span class="setting-name">Show Widget</span>
-            <div class="switch-group" id="widget-group">
+          <div class="setting toaster-option" data-new="toaster-launch">
+            <span class="setting-name">Open at Launch</span>
+            <div class="switch-group" id="toaster-launch-group">
               <span class="switch-label label-off">Off</span>
               <label class="switch">
-                <input type="checkbox" id="widget-enabled" />
+                <input type="checkbox" id="toaster-at-launch" />
                 <span class="slider"></span>
               </label>
               <span class="switch-label label-on">On</span>
             </div>
           </div>
+          <div class="setting toaster-option">
+            <span class="setting-name">Window Size</span>
+            <div class="switch-group" id="window-group">
+              <span class="switch-label label-off">Default</span>
+              <label class="switch">
+                <input type="checkbox" id="toaster-window" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Last Position</span>
+            </div>
+          </div>
+          <div class="setting toaster-option">
+            <span class="setting-name">Zoom</span>
+            <div class="switch-group" id="zoom-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="zoom-hotkeys" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card widget-card">
+        <!-- The card's own switch sits next to its title -->
+        <div class="card-head">
+          <span class="badge">Experimental</span>
+          <h2>Taskbar Widget</h2>
+          <div class="switch-group" id="widget-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="widget-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
           <div class="setting widget-option">
             <span class="setting-name">Side</span>
             <div class="switch-group" id="side-group">
@@ -357,20 +481,21 @@
 
       <!-- Hearts and add-to-library over Roon's internal protocol (see library.rs) -->
       <section class="card library-card">
-        <h2>Hearts &amp; Library <span class="badge">Experimental</span></h2>
+        <!-- The card's own switch sits next to its title -->
+        <div class="card-head">
+          <span class="badge">Experimental</span>
+          <h2>Hearts &amp; Library</h2>
+          <div class="switch-group" id="library-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="library-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
 
         <div class="setting-row">
-          <div class="setting">
-            <span class="setting-name">Hearts &amp; Library</span>
-            <div class="switch-group" id="library-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="library-enabled" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
-          </div>
           <div class="setting library-option">
             <span class="setting-name">Add to Library</span>
             <div class="switch-group" id="library-mode-group">
@@ -387,72 +512,6 @@
         <!-- Whether the Core accepts us, in plain words -->
         <p id="library-detail" class="muted library-detail">Off</p>
       </section>
-      <details class="card legend">
-        <summary><h2>Legend</h2></summary>
-        <p>
-          <strong>Window Size:</strong> Default opens the Toaster at its normal size in the
-          middle of the screen every time. Last Position reopens it where you left it, at the
-          same size. Called "Remember Window" in the tray's quick settings.
-        </p>
-        <p>
-          <strong>Zoom:</strong> When on, Ctrl + and Ctrl &minus; (or Ctrl + mouse wheel) make
-          the Toaster text bigger or smaller in 5% steps, and Ctrl + Enter resets to 100%. Now
-          at <span id="zoom-now">100%</span>
-          <button id="zoom-reset">Reset to 100%</button>
-        </p>
-        <p>
-          <strong>Auto-Hide:</strong> When on, clicking anywhere outside the Toaster
-          sends it back to the tray, like pressing &times;, along with Settings if open. When
-          off, both get taskbar buttons. It starts working once a Roon Core is connected.
-        </p>
-        <p>
-          <strong>Colors:</strong> Default keeps the Toaster's color scheme. Album Art takes its
-          colors from the album that's playing.
-        </p>
-        <p>
-          <strong>Hotkeys:</strong> Work anywhere in Windows, even when the Toaster is closed.
-          Open Toaster opens it, or hides it if it's currently open. Search opens it on the
-          Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
-          up the Toaster.
-        </p>
-        <p>
-          <strong>Start with Windows:</strong> Puts Roon: Toasted in the tray when you sign in,
-          so hotkeys, toasts and the widget are always ready.
-        </p>
-        <p>
-          <strong>The Wrapper:</strong> Shows the Roon app inside a Roon: Toasted window
-          (Roon: Wrapped), with Toasted's player along the bottom, so everything Roon can do,
-          its settings included, is right there. Open it from the tray menu, its hotkey or the
-          button above; it starts Roon if needed. Closing it keeps Roon running out of sight,
-          so it reopens instantly. Return Roon gives Roon its own window again, with an
-          Enable Wrapper button in its title bar to wrap it back up. Open at Sign-in opens it
-          when Windows starts Roon: Toasted (with Start with Windows on).
-        </p>
-        <p>
-          <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
-          then slide Position and Width until it sits in a free spot; One Line suits small
-          taskbars. Windows doesn't officially allow this, so it may misbehave.
-        </p>
-        <p>
-          <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts
-          the track in your library (the Add to Library switch decides whether that's just the
-          song or its whole album), then a heart. The same buttons show on album pages by the
-          playing artist. It uses a part of Roon that isn't officially open to apps, so a Roon
-          update may break it until I'm able to repair it.
-        </p>
-        <p>
-          <strong>Updates:</strong> Looks on GitHub for a newer Roon: Toasted (a minute after it
-          starts, then every 6 hours) and shows it here and in the tray menu. Nothing downloads
-          or installs until you press Install; the update installs the same way as the first
-          install, then the app restarts.
-        </p>
-        <p>
-          <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
-          on the monitor you pick, in the Toaster's colors. Primary Monitor follows whichever
-          one Windows has as main. Clicking the toast opens the Toaster. Mousing over it pauses
-          the timer.
-        </p>
-      </details>
       </div>
     </main>
 

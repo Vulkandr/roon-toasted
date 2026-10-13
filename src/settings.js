@@ -308,6 +308,99 @@ diagCopy.addEventListener("click", async () => {
 // Load the current status once, then stay live with updates from Rust
 invoke("roon_status").then(render);
 listen("roon-status", (event) => render(event.payload));
+// ===== Toaster on/off =====================================================
+//
+// Off for people who only use the Wrapper (or just toasts and the widget):
+// its own options (Open at Launch, Window Size, Zoom) dim and its Open Toaster hotkey goes
+// away. Search stays while the Wrapper is on (it then opens Roon's own
+// search). The General card's settings are for the whole app.
+
+const toasterEnabled = document.querySelector("#toaster-enabled");
+
+const toasterAtLaunch = document.querySelector("#toaster-at-launch");
+
+function showToaster(settings) {
+  toasterEnabled.checked = settings.toasterEnabled;
+  toasterAtLaunch.checked = settings.toasterAtLaunch;
+  document.querySelectorAll(".toaster-option").forEach((option) => {
+    option.classList.toggle("disabled", !settings.toasterEnabled);
+  });
+  document.querySelectorAll(".toaster-hotkey-row").forEach((row) => {
+    row.hidden = !settings.toasterEnabled;
+  });
+  // No hotkeys left to show (the Toaster and the Wrapper both off)
+  const none = !settings.toasterEnabled && !settings.wrapperEnabled;
+  document.querySelector("#hotkeys-heading").hidden = none;
+  document.querySelector("#hotkey-list").hidden = none;
+  document.querySelector("#search-hotkey-row").hidden = none;
+  showSearchOpens(settings);
+}
+
+// ===== Where Search goes ==================================================
+//
+// Roon's own search (in the Wrapper) or the Toaster's Search tab. A choice
+// only while both are on; otherwise the switch shows whichever is, locked.
+
+const searchOpens = document.querySelector("#search-opens");
+const searchOpensGroup = document.querySelector("#search-opens-group");
+
+function showSearchOpens(settings) {
+  const both = settings.toasterEnabled && settings.wrapperEnabled;
+  const inRoon = settings.wrapperEnabled && (!settings.toasterEnabled || settings.searchOpens === "roon");
+  // Checked = Toaster (the right-hand label)
+  searchOpens.checked = !inRoon;
+  searchOpensGroup.classList.toggle("disabled", !both);
+  searchOpensGroup.title = both
+    ? "Where the Search hotkey and Stream Deck search open"
+    : `Search opens ${inRoon ? "Roon" : "the Toaster"} while only it is on`;
+}
+
+async function setSearchOpens(toaster) {
+  searchOpens.checked = toaster;
+  try {
+    await invoke("update_settings", { changes: { searchOpens: toaster ? "toaster" : "roon" } });
+  } catch (err) {
+    console.error(err);
+    showToaster(await invoke("get_settings"));
+  }
+}
+
+searchOpens.addEventListener("change", () => setSearchOpens(searchOpens.checked));
+searchOpensGroup.querySelector(".label-off").addEventListener("click", () => setSearchOpens(false));
+searchOpensGroup.querySelector(".label-on").addEventListener("click", () => setSearchOpens(true));
+
+async function setToasterEnabled(on) {
+  toasterEnabled.checked = on;
+  try {
+    await invoke("update_settings", { changes: { toasterEnabled: on } });
+  } catch (err) {
+    console.error(err);
+    showToaster(await invoke("get_settings"));
+  }
+}
+
+toasterEnabled.addEventListener("change", () => setToasterEnabled(toasterEnabled.checked));
+
+async function setToasterAtLaunch(on) {
+  toasterAtLaunch.checked = on;
+  try {
+    await invoke("update_settings", { changes: { toasterAtLaunch: on } });
+  } catch (err) {
+    console.error(err);
+    showToaster(await invoke("get_settings"));
+  }
+}
+toasterAtLaunch.addEventListener("change", () => setToasterAtLaunch(toasterAtLaunch.checked));
+const toasterLaunchGroup = document.querySelector("#toaster-launch-group");
+toasterLaunchGroup.querySelector(".label-off").addEventListener("click", () => setToasterAtLaunch(false));
+toasterLaunchGroup.querySelector(".label-on").addEventListener("click", () => setToasterAtLaunch(true));
+const toasterGroup = document.querySelector("#toaster-group");
+toasterGroup.querySelector(".label-off").addEventListener("click", () => setToasterEnabled(false));
+toasterGroup.querySelector(".label-on").addEventListener("click", () => setToasterEnabled(true));
+
+invoke("get_settings").then(showToaster);
+listen("settings-changed", (event) => showToaster(event.payload));
+
 // ===== Toaster window size ================================================
 
 const toasterWindow = document.querySelector("#toaster-window");
@@ -333,8 +426,9 @@ async function setToasterWindow(remember) {
 toasterWindow.addEventListener("change", () => setToasterWindow(toasterWindow.checked));
 
 // Clicking either side's label picks that side
-document.querySelector(".label-off").addEventListener("click", () => setToasterWindow(false));
-document.querySelector(".label-on").addEventListener("click", () => setToasterWindow(true));
+const windowGroup = document.querySelector("#window-group");
+windowGroup.querySelector(".label-off").addEventListener("click", () => setToasterWindow(false));
+windowGroup.querySelector(".label-on").addEventListener("click", () => setToasterWindow(true));
 
 // Load the saved settings, then stay in sync with any changes
 invoke("get_settings").then(showSettings);
@@ -760,16 +854,18 @@ listen("settings-changed", (event) => showWidget(event.payload));
 
 // ===== The Wrapper (experimental) ==========================================
 //
-// On/off, opening at sign-in, and a button to open it. Its hotkey lives in
+// On/off, opening at launch, and a button to open it. Its hotkey lives in
 // the Toaster card's Hotkeys list and only shows while it's on.
 
 const wrapperEnabled = document.querySelector("#wrapper-enabled");
-const wrapperAtSignIn = document.querySelector("#wrapper-at-sign-in");
+const wrapperAtLaunch = document.querySelector("#wrapper-at-launch");
+const wrapperRememberPlayer = document.querySelector("#wrapper-remember-player");
 const wrapperOpen = document.querySelector("#wrapper-open");
 
 function showWrapper(settings) {
   wrapperEnabled.checked = settings.wrapperEnabled;
-  wrapperAtSignIn.checked = settings.wrapperAtSignIn;
+  wrapperAtLaunch.checked = settings.wrapperAtLaunch;
+  wrapperRememberPlayer.checked = settings.wrapperRememberPlayer;
   document.querySelectorAll(".wrapper-option").forEach((option) => {
     option.classList.toggle("disabled", !settings.wrapperEnabled);
   });
@@ -793,7 +889,8 @@ function wrapperSwitch(input, group, change) {
   labels.querySelector(".label-on").addEventListener("click", () => saveWrapper(change(true)));
 }
 wrapperSwitch(wrapperEnabled, "#wrapper-group", (on) => ({ wrapperEnabled: on }));
-wrapperSwitch(wrapperAtSignIn, "#wrapper-signin-group", (on) => ({ wrapperAtSignIn: on }));
+wrapperSwitch(wrapperAtLaunch, "#wrapper-launch-group", (on) => ({ wrapperAtLaunch: on }));
+wrapperSwitch(wrapperRememberPlayer, "#wrapper-remember-group", (on) => ({ wrapperRememberPlayer: on }));
 
 wrapperOpen.addEventListener("click", () => {
   invoke("open_window", { window: "wrapper" }).catch((err) => console.error(err));

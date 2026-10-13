@@ -2,12 +2,13 @@
 // License, v. 2.0. If a copy of the MPL was not distributed with this
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
-//! The tray icon and its right-click menu: Open Wrapper (only while the
-//! Wrapper is switched on), Open Toaster, Settings, a few quick settings
-//! (Toasts, Auto-Hide, Remember Window, Start with Windows) and Quit.
-//! Double-clicking the icon opens the Wrapper while it's switched on,
-//! otherwise the Toaster. The icon itself is the Wrapped mark while the
-//! Wrapper is on (icon.rs).
+//! The tray icon and its right-click menu: Open Wrapper and Open Toaster
+//! (each only while it's switched on), Settings, switches for the Toaster
+//! and the Wrapper themselves, a few quick settings (Toasts, Auto-Hide,
+//! Remember Window, Start with Windows) and Quit. Double-clicking the icon
+//! opens the Wrapper while it's switched on, otherwise the Toaster, or
+//! Settings with both off. The icon is always the Roon: Toasted logo
+//! (icon.rs); the Wrapper keeps its own mark for its window.
 //!
 //! The quick settings change the same saved settings as the Settings window
 //! (through `update_settings`), and their check marks follow any change made
@@ -31,6 +32,12 @@ pub struct TrayMenu {
     /// "Open Wrapper", first in the menu, only while the Wrapper is on.
     wrapper: MenuItem<Wry>,
     wrapper_shown: AtomicBool,
+    /// "Open Toaster", next, only while the Toaster is on.
+    toaster: MenuItem<Wry>,
+    toaster_shown: AtomicBool,
+    /// The switches for the Toaster and the Wrapper themselves.
+    toaster_on: CheckMenuItem<Wry>,
+    wrapper_on: CheckMenuItem<Wry>,
     toasts: CheckMenuItem<Wry>,
     auto_hide: CheckMenuItem<Wry>,
     /// Settings' Window Size: checked = Last Position, unchecked = Default.
@@ -47,16 +54,21 @@ pub fn build(app: &App) -> tauri::Result<()> {
     let open_toaster = MenuItem::with_id(app, "open_toaster", "Open Toaster", true, None::<&str>)?;
     let open_wrapper = MenuItem::with_id(app, "open_wrapper", "Open Wrapper", true, None::<&str>)?;
     let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
+    let toaster_on =
+        CheckMenuItem::with_id(app, "toaster_on", "Toaster", true, saved.toaster_enabled, None::<&str>)?;
+    let wrapper_on =
+        CheckMenuItem::with_id(app, "wrapper_on", "Wrapper", true, saved.wrapper_enabled, None::<&str>)?;
     let toasts =
         CheckMenuItem::with_id(app, "toasts", "Toasts", true, saved.toasts_enabled, None::<&str>)?;
     let auto_hide =
         CheckMenuItem::with_id(app, "auto_hide", "Auto-Hide", true, saved.hide_on_blur, None::<&str>)?;
     let remember = saved.toaster_window == ToasterWindow::Remember;
+    // (The Toaster's own window size: nothing to set while it's off)
     let remember_window = CheckMenuItem::with_id(
         app,
         "remember_window",
         "Remember Window",
-        true,
+        saved.toaster_enabled,
         remember,
         None::<&str>,
     )?;
@@ -74,8 +86,10 @@ pub fn build(app: &App) -> tauri::Result<()> {
     let menu = Menu::with_items(
         app,
         &[
-            &open_toaster,
             &settings_item,
+            &PredefinedMenuItem::separator(app)?,
+            &toaster_on,
+            &wrapper_on,
             &PredefinedMenuItem::separator(app)?,
             &toasts,
             &auto_hide,
@@ -87,8 +101,7 @@ pub fn build(app: &App) -> tauri::Result<()> {
         ],
     )?;
 
-    // The flat toaster, white or black to suit the taskbar, or the Wrapped
-    // mark while the Wrapper is on (see icon.rs)
+    // The Roon: Toasted logo (see icon.rs)
     let icon = crate::icon::tray_icon(app.handle())
         .unwrap_or_else(|| app.default_window_icon().unwrap().clone());
 
@@ -101,8 +114,9 @@ pub fn build(app: &App) -> tauri::Result<()> {
         .on_menu_event(on_menu)
         .on_tray_icon_event(|tray, event| {
             // Double-click opens the Wrapper while it's on, otherwise the
-            // Toaster. Windows and Mac only; Linux trays don't report clicks,
-            // so the menu covers it there.
+            // Toaster (which opens Settings when it's off too). Windows and
+            // Mac only; Linux trays don't report clicks, so the menu covers
+            // it there.
             if let TrayIconEvent::DoubleClick {
                 button: MouseButton::Left,
                 ..
@@ -118,7 +132,10 @@ pub fn build(app: &App) -> tauri::Result<()> {
         })
         .build(app)?;
 
-    // "Open Wrapper" goes first, above "Open Toaster"
+    // "Open Wrapper" goes first, then "Open Toaster" (each while it's on)
+    if saved.toaster_enabled {
+        menu.insert(&open_toaster, 0)?;
+    }
     if saved.wrapper_enabled {
         menu.insert(&open_wrapper, 0)?;
     }
@@ -127,6 +144,10 @@ pub fn build(app: &App) -> tauri::Result<()> {
         menu: menu.clone(),
         wrapper: open_wrapper,
         wrapper_shown: AtomicBool::new(saved.wrapper_enabled),
+        toaster: open_toaster,
+        toaster_shown: AtomicBool::new(saved.toaster_enabled),
+        toaster_on,
+        wrapper_on,
         toasts,
         auto_hide,
         remember_window,
@@ -159,6 +180,8 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         "open_wrapper" => return crate::wrapper::open(app),
         "quit" => return app.exit(0),
         "update" => return crate::update::from_tray(app),
+        "toaster_on" => json!({ "toasterEnabled": !saved.toaster_enabled }),
+        "wrapper_on" => json!({ "wrapperEnabled": !saved.wrapper_enabled }),
         "toasts" => json!({ "toastsEnabled": !saved.toasts_enabled }),
         "auto_hide" => json!({ "hideOnBlur": !saved.hide_on_blur }),
         "start_with_windows" => json!({ "startWithWindows": !saved.start_with_windows }),
@@ -180,21 +203,31 @@ pub fn sync(app: &AppHandle, settings: &AppSettings) {
     let Some(menu) = app.try_state::<TrayMenu>() else {
         return;
     };
+    let _ = menu.toaster_on.set_checked(settings.toaster_enabled);
+    let _ = menu.wrapper_on.set_checked(settings.wrapper_enabled);
     let _ = menu.toasts.set_checked(settings.toasts_enabled);
     let _ = menu.auto_hide.set_checked(settings.hide_on_blur);
     let _ = menu
         .remember_window
         .set_checked(settings.toaster_window == ToasterWindow::Remember);
+    let _ = menu.remember_window.set_enabled(settings.toaster_enabled);
     let _ = menu.start_with_windows.set_checked(settings.start_with_windows);
 
-    // "Open Wrapper" and the Wrapped tray icon come and go with the
-    // Wrapper switch
+    // "Open Wrapper" and "Open Toaster" come and go with their switches
+    // (the Wrapper's first, so the Toaster's goes right after it)
     if menu.wrapper_shown.swap(settings.wrapper_enabled, Ordering::Relaxed) != settings.wrapper_enabled {
         let _ = if settings.wrapper_enabled {
             menu.menu.insert(&menu.wrapper, 0)
         } else {
             menu.menu.remove(&menu.wrapper)
         };
-        crate::icon::refresh_tray(app);
+    }
+    if menu.toaster_shown.swap(settings.toaster_enabled, Ordering::Relaxed) != settings.toaster_enabled {
+        let _ = if settings.toaster_enabled {
+            let at = usize::from(settings.wrapper_enabled);
+            menu.menu.insert(&menu.toaster, at)
+        } else {
+            menu.menu.remove(&menu.toaster)
+        };
     }
 }

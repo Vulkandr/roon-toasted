@@ -110,6 +110,12 @@ button:disabled {
   border-radius: 0;
 }
 
+/* In a Zonekeeper zone: square, like the windows next to it (the border
+   stays, as on other snapped windows) */
+.zone-squared .panel {
+  border-radius: 0;
+}
+
 /* ----- Title bar ----- */
 
 .titlebar {
@@ -277,6 +283,16 @@ button:disabled {
 .hole-note {
   color: var(--muted);
   font-size: 14px;
+}
+
+/* Roon couldn't be started: said large enough to notice */
+.hole-note.lost {
+  max-width: 520px;
+  padding: 0 24px;
+  color: var(--text);
+  font-size: 24px;
+  line-height: 1.35;
+  text-align: center;
 }
 
 /* ----- Now Playing (the large player) ----- */
@@ -466,6 +482,34 @@ button:disabled {
   display: none;
 }
 
+/* Links to Roon's pages (wrapper.js): underlined on hover, the "On" and
+   "Performed by" labels not (an inline-block isn't underlined with its
+   parent) */
+.piece-info .track .title,
+.piece-info .track .album,
+.piece-info .track .artist {
+  cursor: pointer;
+}
+
+.piece-info .track .title:hover,
+.piece-info .track .album:hover,
+.piece-info .track .artist:hover {
+  text-decoration: underline;
+}
+
+.piece-info .track .album::before,
+.piece-info .track .artist::before {
+  display: inline-block;
+  white-space: pre;
+}
+
+.stage-editing .piece-info .track .title,
+.stage-editing .piece-info .track .album,
+.stage-editing .piece-info .track .artist {
+  cursor: inherit;
+  text-decoration: none;
+}
+
 .piece .transport {
   gap: 0.75em;
 }
@@ -512,7 +556,7 @@ button:disabled {
 }
 
 .piece .time {
-  font-size: 0.85em;
+  font-size: calc(0.85em * var(--label-scale, 1));
   min-width: 2.6em;
 }
 
@@ -556,8 +600,13 @@ button:disabled {
 }
 
 .piece .volume-value {
-  font-size: 0.85em;
+  font-size: calc(0.85em * var(--label-scale, 1));
   min-width: 3.5em;
+}
+
+/* The mute button follows the bar's text and icon size (Text & icons) */
+.piece-volume #mute {
+  font-size: calc(1em * var(--label-scale, 1));
 }
 
 /* Vertical volume: the value on top, the mute button at the bottom */
@@ -806,7 +855,8 @@ button:disabled {
   height: 1px;
 }
 
-/* The toolbar, floating at the top */
+/* The toolbar, floating at the top. A set width, so it stays the same
+   size wherever it's dragged (it used to grow once moved off center) */
 .stage-editor {
   position: absolute;
   top: 10px;
@@ -814,18 +864,38 @@ button:disabled {
   transform: translateX(-50%);
   z-index: 2;
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  align-items: center;
-  gap: 8px 10px;
-  max-width: calc(100% - 120px);
-  padding: 6px 10px;
+  align-items: stretch;
+  width: min(760px, calc(100% - 120px));
   background: var(--card);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   font-size: 12px;
   white-space: nowrap;
+}
+
+/* Its rows, one under another, each centered and wrapping if need be */
+.editor-rows {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.editor-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+/* Reset and Done: their own row at the bottom, set off by a line */
+.editor-actions {
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
 }
 
 .editor-group[hidden] {
@@ -836,13 +906,10 @@ button:disabled {
   display: none;
 }
 
-.editor-hint {
-  color: var(--muted);
-}
-
 /* With a piece selected, the toolbar shows that piece's options instead
    of the profile, Show and Background */
-.stage-editor.piece-selected .editor-global {
+.stage-editor.piece-selected .editor-global,
+.stage-editor:not(.piece-selected) .editor-piece {
   display: none;
 }
 
@@ -918,15 +985,23 @@ button:disabled {
   gap: 8px;
 }
 
-/* Grab here to move the toolbar (it may be over the piece you want) */
+/* Grab here to move the toolbar (it may be over the piece you want): the
+   whole left side */
 .editor-grip {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 22px;
+  flex: none;
+  width: 22px;
+  border-right: 1px solid var(--border);
+  border-radius: 10px 0 0 10px;
   color: var(--muted);
   cursor: grab;
   touch-action: none;
+}
+
+.editor-grip:hover {
+  background: var(--hover);
+  color: var(--text);
 }
 
 .editor-grip svg {
@@ -1020,6 +1095,18 @@ button:disabled {
 
 .editor-color[hidden] {
   display: none;
+}
+
+/* Edge thickness */
+.editor-range {
+  width: 80px;
+  accent-color: var(--accent);
+}
+
+.editor-value {
+  min-width: 26px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .editor-select {
@@ -1353,6 +1440,38 @@ input[type="range"]:disabled {
 
 #queue-btn.on {
   color: var(--accent);
+}
+
+/* Inverted colors (the layout's "Invert colors"): on the player's controls,
+   whatever was white or grey takes the app's or album's color, and whatever
+   had that color turns white: the title, the play button, buttons that are
+   on. The bars keep their own colors (set per bar). --swap-accent is the
+   accent as it is outside the controls, where it isn't swapped. */
+html.invert-colors {
+  --swap-accent: var(--accent);
+}
+
+.invert-colors :is(.text, .transport, .progress, .zone-button, .volume-row) {
+  --text: var(--swap-accent);
+  --muted: var(--swap-accent);
+  --accent: #fff;
+  --on-accent: var(--swap-accent);
+}
+
+/* Except Now Playing's "On" and "Performed by", which stay grey (the
+   stage's grey) */
+.invert-colors .piece-info .track .album::before,
+.invert-colors .piece-info .track .artist::before {
+  color: #b4b4c0;
+}
+
+/* A black outline or glow on the icons (the layout's "Icon edge", set per
+   piece as --icon-edge) */
+.transport svg,
+.zone-button svg,
+.volume-row svg,
+.library svg {
+  filter: var(--icon-edge, none);
 }
 
 #mute .icon-muted,

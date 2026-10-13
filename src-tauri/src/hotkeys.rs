@@ -9,6 +9,9 @@
 //!   already open and in front.
 //! - Search (default Ctrl+Alt+S): opens the Toaster on the Search tab with the
 //!   search bar ready to type.
+//!   With the Wrapper on, Search can open Roon's own search instead (always,
+//!   while the Toaster is off; `settings::search_in_roon`).
+//!   (Player only while the Toaster is on, Search while either is.)
 //! - Wrapper (default Ctrl+Alt+W): opens the Wrapper, or hides it when it's
 //!   open and in front. Only registered while the Wrapper is switched on.
 //!
@@ -87,7 +90,7 @@ fn on_hotkey(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     if parse(saved.hotkey_player.as_deref()).as_ref() == Some(shortcut) {
         crate::toggle_toaster(app);
     } else if parse(saved.hotkey_search.as_deref()).as_ref() == Some(shortcut) {
-        crate::open_toaster(app, crate::ToasterMode::Search);
+        crate::open_search(app);
     } else if parse(saved.hotkey_wrapper.as_deref()).as_ref() == Some(shortcut) {
         crate::wrapper::toggle(app);
     }
@@ -105,16 +108,18 @@ fn register(app: &AppHandle, text: Option<&str>) -> Option<String> {
     }
 }
 
-/// Registers the saved hotkeys (none when the Hotkeys switch is off; the
-/// Wrapper's only while the Wrapper is on), replacing any registered before,
-/// and remembers any problems for Settings.
+/// Registers the saved hotkeys (none when the Hotkeys switch is off; Open
+/// Toaster only while the Toaster is on, Search while the Toaster or the
+/// Wrapper is, Open Wrapper only while the Wrapper is), replacing any
+/// registered before, and remembers any problems for Settings.
 pub fn register_saved(app: &AppHandle) {
     let _ = app.global_shortcut().unregister_all();
     let saved = settings::get_settings(app.clone());
     let errors = if saved.hotkeys_enabled {
+        let when = |on: bool, text: Option<&str>| if on { register(app, text) } else { None };
         Errors {
-            player: register(app, saved.hotkey_player.as_deref()),
-            search: register(app, saved.hotkey_search.as_deref()),
+            player: when(saved.toaster_enabled, saved.hotkey_player.as_deref()),
+            search: when(saved.toaster_enabled || saved.wrapper_enabled, saved.hotkey_search.as_deref()),
             wrapper: if saved.wrapper_enabled {
                 register(app, saved.hotkey_wrapper.as_deref())
             } else {

@@ -139,13 +139,23 @@ reportHole();
 
 // Rust's one-line status: in the title bar when something's off, and in
 // the middle while Roon isn't there yet (starting, or not found)
+// Roon couldn't be started (Rust gave up after a few tries): Now Playing
+// opens if there's a zone to show, otherwise the note says so, large
+let lostHandled = false;
 async function refreshStatus() {
   try {
     const s = await invoke("wrapper_status");
     const fine = s.open && s.roonFound;
     status.hidden = fine || !s.note;
-    status.textContent = s.note;
+    status.textContent = s.roonLost ? "Couldn't open Roon" : s.note;
     holeNote.textContent = s.roonFound ? "" : s.note || "Looking for Roon...";
+    holeNote.classList.toggle("lost", !s.roonFound && !!s.roonLost);
+    if (s.roonLost && !lostHandled) {
+      lostHandled = true;
+      if (zone) setStageOpen(true);
+    } else if (!s.roonLost) {
+      lostHandled = false;
+    }
   } catch {
     status.hidden = true;
   }
@@ -155,10 +165,17 @@ setInterval(refreshStatus, 1000);
 
 // ===== Rendering ===========================================================
 
+let lastZones = null; // the last zones payload, to render again when the queue comes in
+
 function render(payload) {
+  lastZones = payload;
   zoneList = payload.zones;
   zone = payload.zones.find((z) => z.zoneId === payload.selectedZoneId) ?? null;
   const np = zone?.nowPlaying;
+  // Stopped with nothing loaded (Roon's output came back after Roon was
+  // restarted, say), but a queue waiting: what Play will start, as Roon
+  // itself shows it
+  const next = !np && zone && queue.zoneId === zone.zoneId ? queue.items[0] : null;
 
   zoneName.textContent = zone ? zone.name : "No zone";
 
@@ -166,12 +183,14 @@ function render(payload) {
   trackText.classList.toggle("track", !!np);
   if (!zone) {
     showText("Roon: Toasted", "No zone", "");
-  } else if (!np) {
-    showText("Nothing playing", zone.name, "");
-  } else {
+  } else if (np) {
     showText(np.title, np.artist, np.album);
+  } else if (next) {
+    showText(next.title, next.artist, next.album);
+  } else {
+    showText("Nothing playing", zone.name, "");
   }
-  showArt(np?.imageKey ?? null);
+  showArt(np?.imageKey ?? next?.imageKey ?? null);
 
   seek.max = np?.length ?? 0;
   seek.disabled = !zone?.canSeek || !np?.length;
@@ -292,15 +311,50 @@ function applySettings(settings) {
   const colorsChanged = settings.toasterColors !== colorsMode;
   colorsMode = settings.toasterColors;
   addMode = settings.libraryAddMode;
+  rememberPlayer = settings.wrapperRememberPlayer !== false;
   if (colorsChanged) applyColors();
   renderLibrary();
   loadLayout(settings.wrapperStage);
+  restorePlayer();
 }
+
+// ===== Remember Player =====================================================
+//
+// Now Playing comes back as it was left, even after a restart (Settings >
+// The Wrapper > Remember Player). Off, it's closed whenever the Wrapper
+// closes, so it opens on Roon's page, as Roon itself does.
+
+const PLAYER_OPEN_KEY = "wrapper.playerOpen";
+let rememberPlayer = true;
+let playerRestored = false;
+
+function savePlayerOpen(open) {
+  try {
+    localStorage.setItem(PLAYER_OPEN_KEY, open ? "1" : "0");
+  } catch {}
+}
+
+// Once, when the page starts: Now Playing back open if it was left open
+function restorePlayer() {
+  if (playerRestored) return;
+  playerRestored = true;
+  let wasOpen = false;
+  try {
+    wasOpen = localStorage.getItem(PLAYER_OPEN_KEY) === "1";
+  } catch {}
+  if (rememberPlayer && wasOpen) setStageOpen(true);
+}
+
+listen("wrapper-parked", () => {
+  if (!rememberPlayer && !stage.hidden && !editing) setStageOpen(false);
+});
 
 // ===== Controls ============================================================
 
+// Play or pause outright (not "playpause"): a stopped zone, with its
+// output just back, starts with Play
 playPauseBtn.addEventListener("click", () => {
-  if (zone) send("roon_control", { zoneId: zone.zoneId, action: "playpause" });
+  if (zone) send("roon_control", { zoneId: zone.zoneId, action: zone.state === "playing" ? "pause" : "play" });
 });
 previousBtn.addEventListener("click", () => {
   if (zone) send("roon_control", { zoneId: zone.zoneId, action: "previous" });
@@ -361,6 +415,30 @@ volume.addEventListener("change", () => {
 // Art or text: Now Playing
 $("#info").addEventListener("click", () => (stage.hidden ? setStageOpen(true) : closeStage()));
 
+// In Now Playing the track text links to Roon's pages, like in Roon's own
+// player: the click goes to the same link in Roon's player screen (kept open
+// behind ours, see wrapper.rs), Roon goes to the page, and ours closes to
+// show it
+let linking = false;
+for (const [link, which] of [[title, "title"], [album, "album"], [artist, "artist"]]) {
+  link.addEventListener("click", async (event) => {
+    if (stage.hidden || editing || !trackText.classList.contains("track")) return;
+    event.stopPropagation();
+    // One at a time: more clicks while one is on its way do nothing
+    if (linking) return;
+    linking = true;
+    try {
+      // Ours stays open if the link wasn't found on Roon's player screen
+      const clicked = await invoke("wrapper_roon_link", { which });
+      if (clicked) await dropStage();
+    } catch (err) {
+      console.error("wrapper_roon_link", err);
+    } finally {
+      linking = false;
+    }
+  });
+}
+
 // ===== Now Playing (the stage) =============================================
 //
 // Covers Roon and the player bar with big album art and the bar's own
@@ -396,16 +474,21 @@ const BUNDLED_FONTS = ["Lato", "Inter", "Montserrat", "Oswald", "Bebas Neue", "P
 const DEFAULT_FONT = "Lato";
 const PIECE_IDS = Object.keys(PIECES);
 const LAYOUT_VERSION = 2;
+// A black edge on a piece's text or icons: "none", "stroke" (an outline)
+// or "glow", and its thickness in px
+const NO_TEXT_EDGE = { textEdge: "none", textEdgeSize: 2 };
+const NO_ICON_EDGE = { iconEdge: "none", iconEdgeSize: 2 };
 const DEFAULT_LAYOUT = {
   barStyle: true, // the player bar uses these styles too (not the places)
   background: "art", // or "plain"
+  invertToggles: false, // "Invert colors": what's white takes the accent, and what has the accent turns white
   pieces: {
     art: { visible: true, x: 0.5, y: 0.15, size: 0.83 },
-    info: { visible: true, x: 0.02, y: 0.97, w: 0.3, size: 0.0173, align: "left", lines: 1, font: DEFAULT_FONT },
-    transport: { visible: true, x: 0.5, y: 0.942, size: 0.0173, icons: DEFAULT_ICONS, play: "circle" },
-    seek: { visible: true, x: 0.5, y: 0.988, w: 0.39, size: 0.0173, font: DEFAULT_FONT, bar: "line", mirror: true, side: "top" },
-    zone: { visible: true, x: 0.985, y: 0.975, size: 0.024, font: DEFAULT_FONT, icons: DEFAULT_ICONS },
-    volume: { visible: true, x: 0.99, y: 0.45, len: 0.78, size: 0.0173, vertical: true, font: DEFAULT_FONT, icons: DEFAULT_ICONS, bar: "line", mirror: true, side: "top" },
+    info: { visible: true, x: 0.02, y: 0.97, w: 0.3, size: 0.0173, align: "left", lines: 1, font: DEFAULT_FONT, ...NO_TEXT_EDGE },
+    transport: { visible: true, x: 0.5, y: 0.942, size: 0.0173, icons: DEFAULT_ICONS, play: "circle", ...NO_ICON_EDGE },
+    seek: { visible: true, x: 0.5, y: 0.988, w: 0.39, size: 0.0173, font: DEFAULT_FONT, bar: "line", mirror: true, side: "top", labelScale: 1, ...NO_TEXT_EDGE },
+    zone: { visible: true, x: 0.985, y: 0.975, size: 0.024, font: DEFAULT_FONT, icons: DEFAULT_ICONS, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
+    volume: { visible: true, x: 0.99, y: 0.45, len: 0.78, size: 0.0173, vertical: true, font: DEFAULT_FONT, icons: DEFAULT_ICONS, bar: "line", mirror: true, side: "top", labelScale: 1, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
   },
 };
 const MIN_ART = 48; // px
@@ -589,6 +672,7 @@ PIECE_IDS.forEach(makeHandles);
 
 function setStageOpen(open) {
   if (open === !stage.hidden) return;
+  savePlayerOpen(open);
   if (open) {
     // The bar's controls come in
     for (const id of PIECE_IDS) {
@@ -625,6 +709,9 @@ function setStageOpen(open) {
   }
   stage.hidden = !open;
   $("#stage-minimize").hidden = !open;
+  // Roon's own player screen opens and closes along (wrapper.rs), so its
+  // links are there for ours
+  send("wrapper_roon_player", { open });
   layoutStage();
   applyIcons();
   reportHole();
@@ -729,6 +816,9 @@ function layoutStage() {
         el.style.setProperty("--lines", p.lines);
       }
       if (PIECES[id].icons) el.dataset.icons = p.icons || DEFAULT_ICONS;
+      // A bar's text and icons (times, level, mute) can be sized apart
+      // from the bar itself, which follows the piece's size
+      if (PIECES[id].bar) el.style.setProperty("--label-scale", p.labelScale || 1);
     }
     el.style.left = `${fromFraction(p.x, W, el.offsetWidth)}px`;
     el.style.top = `${fromFraction(p.y, H, el.offsetHeight)}px`;
@@ -746,11 +836,42 @@ function barStyled() {
   return !stage.hidden || layout.barStyle !== false;
 }
 
+// The CSS for a black edge: on text, a ring of sharp shadows (an outline)
+// or soft ones (a glow); on icons, the same as filters
+function textEdge(kind, size) {
+  const n = Number(size) || 2;
+  if (kind === "stroke") {
+    const ring = [];
+    for (let i = 0; i < 16; i++) {
+      const a = (i * Math.PI) / 8;
+      ring.push(`${(Math.cos(a) * n).toFixed(2)}px ${(Math.sin(a) * n).toFixed(2)}px 0 #000`);
+    }
+    return ring.join(", ");
+  }
+  if (kind === "glow") return `0 0 ${n}px #000, 0 0 ${n}px #000, 0 0 ${n * 2}px #000`;
+  return "";
+}
+
+function iconEdge(kind, size) {
+  const n = Number(size) || 2;
+  // Each shadow is cast by everything before it, so the four together
+  // ring the icon all the way round
+  if (kind === "stroke") return `drop-shadow(${n}px 0 0 #000) drop-shadow(-${n}px 0 0 #000) drop-shadow(0 ${n}px 0 #000) drop-shadow(0 -${n}px 0 #000)`;
+  if (kind === "glow") return `drop-shadow(0 0 ${n}px #000) drop-shadow(0 0 ${n}px #000)`;
+  return "none";
+}
+
 function styleControls() {
   const on = barStyled();
+  document.documentElement.classList.toggle("invert-colors", on && !!layout.invertToggles);
   for (const [id, control] of Object.entries(CONTROLS)) {
     const p = layout.pieces[id];
     const spec = PIECES[id];
+    if (spec.text) control.style.textShadow = on ? textEdge(p.textEdge, p.textEdgeSize) : "";
+    if (spec.icons) control.style.setProperty("--icon-edge", on ? iconEdge(p.iconEdge, p.iconEdgeSize) : "none");
+    // The heart sits by the title in Now Playing, but it's one of the
+    // controls' icons
+    if (id === "transport") libraryBtn.style.setProperty("--icon-edge", on ? iconEdge(p.iconEdge, p.iconEdgeSize) : "none");
     if (spec.text) control.style.fontFamily = on ? fontStack(p.font) : "";
     if (spec.bar) {
       if (on) {
@@ -837,6 +958,7 @@ function normalizeLayout(saved) {
   const out = structuredClone(DEFAULT_LAYOUT);
   if (!saved || typeof saved !== "object") return out;
   if (typeof saved.barStyle === "boolean") out.barStyle = saved.barStyle;
+  if (typeof saved.invertToggles === "boolean") out.invertToggles = saved.invertToggles;
   if (saved.background === "art") out.background = "art";
   const savedPieces = saved.pieces;
   if (savedPieces && typeof savedPieces === "object") {
@@ -1203,6 +1325,23 @@ async function finishEditing() {
 // Closing Now Playing while editing asks first, too
 async function closeStage() {
   if (editing && !(await finishEditing())) return;
+  await dropStage();
+}
+
+// Closes Now Playing once Roon's own player behind it is closed and done
+// animating (wrapper.rs, at most about a second), so Roon's page and its
+// recolored sidebar are already in place when ours goes
+let dropping = false;
+async function dropStage() {
+  if (stage.hidden || dropping) return;
+  dropping = true;
+  try {
+    await invoke("wrapper_roon_close");
+  } catch (err) {
+    console.error("wrapper_roon_close", err);
+  } finally {
+    dropping = false;
+  }
   setStageOpen(false);
 }
 
@@ -1272,6 +1411,20 @@ for (const [key, label] of [[DEFAULT_ICONS, "Lucide"], ...Object.entries(ICON_PA
 }
 const editorVolume = $("#editor-volume");
 const linesSelect = $("#editor-lines");
+const editorTextEdge = $("#editor-text-edge");
+const textEdgeSelect = $("#editor-text-edge-select");
+const textEdgeSize = $("#editor-text-edge-size");
+const textEdgeValue = $("#editor-text-edge-value");
+const textEdgeAll = $("#editor-text-edge-all");
+const editorIconEdge = $("#editor-icon-edge");
+const iconEdgeSelect = $("#editor-icon-edge-select");
+const iconEdgeSize = $("#editor-icon-edge-size");
+const iconEdgeValue = $("#editor-icon-edge-value");
+const iconEdgeAll = $("#editor-icon-edge-all");
+const invertCheck = $("#editor-invert");
+const editorLabels = $("#editor-labels");
+const labelScale = $("#editor-label-scale");
+const labelScaleValue = $("#editor-label-scale-value");
 function refreshEditor() {
   stageEditor.classList.toggle("piece-selected", !!selected);
   showUnsaved();
@@ -1304,6 +1457,29 @@ function refreshEditor() {
   const withIcons = selected && PIECES[selected].icons ? layout.pieces[selected] : null;
   editorIcons.hidden = !withIcons;
   if (withIcons) iconsSelect.value = withIcons.icons || DEFAULT_ICONS;
+  const textEdgeOf = selected && PIECES[selected].text ? layout.pieces[selected] : null;
+  editorTextEdge.hidden = !textEdgeOf;
+  if (textEdgeOf) {
+    textEdgeSelect.value = textEdgeOf.textEdge || "none";
+    textEdgeSize.value = textEdgeOf.textEdgeSize || 2;
+    textEdgeValue.textContent = `${textEdgeSize.value} px`;
+    textEdgeSize.disabled = textEdgeSelect.value === "none";
+  }
+  const iconEdgeOf = selected && PIECES[selected].icons ? layout.pieces[selected] : null;
+  editorIconEdge.hidden = !iconEdgeOf;
+  if (iconEdgeOf) {
+    iconEdgeSelect.value = iconEdgeOf.iconEdge || "none";
+    iconEdgeSize.value = iconEdgeOf.iconEdgeSize || 2;
+    iconEdgeValue.textContent = `${iconEdgeSize.value} px`;
+    iconEdgeSize.disabled = iconEdgeSelect.value === "none";
+  }
+  invertCheck.checked = !!layout.invertToggles;
+  const withLabels = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
+  editorLabels.hidden = !withLabels;
+  if (withLabels) {
+    labelScale.value = Math.round((withLabels.labelScale || 1) * 100);
+    labelScaleValue.textContent = `${labelScale.value}%`;
+  }
   const withBar = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
   editorBar.hidden = !withBar;
   if (withBar) {
@@ -1365,6 +1541,36 @@ fontSelect.addEventListener("change", () => {
   for (const id of fontAll.checked ? PIECE_IDS.filter((id) => PIECES[id].text) : [selected]) {
     layout.pieces[id].font = fontSelect.value;
   }
+  changed();
+});
+// Text and icon edges: the kind and the thickness, to this piece or (All)
+// every piece with text or icons
+function setEdge(kind, value) {
+  const type = kind === "text" ? "text" : "icons";
+  if (!selected || !PIECES[selected][type]) return;
+  const all = (kind === "text" ? textEdgeAll : iconEdgeAll).checked;
+  for (const id of all ? PIECE_IDS.filter((id) => PIECES[id][type]) : [selected]) {
+    Object.assign(layout.pieces[id], value);
+  }
+  changed();
+}
+textEdgeSelect.addEventListener("change", () => setEdge("text", { textEdge: textEdgeSelect.value, textEdgeSize: Number(textEdgeSize.value) }));
+textEdgeSize.addEventListener("input", () => setEdge("text", { textEdge: textEdgeSelect.value, textEdgeSize: Number(textEdgeSize.value) }));
+iconEdgeSelect.addEventListener("change", () => setEdge("icon", { iconEdge: iconEdgeSelect.value, iconEdgeSize: Number(iconEdgeSize.value) }));
+iconEdgeSize.addEventListener("input", () => setEdge("icon", { iconEdge: iconEdgeSelect.value, iconEdgeSize: Number(iconEdgeSize.value) }));
+labelScale.addEventListener("input", () => {
+  if (!selected || !PIECES[selected].bar) return;
+  layout.pieces[selected].labelScale = Number(labelScale.value) / 100;
+  changed();
+});
+// Double-click: back to 100%
+labelScale.addEventListener("dblclick", () => {
+  if (!selected || !PIECES[selected].bar) return;
+  layout.pieces[selected].labelScale = 1;
+  changed();
+});
+invertCheck.addEventListener("change", () => {
+  layout.invertToggles = invertCheck.checked;
   changed();
 });
 iconsSelect.addEventListener("change", () => {
@@ -1756,6 +1962,8 @@ function queueRow(item, isNow) {
 
 function renderQueue(payload) {
   queue = payload;
+  // The player bar shows the queue's first track while nothing is loaded
+  if (lastZones && zone && !zone.nowPlaying) render(lastZones);
   queueEmpty.hidden = payload.items.length > 0;
   queueList.replaceChildren(...payload.items.map((item, i) => queueRow(item, i === 0)));
   updateQueueMore();
@@ -1850,13 +2058,18 @@ document.addEventListener("keydown", (event) => {
 // ===== Window buttons ======================================================
 
 // The colors Roon's sidebar copy is painted in (skin.rs): the panel's
-// background and the accent, as the browser works them out (album colors
-// included); sent when they change
+// background and the app's accent, as the browser works them out (album
+// colors included); sent when they change. The accent is read off a hidden
+// probe, not a real button: the play button can be plain (no background),
+// which read as black and turned the sidebar's highlight black.
 let sentColors = "";
+const accentProbe = document.createElement("span");
+accentProbe.style.cssText = "position: absolute; width: 0; height: 0; visibility: hidden; background: var(--accent);";
+document.querySelector(".panel").append(accentProbe);
 function sendColors() {
   const rgb = (value) => (value.match(/[\d.]+/g) || []).slice(0, 3).map((n) => Math.round(Number(n)));
   const bg = rgb(getComputedStyle(document.querySelector(".panel")).backgroundColor);
-  const accent = rgb(getComputedStyle(playPauseBtn).backgroundColor);
+  const accent = rgb(getComputedStyle(accentProbe).backgroundColor);
   if (bg.length < 3 || accent.length < 3) return;
   const key = `${bg}|${accent}`;
   if (key === sentColors) return;
@@ -1874,6 +2087,15 @@ async function updateMaximized() {
 appWindow.onResized(updateMaximized);
 updateMaximized();
 
+// Square corners too while Zonekeeper has the Wrapper in one of its zones
+// (zonekeeper.rs): it squares other windows' corners through Windows, which
+// doesn't reach ours, since the page draws them
+function setZoneSquared(on) {
+  document.documentElement.classList.toggle("zone-squared", on === true);
+}
+invoke("zone_squared").then(setZoneSquared).catch(() => {});
+listen("zone-squared", (event) => setZoneSquared(event.payload));
+
 $("#win-min").addEventListener("click", () => appWindow.minimize());
 $("#win-max").addEventListener("click", () => appWindow.toggleMaximize());
 $("#win-close").addEventListener("click", () => appWindow.close());
@@ -1884,6 +2106,14 @@ $("#open-settings").addEventListener("click", () => send("open_window", { window
 document.addEventListener("contextmenu", (event) => event.preventDefault());
 
 // ===== Start ===============================================================
+
+// Search set to Roon (the Search hotkey or a Stream Deck button): Now
+// Playing goes first, so Roon's search box isn't hidden behind it
+listen("wrapper-search", async () => {
+  if (!stage.hidden) await closeStage();
+  if (!stage.hidden) return; // still editing (asked to save first)
+  invoke("wrapper_roon_search").catch((err) => console.error("wrapper_roon_search", err));
+});
 
 // Load the current state once, then follow live updates from Rust
 invoke("get_settings").then(applySettings);

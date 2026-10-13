@@ -31,9 +31,15 @@
 //! The sidebar's edge and Roon's sidebar grey are found once a second from
 //! a capture of that part of the screen (which, thanks to the display
 //! affinity, shows Roon underneath, not us): a column of the grey from the
-//! left, ending in a clean vertical line into the content's plain
-//! background. When Roon has its sidebar collapsed (the hamburger menu),
-//! there's no such line and the filter steps aside.
+//! left, ending in a clean vertical line where the grey stops. When Roon
+//! has its sidebar collapsed (the hamburger menu), there's no such line and
+//! the filter steps aside.
+//!
+//! While nothing of Roon shows (the page's Now Playing covers it, or Roon
+//! is repainting after a resize) the filter keeps going in its place, but
+//! fully see-through, leaving the Wrapper out of its picture. wrapper.rs
+//! makes it solid again right before the hole opens (see `wait`), so it's
+//! there in the same frame as Roon.
 //!
 //! It runs on its own thread (so it never slows the Wrapper's own window,
 //! e.g. while it's dragged), which owns our window and the magnifier and
@@ -75,9 +81,28 @@ pub fn filter_window() -> Option<windows::Win32::Foundation::HWND> {
     imp::filter_window()
 }
 
+/// Whether nothing of Roon shows through the Wrapper: the filter goes
+/// see-through (true), or solid again (false). wrapper.rs calls this right
+/// before it changes its window's shape, so the filter shows and hides in
+/// step with the hole. Safe from any thread.
+#[cfg(windows)]
+pub fn wait(waiting: bool) {
+    imp::wait(waiting);
+}
+
+/// Finds the sidebar ahead of time in a picture of Roon's window (wrapper.rs
+/// takes one, even while Now Playing covers Roon): `pixels` are BGRA rows,
+/// top down, `width` wide, and the hole is its top `height` rows. Used the
+/// next time the hole opens (within a couple of seconds), so the filter is
+/// there at once instead of after Roon shows on screen and is looked at.
+#[cfg(windows)]
+pub fn prime(pixels: &[u8], width: i32, height: i32) {
+    imp::prime(pixels, width, height);
+}
+
 #[cfg(windows)]
 mod imp {
-    use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU32, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, Ordering};
     use std::sync::Mutex;
 
     use tauri::{AppHandle, Manager};
@@ -113,6 +138,9 @@ mod imp {
     /// allowed then (see `tick`).
     static MOVING_TICKS: AtomicU32 = AtomicU32::new(0);
     const FRESH_AT_DRAG: u32 = 3;
+    /// The screen our window was on at the last refresh during a drag (0 =
+    /// not dragging, -1 = across two screens).
+    static DRAG_SCREEN: AtomicIsize = AtomicIsize::new(0);
 
     /// The Wrapper's background and accent; the Toaster's defaults until
     /// the page says otherwise.
@@ -125,13 +153,84 @@ mod imp {
         roon_bg: [u8; 3],
         colors: ([u8; 3], [u8; 3]),
     }
+    /// Whether the magnifier leaves the Wrapper's window out of its picture
+    /// (while waiting).
+    static WITHOUT_WRAPPER: AtomicBool = AtomicBool::new(false);
+    /// Waiting (see `wait`), and the see-through-ness last given to our
+    /// window (-1 = not yet).
+    static WAITING: AtomicBool = AtomicBool::new(false);
+    static ALPHA: AtomicI32 = AtomicI32::new(-1);
+    /// Refreshes while waiting (see `wait`): only every this many.
+    const STANDBY_EVERY: u32 = 6;
+    /// Except for this many refreshes after it starts waiting (about half
+    /// a second): Roon may be repainting under us then (after a resize),
+    /// and the hole may open any moment, so every refresh counts.
+    const STANDBY_FRESH: u32 = 60;
+    /// Refreshes since it started waiting (see `wait`).
+    static STANDBY_TICKS: AtomicU32 = AtomicU32::new(0);
+    /// Looking for the sidebar while waiting (in a picture of Roon's
+    /// window): every this many refreshes (about a quarter second).
+    const STANDBY_DETECT_EVERY: u32 = 30;
+    /// Whether this wait has looked yet.
+    static STANDBY_LOOKED: AtomicBool = AtomicBool::new(false);
+    /// Whether the last refresh had Roon showing through the hole. Coming
+    /// to it (from waiting, or from nothing) looks at the screen
+    /// right away, to correct whatever was kept in the meantime.
+    static OVER_ROON: AtomicBool = AtomicBool::new(false);
+    /// When a look first found no sidebar where one was known. "No
+    /// sidebar" only counts once it still holds a moment later: a Roon
+    /// still repainting (after a resize, or going to a page) shows none
+    /// either, and believing it hid the filter until the next look, which
+    /// was the flash.
+    static MISSED_AT: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    const MISS_HOLDS: std::time::Duration = std::time::Duration::from_millis(150);
+    /// While a miss waits to be confirmed: looking again every this many
+    /// refreshes.
+    const MISS_RECHECK: u32 = 6;
     static PLACED: Mutex<Option<Placed>> = Mutex::new(None);
-    /// The last sidebar found: its width and grey (None = not found).
+    /// The last sidebar found: its width and grey (None = not found). Kept
+    /// while there's no hole (a resize, the Wrapper hidden), so the filter
+    /// is ready again the moment there is.
     static SIDEBAR: Mutex<Option<(i32, [u8; 3])>> = Mutex::new(None);
+    /// A sidebar: its width and grey, or None when Roon has it collapsed.
+    type Sidebar = Option<(i32, [u8; 3])>;
+    /// The sidebar found ahead of time (`prime`), and when.
+    static PRIMED: Mutex<Option<(Sidebar, std::time::Instant)>> = Mutex::new(None);
+    /// How long a primed sidebar stays good.
+    const PRIMED_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+
+    pub fn prime(pixels: &[u8], width: i32, height: i32) {
+        if width < 200 || height < 100 || pixels.len() < (width * height * 4) as usize {
+            return;
+        }
+        // The same rows `find_sidebar` reads (nothing covers this picture)
+        let rows: Vec<i32> = (0..24).map(|i| height * 30 / 100 + i * (height * 65 / 100) / 24).collect();
+        let found = edge(pixels, width, &rows);
+        *PRIMED.lock().unwrap() = Some((found, std::time::Instant::now()));
+    }
 
     fn hwnd(cell: &AtomicIsize) -> Option<HWND> {
         let raw = cell.load(Ordering::Relaxed);
         (raw != 0).then_some(HWND(raw as *mut core::ffi::c_void))
+    }
+
+    pub fn wait(waiting: bool) {
+        WAITING.store(waiting, Ordering::Relaxed);
+        apply_alpha();
+    }
+
+    /// Our window solid, or see-through while waiting.
+    fn apply_alpha() {
+        use windows::Win32::Foundation::COLORREF;
+        use windows::Win32::UI::WindowsAndMessaging::{SetLayeredWindowAttributes, LWA_ALPHA};
+        let Some(host) = hwnd(&HOST) else { return };
+        let alpha = if WAITING.load(Ordering::Relaxed) { 0 } else { 255 };
+        if ALPHA.swap(alpha, Ordering::Relaxed) != alpha {
+            // SAFETY: our own layered window; doesn't wait on its thread.
+            unsafe {
+                let _ = SetLayeredWindowAttributes(host, COLORREF(0), alpha as u8, LWA_ALPHA);
+            }
+        }
     }
 
     pub fn set_colors(bg: [u8; 3], accent: [u8; 3]) {
@@ -238,8 +337,10 @@ mod imp {
                 None,
             )
             .ok()?;
-            // Fully opaque (a layered window needs its alpha set to show)
+            // Fully opaque (a layered window needs its alpha set to show);
+            // `apply_alpha` keeps it in line with WAITING from here on
             let _ = SetLayeredWindowAttributes(host, COLORREF(0), 255, LWA_ALPHA);
+            ALPHA.store(255, Ordering::Relaxed);
             // Not in screen captures, so measuring the sidebar sees Roon
             let _ = SetWindowDisplayAffinity(host, WDA_EXCLUDEFROMCAPTURE);
 
@@ -321,16 +422,59 @@ mod imp {
         *PLACED.lock().unwrap() = None;
     }
 
+    // DEBUG (temporary): what the filter is doing, printed to the dev
+    // terminal whenever it changes
+    static DEBUG_STATE: Mutex<String> = Mutex::new(String::new());
+    static DEBUG_DETECT: Mutex<String> = Mutex::new(String::new());
+    static DEBUG_START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    fn debug(cell: &Mutex<String>, line: String) {
+        let mut last = cell.lock().unwrap();
+        if *last != line {
+            let ms = DEBUG_START.get_or_init(std::time::Instant::now).elapsed().as_millis();
+            eprintln!("[skin {ms:>7} ms] {line}");
+            *last = line;
+        }
+    }
+
+    /// DEBUG: a window's class and title.
+    fn debug_window(window: HWND) -> String {
+        use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindowTextW};
+        let mut class = [0u16; 128];
+        let mut title = [0u16; 128];
+        // SAFETY: buffers sized as passed.
+        let (c, t) = unsafe { (GetClassNameW(window, &mut class), GetWindowTextW(window, &mut title)) };
+        format!(
+            "{:?} class \"{}\" title \"{}\"",
+            window.0,
+            String::from_utf16_lossy(&class[..c.max(0) as usize]),
+            String::from_utf16_lossy(&title[..t.max(0) as usize])
+        )
+    }
+
     /// Every frame: keep the filter over Roon's sidebar (or hidden), with
     /// the current colors, and refresh its picture. False when hidden.
     fn tick(wrapper: HWND) -> bool {
         let (Some(host), Some(magnifier)) = (hwnd(&HOST), hwnd(&MAGNIFIER)) else {
             return false;
         };
-        let Some((roon, hole)) = crate::wrapper::visible_hole() else {
-            *SIDEBAR.lock().unwrap() = None;
-            hide();
-            return false;
+        // Roon showing through the hole, or covered by the page's Now
+        // Playing (or repainting after a resize): then the filter waits
+        // see-through, still recoloring Roon (the Wrapper left out of its
+        // picture), so it's already there when the hole opens
+        let (roon, hole, standby) = match crate::wrapper::visible_hole() {
+            Some((roon, hole)) => (roon, hole, false),
+            None => match crate::wrapper::covered_hole() {
+                Some((roon, hole)) => (roon, hole, true),
+                None => {
+                    // (The sidebar stays known: see SIDEBAR)
+                    debug(&DEBUG_STATE, "no hole: filter hidden".into());
+                    STANDBY_LOOKED.store(false, Ordering::Relaxed);
+                    STANDBY_TICKS.store(0, Ordering::Relaxed);
+                    OVER_ROON.store(false, Ordering::Relaxed);
+                    hide();
+                    return false;
+                }
+            },
         };
 
         // The Wrapper is being dragged: no refreshes (each one makes Windows
@@ -339,29 +483,162 @@ mod imp {
         // The first few still refresh, so that picture is from after the
         // Wrapper came to the front (not of a window that was over it).
         if crate::wrapper::moving() {
-            if MOVING_TICKS.fetch_add(1, Ordering::Relaxed) >= FRESH_AT_DRAG && SHOWN.load(Ordering::Relaxed) {
+            // Except on its way onto another screen: the magnifier draws
+            // nothing there (the sidebar went black until the drag ended)
+            // until it's refreshed. So every frame while it's across two
+            // screens, and a few fresh ones once it's on the new one.
+            let screen = drag_screen(host);
+            if DRAG_SCREEN.swap(screen, Ordering::Relaxed) != screen {
+                MOVING_TICKS.store(0, Ordering::Relaxed);
+            }
+            if screen != -1
+                && MOVING_TICKS.fetch_add(1, Ordering::Relaxed) >= FRESH_AT_DRAG
+                && SHOWN.load(Ordering::Relaxed)
+            {
                 return true;
             }
         } else {
+            DRAG_SCREEN.store(0, Ordering::Relaxed);
             MOVING_TICKS.store(0, Ordering::Relaxed);
         }
 
         // Where the sidebar is (now and then, and whenever it isn't known)
         let ticks = TICKS.fetch_add(1, Ordering::Relaxed);
-        let known = *SIDEBAR.lock().unwrap();
-        let sidebar = if known.is_none() || ticks.is_multiple_of(DETECT_EVERY) {
+        let mut known = *SIDEBAR.lock().unwrap();
+        // A sidebar found ahead of time (Roon's page right after its player
+        // closed): use it right away, over anything older (and look again
+        // on the usual schedule)
+        let primed = PRIMED
+            .lock()
+            .unwrap()
+            .take()
+            .filter(|(found, at)| at.elapsed() < PRIMED_FOR && (found.is_some() || known.is_none()))
+            .is_some_and(|(found, _)| {
+                debug(&DEBUG_DETECT, format!("primed: {found:?}"));
+                *SIDEBAR.lock().unwrap() = found;
+                known = found;
+                TICKS.store(1, Ordering::Relaxed);
+                true
+            });
+        let entering = !standby && !OVER_ROON.swap(!standby, Ordering::Relaxed);
+        let missed = *MISSED_AT.lock().unwrap();
+        // A look found this: a sidebar replaces what was known; "none"
+        // where one was known only once it holds a moment
+        let take = |found: Sidebar| -> Sidebar {
+            if found.is_some() || known.is_none() {
+                *MISSED_AT.lock().unwrap() = None;
+                *SIDEBAR.lock().unwrap() = found;
+                return found;
+            }
+            match missed {
+                Some(at) if at.elapsed() >= MISS_HOLDS => {
+                    *MISSED_AT.lock().unwrap() = None;
+                    *SIDEBAR.lock().unwrap() = None;
+                    None
+                }
+                Some(_) => known,
+                None => {
+                    *MISSED_AT.lock().unwrap() = Some(std::time::Instant::now());
+                    known
+                }
+            }
+        };
+        if !standby {
+            STANDBY_LOOKED.store(false, Ordering::Relaxed);
+        }
+        let sidebar = if standby {
+            // Not from the screen while covered, which shows us there: from
+            // a picture of Roon's window, on coming here and now and then
+            // (more often while nothing is known: hidden, this runs about
+            // every 50 ms, so every 4th is about 5 times a second). Never
+            // while Roon's player is up for a link: that picture has no
+            // sidebar, and what was known before is still right for when
+            // Roon closes it.
+            let first = !STANDBY_LOOKED.swap(true, Ordering::Relaxed);
+            let due = first
+                || (known.is_none() && ticks.is_multiple_of(4))
+                || ticks.is_multiple_of(STANDBY_DETECT_EVERY);
+            if due && !primed && !crate::wrapper::player_busy() {
+                let found = crate::wrapper::roon_picture(roon).and_then(|(pixels, width, height)| {
+                    let hole_height = hole[3].min(height);
+                    (width == hole[2] && hole_height >= 100).then(|| {
+                        let rows: Vec<i32> =
+                            (0..24).map(|i| hole_height * 30 / 100 + i * (hole_height * 65 / 100) / 24).collect();
+                        edge(&pixels, width, &rows)
+                    })
+                });
+                // (A Roon still repainting can show anything: only a
+                // sidebar counts here; the screen settles "none" once
+                // the hole opens)
+                match found {
+                    Some(Some(found)) => {
+                        debug(&DEBUG_DETECT, format!("picture: {found:?}"));
+                        take(Some(found))
+                    }
+                    Some(None) => {
+                        debug(&DEBUG_DETECT, "picture: no sidebar (ignored)".into());
+                        known
+                    }
+                    None => {
+                        debug(&DEBUG_DETECT, "picture: none taken, or wrong size".into());
+                        known
+                    }
+                }
+            } else {
+                known
+            }
+        } else if known.is_none()
+            || entering
+            || (missed.is_some() && ticks.is_multiple_of(MISS_RECHECK))
+            || (ticks.is_multiple_of(DETECT_EVERY) && !primed)
+        {
             match find_sidebar(hole, roon) {
                 Detect::Found(found) => {
-                    *SIDEBAR.lock().unwrap() = found;
-                    found
+                    let taken = take(found);
+                    debug(
+                        &DEBUG_DETECT,
+                        format!("screen{}: found {found:?}, using {taken:?}", if entering { " (hole opened)" } else { "" }),
+                    );
+                    taken
                 }
                 // Too much of it covered by other windows to tell: keep
                 // what we knew
-                Detect::Covered => known,
+                Detect::Covered => {
+                    debug(&DEBUG_DETECT, "screen: covered".into());
+                    known
+                }
             }
         } else {
             known
         };
+        {
+            use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDNEXT, GW_HWNDPREV};
+            // SAFETY: plain window queries.
+            let (above, below) = unsafe {
+                (
+                    GetWindow(wrapper, GW_HWNDPREV).ok() == Some(host),
+                    GetWindow(wrapper, GW_HWNDNEXT).ok() == Some(host),
+                )
+            };
+            let order = match (above, below) {
+                (true, _) => "above Wrapper",
+                (_, true) => "below Wrapper",
+                _ => "elsewhere",
+            };
+            debug(
+                &DEBUG_STATE,
+                format!(
+                    "{} | sidebar {:?} | shown {} | see-through {} | miss pending {} | player busy {} | filter {}",
+                    if standby { "covered" } else { "visible" },
+                    sidebar,
+                    SHOWN.load(Ordering::Relaxed),
+                    WAITING.load(Ordering::Relaxed),
+                    MISSED_AT.lock().unwrap().is_some(),
+                    crate::wrapper::player_busy(),
+                    order,
+                ),
+            );
+        }
         let Some((width, roon_bg)) = sidebar else {
             hide();
             return false;
@@ -369,13 +646,32 @@ mod imp {
 
         let rect = [hole[0], hole[1], width, hole[3]];
         let colors = *COLORS.lock().unwrap();
+        // Something came between us and the Wrapper (it was clicked and
+        // came to the front, say): back on top of it
+        let out_of_order = {
+            use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV};
+            // SAFETY: a plain window query.
+            SHOWN.load(Ordering::Relaxed) && unsafe { GetWindow(wrapper, GW_HWNDPREV) }.ok() != Some(host)
+        };
         let (moved, recolor) = {
             let placed = PLACED.lock().unwrap();
             (
-                placed.as_ref().is_none_or(|p| p.rect != rect),
+                out_of_order || placed.as_ref().is_none_or(|p| p.rect != rect),
                 placed.as_ref().is_none_or(|p| p.colors != colors || p.roon_bg != roon_bg),
             )
         };
+        // Waiting: see-through, with the Wrapper (Now Playing) left out of
+        // the picture, so it shows Roon the moment it's made solid
+        apply_alpha();
+        let waiting = WAITING.load(Ordering::Relaxed);
+        if WITHOUT_WRAPPER.swap(waiting, Ordering::Relaxed) != waiting {
+            // SAFETY: our own magnifier; the list holds valid windows.
+            unsafe {
+                let mut excluded = [host, wrapper];
+                let count = if waiting { 2 } else { 1 };
+                let _ = MagSetWindowFilterList(magnifier, MW_FILTERMODE_EXCLUDE, count, excluded.as_mut_ptr());
+            }
+        }
         // SAFETY: our own windows, on their own thread.
         unsafe {
             if recolor {
@@ -384,7 +680,7 @@ mod imp {
             }
             if moved {
                 // Directly above the Wrapper (or at the top if nothing is
-                // above it)
+                // above it), waiting or not
                 use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV, HWND_TOP};
                 let above = GetWindow(wrapper, GW_HWNDPREV).ok().filter(|w| !w.is_invalid());
                 let after = match above {
@@ -403,7 +699,24 @@ mod imp {
                 let _ = SetWindowPos(magnifier, None, 0, 0, rect[2], rect[3], SWP_NOZORDER | SWP_NOACTIVATE);
                 SHOWN.store(true, Ordering::Relaxed);
             }
-            // Setting the source again is what makes the magnifier redraw
+            // Setting the source again is what makes the magnifier redraw.
+            // Waiting, a little less often: not early on (see
+            // STANDBY_FRESH), and not right after a sidebar was found ahead
+            // of time (the picture was of Roon's player until then, and Now
+            // Playing is about to drop).
+            let waited = if standby { STANDBY_TICKS.fetch_add(1, Ordering::Relaxed) } else { 0 };
+            if !standby {
+                STANDBY_TICKS.store(0, Ordering::Relaxed);
+            }
+            if standby
+                && waited >= STANDBY_FRESH
+                && !moved
+                && !recolor
+                && !primed
+                && !ticks.is_multiple_of(STANDBY_EVERY)
+            {
+                return true;
+            }
             let _ = MagSetWindowSource(
                 magnifier,
                 RECT { left: rect[0], top: rect[1], right: rect[0] + rect[2], bottom: rect[1] + rect[3] },
@@ -411,6 +724,27 @@ mod imp {
         }
         *PLACED.lock().unwrap() = Some(Placed { rect, roon_bg, colors });
         true
+    }
+
+    /// The screen our window is on, or -1 while it's across two.
+    fn drag_screen(host: HWND) -> isize {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::{MonitorFromPoint, MONITOR_DEFAULTTONEAREST};
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+        let mut rect = RECT::default();
+        // SAFETY: our own window, and plain screen queries.
+        unsafe {
+            if GetWindowRect(host, &mut rect).is_err() {
+                return 0;
+            }
+            let a = MonitorFromPoint(POINT { x: rect.left, y: rect.top }, MONITOR_DEFAULTTONEAREST);
+            let b = MonitorFromPoint(POINT { x: rect.right - 1, y: rect.bottom - 1 }, MONITOR_DEFAULTTONEAREST);
+            if a == b {
+                a.0 as isize
+            } else {
+                -1
+            }
+        }
     }
 
     enum Detect {
@@ -457,6 +791,21 @@ mod imp {
             .filter(|&y| clear(y))
             .collect();
         if rows.len() < 6 {
+            // DEBUG: which window is in the way
+            let blocker = (0..24)
+                .map(|i| height * 30 / 100 + i * (height * 65 / 100) / 24)
+                .find_map(|y| {
+                    [(hole[0] + 4, hole[1] + y), (hole[0] + width - 1, hole[1] + y)].into_iter().find_map(|(x, y)| {
+                        // SAFETY: plain window queries.
+                        unsafe {
+                            let w = WindowFromPoint(POINT { x, y });
+                            let root = GetAncestor(w, GA_ROOT);
+                            (root != roon).then(|| debug_window(root))
+                        }
+                    })
+                })
+                .unwrap_or_default();
+            debug(&DEBUG_DETECT, format!("screen: covered by {blocker}"));
             return Detect::Covered;
         }
         let all_clear = rows.len() >= 20;
@@ -510,21 +859,20 @@ mod imp {
             [pixels[i + 2], pixels[i + 1], pixels[i]]
         };
         let bg = mode(rows.iter().map(|&y| at(4, y)))?;
-        for x in 120..width - 16 {
+        // (Never more than half the width: Roon's player screen is black
+        // most of the way across, which isn't a sidebar)
+        for x in 120..(width / 2).min(width - 16) {
             let inside = rows.iter().filter(|&&y| at(x - 1, y) == bg).count();
             if inside * 10 < rows.len() * 8 {
                 continue;
             }
-            // Next column different from the sidebar on (nearly) every row,
-            // and the same plain color for a while after it
-            let Some(content) = mode(rows.iter().map(|&y| at(x, y))) else {
-                continue;
-            };
-            if content == bg {
-                continue;
-            }
-            let clean = rows.iter().filter(|&&y| (x..x + 16).all(|cx| at(cx, y) == content)).count();
-            if clean * 10 >= rows.len() * 8 {
+            // Then the sidebar's grey stops on (nearly) every row, for a
+            // while (not just a thin line inside it, like its scrollbar).
+            // Whatever comes after doesn't matter: a plain background on
+            // most pages, but an artist's photo or a blurred picture on
+            // others, which used to count as "no sidebar".
+            let out = rows.iter().filter(|&&y| (x..x + 16).all(|cx| at(cx, y) != bg)).count();
+            if out * 10 >= rows.len() * 8 {
                 return Some((x, bg));
             }
         }

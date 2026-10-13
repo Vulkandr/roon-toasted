@@ -7,16 +7,19 @@
 //! passes to the app as a command-line argument.
 //!
 //! - `roon-toasted://open` (or just `roon-toasted://`): the Toaster, as the player
-//! - `roon-toasted://search` or `--search`: the Toaster on Search, ready to type
+//! - `roon-toasted://search` or `--search`: the Toaster on Search, ready to
+//!   type, or Roon's own search in the Wrapper (`settings::search_in_roon`)
 //! - `roon-toasted://toggle`: like the Open Toaster hotkey (hides it if it's
 //!   open and in front, otherwise opens it)
 //! - `roon-toasted://wrapper` or `--wrapper`: the Wrapper (the Toaster if the
 //!   Wrapper is switched off)
 //! - `--autostart`: how Windows starts the app at sign-in (autostart.rs);
-//!   stays in the tray, or opens the Wrapper if it's set to
+//!   stays in the tray, or opens what's set to open at launch
 //!
-//! Starting the app plainly (no link or option, e.g. with Windows) leaves it in
-//! the tray; starting it again while it's running opens the Toaster. When a
+//! Starting the app plainly (no link or option) leaves it in the tray, or
+//! opens the Wrapper and/or the Toaster if they're set to open at launch;
+//! starting it again while it's running does the same, or opens the Toaster
+//! when neither is. When a
 //! link starts the app, the Toaster may open before its page has loaded, so
 //! the page also asks for the mode once it's ready (`take_startup_mode`).
 //!
@@ -81,14 +84,49 @@ pub fn request(args: &[String]) -> Option<Request> {
     None
 }
 
+/// The app was started (by Windows at sign-in, or by hand) or started
+/// again while running: opens the Wrapper and the Toaster if they're on
+/// and set to open at launch (the Toaster last, so it's in front). Whether
+/// either did.
+fn open_at_launch(app: &AppHandle) -> bool {
+    let saved = crate::settings::get_settings(app.clone());
+    let wrapper = saved.wrapper_enabled && saved.wrapper_at_launch;
+    let toaster = saved.toaster_enabled && saved.toaster_at_launch;
+    if wrapper {
+        crate::wrapper::open(app);
+    }
+    if toaster {
+        *app.state::<StartupMode>().0.lock().unwrap() = Some("player");
+        crate::open_toaster(app, ToasterMode::Player);
+    }
+    wrapper || toaster
+}
+
+/// Started again while running: what the new launch asked for, or for a
+/// plain one, whatever is set to open at launch (the Toaster when nothing
+/// is).
+pub fn relaunched(app: &AppHandle, args: &[String]) {
+    match request(args) {
+        Some(request) => handle(app, request),
+        None => {
+            if !open_at_launch(app) {
+                crate::open_toaster(app, ToasterMode::Player);
+            }
+        }
+    }
+}
+
 /// Does what a launch asked for.
 pub fn handle(app: &AppHandle, request: Request) {
     match request {
+        Request::Open(ToasterMode::Search) => crate::open_search(app),
         Request::Open(mode) => crate::open_toaster(app, mode),
         Request::Toggle => crate::toggle_toaster(app),
         Request::Wrapper if crate::wrapper::enabled(app) => crate::wrapper::open(app),
         Request::Wrapper => crate::open_toaster(app, ToasterMode::Player),
-        Request::SignIn => crate::wrapper::at_sign_in(app),
+        Request::SignIn => {
+            open_at_launch(app);
+        }
     }
 }
 
@@ -102,10 +140,14 @@ pub fn startup(app: &AppHandle) {
 
     let args: Vec<String> = std::env::args().collect();
     let Some(request) = request(&args) else {
+        // A plain start: the tray, or whatever is set to open at launch
+        open_at_launch(app);
         return;
     };
     // For the Toaster's page, in case it loads after the request
+    let in_roon = crate::settings::search_in_roon(&crate::settings::get_settings(app.clone()));
     let mode = match request {
+        Request::Open(ToasterMode::Search) if in_roon => None,
         Request::Open(ToasterMode::Search) => Some("search"),
         Request::Open(ToasterMode::Player) | Request::Toggle => Some("player"),
         Request::Wrapper | Request::SignIn => None,

@@ -46,10 +46,11 @@ tauri-plugin-global-shortcut = "~2.3"
 # without taking focus, screen names for the toast's Monitor setting, and
 # registering roon-toasted:// links, keeping the taskbar widget in place, and
 # the Wrapper (wrapper.rs: window regions, finding Roon's window; skin.rs:
-# the color filter over Roon's sidebar, via the Magnification API)
+# the color filter over Roon's sidebar, via the Magnification API; pictures
+# of Roon's window, to see whether its player screen is open: Storage_Xps)
 # (same version Tauri uses)
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_Shell", "Win32_UI_Accessibility"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_Shell", "Win32_UI_Accessibility", "Win32_Storage_Xps", "Win32_UI_Input_KeyboardAndMouse"] }
 
 
 # Local copies of two Roon libraries with fixes: roon-api in vendor/roon-api

@@ -84,6 +84,31 @@ pub(crate) fn visible_hole() -> Option<(windows::Win32::Foundation::HWND, [i32; 
     windows_wrapper::visible_hole()
 }
 
+/// A picture of Roon's client area (BGRA rows, top down; width, height),
+/// taken even while it's covered. For skin.rs, to find the sidebar while
+/// the hole is closed.
+#[cfg(windows)]
+pub(crate) fn roon_picture(roon: windows::Win32::Foundation::HWND) -> Option<(Vec<u8>, i32, i32)> {
+    windows_wrapper::roon_picture(roon)
+}
+
+/// Where Roon would show through if the page's Now Playing weren't covering
+/// it all (Roon's window, and the hole in screen pixels), or None. For
+/// skin.rs: its filter keeps going underneath us meanwhile, so it's ready
+/// the moment Now Playing closes.
+#[cfg(windows)]
+pub(crate) fn covered_hole() -> Option<(windows::Win32::Foundation::HWND, [i32; 4])> {
+    windows_wrapper::covered_hole()
+}
+
+/// Whether Roon's own player is being opened or closed for a link click
+/// (or closed for ours closing) right now. For skin.rs: Roon's window shows
+/// its player meanwhile, with no sidebar to find.
+#[cfg(windows)]
+pub(crate) fn player_busy() -> bool {
+    windows_wrapper::player_busy()
+}
+
 /// The Wrapper window's label, as set in tauri.conf.json.
 pub(crate) const WRAPPER_WINDOW: &str = "wrapper";
 
@@ -107,6 +132,9 @@ pub struct WrapperStatus {
     pub open: bool,
     pub roon_found: bool,
     pub note: String,
+    /// Roon couldn't be started after a few tries: the page says so,
+    /// large, or opens Now Playing if there's a zone to show.
+    pub roon_lost: bool,
 }
 
 /// Whether the Wrapper is switched on in Settings.
@@ -142,6 +170,74 @@ pub fn wrapper_status(app: AppHandle) -> WrapperStatus {
         let _ = app;
         WrapperStatus { note: "Windows only".into(), ..Default::default() }
     }
+}
+
+/// The page: its Now Playing opened or closed; Roon's own player screen
+/// follows (see the notes on it in windows_wrapper).
+#[tauri::command]
+pub fn wrapper_roon_player(open: bool) {
+    #[cfg(windows)]
+    windows_wrapper::roon_player(open);
+    #[cfg(not(windows))]
+    let _ = open;
+}
+
+/// The page is about to close its Now Playing: Roon's own player screen
+/// is closed first, and this returns once it's out of the way (at most
+/// about a second), so Roon's page and sidebar are back when ours drops.
+#[tauri::command]
+pub async fn wrapper_roon_close() -> Result<(), String> {
+    #[cfg(windows)]
+    tauri::async_runtime::spawn_blocking(windows_wrapper::roon_close)
+        .await
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The page: a link in its Now Playing ("title", "album" or "artist") was
+/// clicked; Roon goes to that page. Returns once the click is made: true,
+/// or false if the link wasn't found on Roon's player screen.
+#[tauri::command]
+pub async fn wrapper_roon_link(which: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || windows_wrapper::roon_link(&which))
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = which;
+        Ok(false)
+    }
+}
+
+/// Search, set to Roon (see `settings::search_in_roon`): opens the
+/// Wrapper; its page closes Now Playing if it's up, then asks for Roon's
+/// search (`wrapper_roon_search`).
+pub fn search(app: &AppHandle) {
+    #[cfg(windows)]
+    if enabled(app) {
+        use tauri::Emitter;
+        windows_wrapper::open(app);
+        let _ = app.emit_to(WRAPPER_WINDOW, "wrapper-search", ());
+    }
+    #[cfg(not(windows))]
+    let _ = app;
+}
+
+/// The page: Roon's own search box, ready to type (Ctrl+F in Roon). False
+/// if Roon couldn't be put in front for it.
+#[tauri::command]
+pub async fn wrapper_roon_search() -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(windows_wrapper::roon_search)
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    Ok(false)
 }
 
 /// The page's "Return Roon" button.
@@ -213,15 +309,6 @@ pub fn sync(app: &AppHandle) {
     windows_wrapper::sync(app);
     #[cfg(not(windows))]
     let _ = app;
-}
-
-/// Started with Windows: opens the Wrapper if it's on and set to open at
-/// sign-in.
-pub fn at_sign_in(app: &AppHandle) {
-    let saved = settings::get_settings(app.clone());
-    if saved.wrapper_enabled && saved.wrapper_at_sign_in {
-        open(app);
-    }
 }
 
 /// The font families installed on this PC, sorted, for Now Playing's
@@ -335,6 +422,9 @@ mod windows_wrapper {
     /// Where Roon currently shows through (screen pixels), see
     /// `visible_hole`.
     static VISIBLE_HOLE: Mutex<Option<[i32; 4]>> = Mutex::new(None);
+    /// Where Roon is, behind the page's Now Playing covering all of the
+    /// hole (screen pixels), see `covered_hole`.
+    static COVERED_HOLE: Mutex<Option<[i32; 4]>> = Mutex::new(None);
 
     /// What the page draws over the hole (screen pixels), as of the last
     /// sync pass that showed Roon.
@@ -366,15 +456,31 @@ mod windows_wrapper {
         Some((roon_window()?, hole))
     }
 
+    pub fn roon_picture(roon: HWND) -> Option<(Vec<u8>, i32, i32)> {
+        let picture = capture_roon(roon)?;
+        Some((picture.pixels, picture.width, picture.height))
+    }
+
+    pub fn covered_hole() -> Option<(HWND, [i32; 4])> {
+        let hole = (*COVERED_HOLE.lock().unwrap())?;
+        Some((roon_window()?, hole))
+    }
+
     /// Records where Roon shows through when a sync pass ends, whichever
-    /// way it ends (None unless the pass got all the way to showing Roon).
-    struct HoleReport(Option<[i32; 4]>);
+    /// way it ends (None unless the pass got all the way to showing Roon),
+    /// and where it is when Now Playing covers it all.
+    struct HoleReport(Option<[i32; 4]>, Option<[i32; 4]>);
 
     impl Drop for HoleReport {
         fn drop(&mut self) {
             *VISIBLE_HOLE.lock().unwrap() = self.0;
+            *COVERED_HOLE.lock().unwrap() = self.1;
         }
     }
+
+    /// Whether the Wrapper is being moved or resized by the mouse right now
+    /// (between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE).
+    static IN_SIZE_MOVE: AtomicBool = AtomicBool::new(false);
 
     /// The Wrapper's minimum size (logical pixels) once Roon has turned out
     /// to need more than tauri.conf.json's.
@@ -449,14 +555,158 @@ mod windows_wrapper {
             open: STATE.load(Ordering::Relaxed) == OPEN,
             roon_found: roon_window().is_some(),
             note: NOTE.lock().unwrap().clone(),
+            roon_lost: ROON_LOST.load(Ordering::Relaxed),
         }
     }
 
+    // DEBUG (temporary): what the main thread was last doing, and a
+    // watchdog that prints it if the main thread stops answering
+    static MAIN_THREAD: OnceLock<std::thread::ThreadId> = OnceLock::new();
+    static STEP: Mutex<(&str, Option<Instant>)> = Mutex::new(("", None));
+    static HEARTBEAT: Mutex<Option<Instant>> = Mutex::new(None);
+
+    fn step(name: &'static str) {
+        if MAIN_THREAD.get() == Some(&std::thread::current().id()) {
+            *STEP.lock().unwrap() = (name, Some(Instant::now()));
+        }
+    }
+
+    fn watchdog(app: &AppHandle) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let mut stuck = false;
+            loop {
+                std::thread::sleep(Duration::from_millis(500));
+                let _ = app.run_on_main_thread(|| {
+                    *HEARTBEAT.lock().unwrap() = Some(Instant::now());
+                });
+                let since = HEARTBEAT.lock().unwrap().map(|at| at.elapsed());
+                let Some(since) = since else { continue };
+                if since > Duration::from_secs(3) {
+                    if !stuck {
+                        let (name, at) = *STEP.lock().unwrap();
+                        eprintln!(
+                            "[watchdog] main thread not answering for {:.1} s; its last step: {} ({:.1} s ago)",
+                            since.as_secs_f64(),
+                            name,
+                            at.map(|at| at.elapsed().as_secs_f64()).unwrap_or(-1.0),
+                        );
+                        stuck = true;
+                    }
+                } else if stuck {
+                    eprintln!("[watchdog] main thread answering again");
+                    stuck = false;
+                }
+            }
+        });
+    }
+
+    // DEBUG (temporary): Roon's windows coming and going, and which window
+    // has the focus, to see what the Wrapper changes about Roon's search
+    fn watch_windows_debug() {
+        use windows::Win32::UI::Accessibility::SetWinEventHook;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT,
+        };
+        // SAFETY: a valid callback that lives for the whole program.
+        unsafe {
+            let _ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(on_window_debug), 0, 0, WINEVENT_OUTOFCONTEXT);
+            let _ = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_LOCATIONCHANGE, None, Some(on_window_debug), 0, 0, WINEVENT_OUTOFCONTEXT);
+        }
+    }
+
+    unsafe extern "system" fn on_window_debug(
+        _hook: windows::Win32::UI::Accessibility::HWINEVENTHOOK,
+        event: u32,
+        window: HWND,
+        object: i32,
+        child: i32,
+        _thread: u32,
+        _time: u32,
+    ) {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetClassNameW, GetWindow, GetWindowTextW, GetWindowThreadProcessId, GW_OWNER, OBJID_CLIENT, OBJID_WINDOW,
+        };
+        let name = match event {
+            0x0003 => "foreground",
+            0x8000 => "create",
+            0x8001 => "destroy",
+            0x8002 => "show",
+            0x8003 => "hide",
+            0x8005 => "focus",
+            0x800B => "moved",
+            _ => return,
+        };
+        if window.is_invalid() || (object != OBJID_WINDOW.0 && object != OBJID_CLIENT.0) || child != 0 {
+            return;
+        }
+        let pid_of = |w: HWND| {
+            let mut pid = 0u32;
+            // SAFETY: a plain query.
+            unsafe { GetWindowThreadProcessId(w, Some(&mut pid)) };
+            pid
+        };
+        let pid = pid_of(window);
+        // Roon's process by its program's name (Roon may not be in the
+        // Wrapper), remembered for the last process asked about
+        static LAST: Mutex<(u32, bool)> = Mutex::new((0, false));
+        let is_roon = {
+            let cached = *LAST.lock().unwrap();
+            if cached.0 == pid {
+                cached.1
+            } else {
+                let roon = pid != 0 && process_exe_name(pid).is_some_and(|n| n.eq_ignore_ascii_case("roon.exe"));
+                *LAST.lock().unwrap() = (pid, roon);
+                roon
+            }
+        };
+        let who = if pid == std::process::id() {
+            "ours"
+        } else if is_roon {
+            "roon"
+        } else {
+            "other"
+        };
+        // Everything about Roon's windows (but not its main window moving,
+        // which the Wrapper does all the time); for others, only who's in
+        // front
+        if who != "roon" && event != 0x0003 {
+            return;
+        }
+        if event == 0x800B && is_roon_main_window(window) {
+            return;
+        }
+        let mut class = [0u16; 128];
+        let mut title = [0u16; 128];
+        // SAFETY: buffers sized as passed; plain queries.
+        let (c, t, owner) = unsafe {
+            (
+                GetClassNameW(window, &mut class),
+                GetWindowTextW(window, &mut title),
+                GetWindow(window, GW_OWNER).ok(),
+            )
+        };
+        let ms = STEP_START.get_or_init(Instant::now).elapsed().as_millis();
+        eprintln!(
+            "[win {ms:>7} ms] {name:<10} {who:<5} {:?} class \"{}\" title \"{}\"{}{}",
+            window.0,
+            String::from_utf16_lossy(&class[..c.max(0) as usize]),
+            String::from_utf16_lossy(&title[..t.max(0) as usize]),
+            owner.filter(|o| !o.is_invalid()).map(|o| format!(" owner {:?}", o.0)).unwrap_or_default(),
+            if hwnd_of(&ROON_HWND) == Some(window) { " (Roon's main window)" } else { "" },
+        );
+    }
+    static STEP_START: OnceLock<Instant> = OnceLock::new();
+
     pub fn start(app: &AppHandle) {
         let _ = APP.set(app.clone());
+        let _ = MAIN_THREAD.set(std::thread::current().id());
+        watchdog(app);
+        watch_windows_debug();
         remember_host(app);
         watch_foreground();
         follow_moves();
+        watch_player();
         // A Roon of its own while the Wrapper is on gets the title-bar button
         super::button::refresh(app);
 
@@ -532,6 +782,7 @@ mod windows_wrapper {
 
     pub fn resized(app: &AppHandle) {
         *LAST_RESIZE.lock().unwrap() = Some(Instant::now());
+        check_soon();
         sync(app);
     }
 
@@ -555,6 +806,10 @@ mod windows_wrapper {
                 None => {
                     ROON_HWND.store(0, Ordering::Relaxed);
                     *ROON_RESTORE.lock().unwrap() = None;
+                    // A fresh round of tries
+                    LAUNCH_TRIES.store(0, Ordering::Relaxed);
+                    ROON_LOST.store(false, Ordering::Relaxed);
+                    *MISSING_SINCE.lock().unwrap() = None;
                     if launch_roon() {
                         set_note("Starting Roon...");
                     } else {
@@ -565,6 +820,7 @@ mod windows_wrapper {
         }
 
         STATE.store(OPEN, Ordering::Relaxed);
+        check_soon();
         super::button::refresh(app);
         *LAST_REGION.lock().unwrap() = None;
         // A remembered size still has to fit the screen it opens on
@@ -613,6 +869,7 @@ mod windows_wrapper {
         STATE.store(PARKED, Ordering::Relaxed);
         super::button::refresh(app);
         *VISIBLE_HOLE.lock().unwrap() = None;
+        *COVERED_HOLE.lock().unwrap() = None;
         DRAGGING.store(false, Ordering::Relaxed);
         drop_thumbnails();
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
@@ -622,11 +879,17 @@ mod windows_wrapper {
             hide(roon);
         }
         crate::save_window_state(app);
+        // The page closes Now Playing, unless it's set to remember it
+        {
+            use tauri::Emitter;
+            let _ = app.emit_to(WRAPPER_WINDOW, "wrapper-parked", ());
+        }
     }
 
     pub fn put_back(app: &AppHandle) {
         let before = STATE.swap(OFF, Ordering::Relaxed);
         *VISIBLE_HOLE.lock().unwrap() = None;
+        *COVERED_HOLE.lock().unwrap() = None;
         DRAGGING.store(false, Ordering::Relaxed);
         drop_thumbnails();
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
@@ -686,6 +949,7 @@ mod windows_wrapper {
     /// (started again from the Start menu, say), open the Wrapper around it.
     fn sync_parked(app: &AppHandle) {
         *VISIBLE_HOLE.lock().unwrap() = None;
+        *COVERED_HOLE.lock().unwrap() = None;
         let Some(roon) = hwnd_of(&ROON_HWND) else {
             return;
         };
@@ -699,7 +963,8 @@ mod windows_wrapper {
     }
 
     fn sync_open(app: &AppHandle) {
-        let mut report = HoleReport(None);
+        step("sync_open: start");
+        let mut report = HoleReport(None, None);
         // Being dragged: everything is already moving along (see LAST_MOVE
         // and DRAGGING)
         if DRAGGING.load(Ordering::Relaxed)
@@ -732,6 +997,35 @@ mod windows_wrapper {
                 found
             }
         };
+        // Roon gone while the Wrapper is showing (it quit, or it was still
+        // closing when the Wrapper opened and took its last window): start
+        // it again, a moment later, then 5 seconds after that; 10 seconds
+        // after the second try, give up and say so (see ROON_LOST)
+        if roon.is_some() {
+            *MISSING_SINCE.lock().unwrap() = None;
+            LAUNCH_TRIES.store(0, Ordering::Relaxed);
+            ROON_LOST.store(false, Ordering::Relaxed);
+        } else if is_visible(host) && !is_minimized(host) && !ROON_LOST.load(Ordering::Relaxed) {
+            let since = *MISSING_SINCE.lock().unwrap().get_or_insert_with(Instant::now);
+            let since_launch = LAUNCHED_AT.lock().unwrap().map(|at| at.elapsed());
+            match LAUNCH_TRIES.load(Ordering::Relaxed) {
+                0 if since.elapsed() >= MISSING_LAUNCH => {
+                    if launch_roon() {
+                        set_note("Starting Roon...");
+                    } else {
+                        set_note("Roon isn't running and couldn't be started. Start Roon and it will appear here.");
+                    }
+                }
+                1 if since_launch.is_none_or(|t| t >= SECOND_TRY) && launch_roon() => {
+                    set_note("Starting Roon...");
+                }
+                tries if tries >= 2 && since_launch.is_none_or(|t| t >= GIVE_UP) => {
+                    ROON_LOST.store(true, Ordering::Relaxed);
+                    set_note("Couldn't open Roon. Restart the Roon desktop app, and it will appear here.");
+                }
+                _ => {}
+            }
+        }
 
         // The hole and covers, in real pixels: on the screen, and relative
         // to our window (for the region)
@@ -778,6 +1072,13 @@ mod windows_wrapper {
             client_w,
             client_h,
         ];
+        // The sidebar filter goes see-through while nothing of Roon shows,
+        // and solid again just before the hole opens, so it shows (and
+        // hides) in the same frame as Roon
+        let exposed = open_hole && !subtract(hole, &covers).is_empty();
+        step("sync_open: filter see-through/solid");
+        crate::skin::wait(!exposed);
+        step("sync_open: window shape");
         let mut region_key = bounds.to_vec();
         region_key.push(open_hole as i32);
         if open_hole {
@@ -818,6 +1119,7 @@ mod windows_wrapper {
                 let (min_w, min_h) = ((min_w * scale).ceil() as i32, (min_h * scale).ceil() as i32);
                 let extra = ((min_w - hole.2).max(0), (min_h - (hole.3 + bar)).max(0));
                 if extra.0 > 0 || extra.1 > 0 {
+                    step("sync_open: grow minimum (Roon's minimum)");
                     grow_minimum(&window, scale, extra.0, extra.1);
                 }
             }
@@ -844,8 +1146,11 @@ mod windows_wrapper {
         let client = (hole.0, hole.1, hole.2, hole.3 + bar);
         // Roon goes right below us (the sidebar filter sits right above
         // us, see skin.rs)
+        step("sync_open: place Roon");
         place_roon(roon, client, host);
+        step("sync_open: keep order");
         keep_order(host, roon);
+        step("sync_open: after keep order");
         if let (Some(r), Some(h)) = (window_rect(roon), window_rect(host)) {
             *ROON_OFFSET.lock().unwrap() = Some((r.0 - h.0, r.1 - h.1));
         }
@@ -860,8 +1165,15 @@ mod windows_wrapper {
             // know that
             if !subtract(hole, &covers).is_empty() {
                 report.0 = Some(hole);
+            } else {
+                report.1 = Some(hole);
             }
             *VISIBLE_COVERS.lock().unwrap() = covers;
+        } else {
+            // Roon is in place behind the closed hole, repainting after a
+            // resize: the sidebar filter gets ready below us meanwhile, so
+            // it's there when the hole opens
+            report.1 = Some([hole.0, hole.1, hole.2, hole.3]);
         }
 
         // Roon still wouldn't get that small (its minimum wasn't measured,
@@ -920,20 +1232,27 @@ mod windows_wrapper {
             .find(|w| w.label == WRAPPER_WINDOW)
             .map(|w| (w.min_width.unwrap_or(0.0), w.min_height.unwrap_or(0.0)))
             .unwrap_or_default();
-        let min = {
+        let (min, changed) = {
             let mut learned = LEARNED_MIN.lock().unwrap();
             let current = learned.unwrap_or(configured);
             let min = (current.0.max(need.0).ceil(), current.1.max(need.1).ceil());
             let min = within_screen(window, min);
-            if Some(min) == *learned {
-                return;
-            }
+            let changed = Some(min) != *learned;
             *learned = Some(min);
-            min
+            (min, changed)
         };
-        let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(min.0, min.1))));
+        if changed {
+            eprintln!("[wrapper] minimum size now {:.0} x {:.0} (scale {scale})", min.0, min.1);
+            step("grow_minimum: set_min_size");
+            let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(min.0, min.1))));
+            step("grow_minimum: done");
+        }
+        // Smaller than that: grown to it, but not while it's being resized
+        // (Windows' resizing would put it right back where the mouse is,
+        // and it stayed there). Meanwhile WM_SIZING holds the edge at the
+        // minimum; once let go, the next pass grows it if it's still short.
         let now = (inner.width as f64 / scale, inner.height as f64 / scale);
-        if now.0 < min.0 || now.1 < min.1 {
+        if (now.0 < min.0 || now.1 < min.1) && !IN_SIZE_MOVE.load(Ordering::Relaxed) {
             let _ = window.set_size(LogicalSize::new(now.0.max(min.0), now.1.max(min.1)));
         }
     }
@@ -942,7 +1261,7 @@ mod windows_wrapper {
     /// real pixels), accounting for Roon's own title bar and borders, shows
     /// it, and puts it directly behind `behind`.
     fn place_roon(roon: HWND, client: (i32, i32, i32, i32), behind: HWND) {
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_SHOWWINDOW};
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE};
         let (Some(rect), Some(origin), Some(size)) =
             (window_rect(roon), client_origin(roon), client_size(roon))
         else {
@@ -962,15 +1281,25 @@ mod windows_wrapper {
         if want != rect || !is_visible(roon) {
             // SAFETY: valid window handles.
             unsafe {
-                let _ = SetWindowPos(
-                    roon,
-                    Some(behind),
-                    want.0,
-                    want.1,
-                    want.2,
-                    want.3,
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
-                );
+                let _ = SetWindowPos(roon, Some(behind), want.0, want.1, want.2, want.3, SWP_NOACTIVATE);
+            }
+            show_na(roon);
+        }
+    }
+
+    /// Shows a hidden window without activating it, with ShowWindow. Never
+    /// SetWindowPos's "show" flag for Roon: that shows the window without
+    /// telling it (no WM_SHOWWINDOW), and Roon (a Windows Forms app) went on
+    /// believing it was hidden, which stalled its animations: its search box
+    /// never folded away again, until Roon was restarted, even after the
+    /// Wrapper let it go. Showing it this way also puts right a Roon left
+    /// like that by an earlier version (the Wrapper hides it first).
+    fn show_na(hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWNA};
+        if !is_visible(hwnd) {
+            // SAFETY: a valid window handle.
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_SHOWNA);
             }
         }
     }
@@ -978,29 +1307,16 @@ mod windows_wrapper {
     /// Puts a window at `rect` (its whole window: x, y, width, height) and
     /// shows it.
     fn place_window(hwnd: HWND, (x, y, w, h): (i32, i32, i32, i32)) {
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOZORDER, SWP_SHOWWINDOW};
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
         // SAFETY: a valid window handle.
         unsafe {
-            let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_SHOWWINDOW);
+            let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
         }
+        show_na(hwnd);
     }
 
     fn show_where_it_is(hwnd: HWND) {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW,
-        };
-        // SAFETY: a valid window handle.
-        unsafe {
-            let _ = SetWindowPos(
-                hwnd,
-                None,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
-            );
-        }
+        show_na(hwnd);
     }
 
     fn bring_to_front(hwnd: HWND) {
@@ -1045,8 +1361,10 @@ mod windows_wrapper {
             }
             // The filter right above us (it's on another thread: never wait
             // on it). It recolors whatever is under it: Roon through the
-            // hole, or Roon's live picture while we're dragged.
-            if let Some(filter) = crate::skin::filter_window() {
+            // hole, or Roon's live picture while we're dragged. (While Now
+            // Playing covers Roon it waits there see-through, see skin.rs.)
+            let hole_there = VISIBLE_HOLE.lock().unwrap().is_some() || COVERED_HOLE.lock().unwrap().is_some();
+            if let Some(filter) = crate::skin::filter_window().filter(|_| hole_there) {
                 let above = GetWindow(host, GW_HWNDPREV).ok().filter(|w| !w.is_invalid());
                 if above != Some(filter) {
                     let _ = SetWindowPos(
@@ -1204,8 +1522,27 @@ mod windows_wrapper {
         }
     }
 
+    /// When Roon was last started by us, and since when it's been missing
+    /// while the Wrapper is open (see `sync_open`).
+    static LAUNCHED_AT: Mutex<Option<Instant>> = Mutex::new(None);
+    static MISSING_SINCE: Mutex<Option<Instant>> = Mutex::new(None);
+    /// Roon missing this long with the Wrapper open: started (again).
+    const MISSING_LAUNCH: Duration = Duration::from_millis(1500);
+    /// Still not there this long after: started once more (a Roon that was
+    /// still closing can swallow a start).
+    const SECOND_TRY: Duration = Duration::from_secs(5);
+    /// And this long after that: given up on, until the Wrapper is opened
+    /// again or Roon shows up by itself.
+    const GIVE_UP: Duration = Duration::from_secs(10);
+    /// Starts of Roon in this stretch of it missing, and whether we've given
+    /// up on it.
+    static LAUNCH_TRIES: AtomicU8 = AtomicU8::new(0);
+    static ROON_LOST: AtomicBool = AtomicBool::new(false);
+
     /// Starts Roon from its usual per-user install folder.
     fn launch_roon() -> bool {
+        *LAUNCHED_AT.lock().unwrap() = Some(Instant::now());
+        LAUNCH_TRIES.fetch_add(1, Ordering::Relaxed);
         let Some(local) = std::env::var_os("LOCALAPPDATA") else {
             return false;
         };
@@ -1481,10 +1818,35 @@ mod windows_wrapper {
         use windows::Win32::UI::Shell::DefSubclassProc;
         use windows::Win32::UI::WindowsAndMessaging::{
             SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, WINDOWPOS, WM_EXITSIZEMOVE, WM_MOVING, WM_WINDOWPOSCHANGING,
+            SWP_NOZORDER, WINDOWPOS, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT,
+            WMSZ_TOPRIGHT, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVING, WM_SIZING,
+            WM_WINDOWPOSCHANGING,
         };
+        // DEBUG: which message the main thread is in
+        step(match msg {
+            0x0005 => "host message: WM_SIZE",
+            0x0024 => "host message: WM_GETMINMAXINFO",
+            0x0046 => "host message: WM_WINDOWPOSCHANGING",
+            0x0047 => "host message: WM_WINDOWPOSCHANGED",
+            0x0214 => "host message: WM_SIZING",
+            0x0216 => "host message: WM_MOVING",
+            0x0231 => "host message: WM_ENTERSIZEMOVE",
+            0x0232 => "host message: WM_EXITSIZEMOVE",
+            0x02E0 => "host message: WM_DPICHANGED",
+            _ => "host message: other",
+        });
         // Moved to a screen with different scaling: icons for that size
         if msg == windows::Win32::UI::WindowsAndMessaging::WM_DPICHANGED {
+            // SAFETY: for this message lparam points at the suggested RECT.
+            let r = unsafe { &*(lparam.0 as *const RECT) };
+            eprintln!(
+                "[wrapper] scaling changed: dpi {} suggested {}x{} at {},{}",
+                wparam.0 & 0xFFFF,
+                r.right - r.left,
+                r.bottom - r.top,
+                r.left,
+                r.top
+            );
             set_icons(hwnd, (wparam.0 & 0xFFFF) as u32);
         }
         if STATE.load(Ordering::Relaxed) == OPEN {
@@ -1543,6 +1905,39 @@ mod windows_wrapper {
                 }
             }
         }
+        if msg == WM_ENTERSIZEMOVE {
+            IN_SIZE_MOVE.store(true, Ordering::Relaxed);
+        } else if msg == WM_EXITSIZEMOVE {
+            IN_SIZE_MOVE.store(false, Ordering::Relaxed);
+        }
+        // Being resized by an edge: the edge stops at the minimum Roon
+        // needs, even when that minimum was only learned during this resize
+        // (Windows takes the minimum once, when the resize starts, so it
+        // went past it and stayed smaller than Roon)
+        if msg == WM_SIZING {
+            // SAFETY: passing the message on first, as every subclass must.
+            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+            // SAFETY: for this message lparam points at the dragged RECT.
+            let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
+            if let Some((min_w, min_h)) = min_window_size(hwnd) {
+                let edge = wparam.0 as u32;
+                if rect.right - rect.left < min_w {
+                    if matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT) {
+                        rect.left = rect.right - min_w;
+                    } else {
+                        rect.right = rect.left + min_w;
+                    }
+                }
+                if rect.bottom - rect.top < min_h {
+                    if matches!(edge, WMSZ_TOP | WMSZ_TOPLEFT | WMSZ_TOPRIGHT) {
+                        rect.top = rect.bottom - min_h;
+                    } else {
+                        rect.bottom = rect.top + min_h;
+                    }
+                }
+            }
+            return result;
+        }
         // The smallest size Windows lets the Wrapper be: whatever Tauri
         // says, but never bigger than the screen it's on. A minimum wider
         // than the screen (dragged from a big screen onto a small one, a
@@ -1556,13 +1951,42 @@ mod windows_wrapper {
             if let Some((room_w, room_h)) = screen_room(hwnd) {
                 // SAFETY: for this message lparam points at a MINMAXINFO.
                 let info = unsafe { &mut *(lparam.0 as *mut windows::Win32::UI::WindowsAndMessaging::MINMAXINFO) };
+                let asked = (info.ptMinTrackSize.x, info.ptMinTrackSize.y);
                 info.ptMinTrackSize.x = info.ptMinTrackSize.x.min(room_w);
                 info.ptMinTrackSize.y = info.ptMinTrackSize.y.min(room_h);
+                // DEBUG: only when it changes
+                type Sizes = ((i32, i32), (i32, i32));
+                static LAST: Mutex<Option<Sizes>> = Mutex::new(None);
+                let now = (asked, (room_w, room_h));
+                if LAST.lock().unwrap().replace(now) != Some(now) {
+                    eprintln!("[wrapper] minimum asked {}x{}, screen room {}x{}", asked.0, asked.1, room_w, room_h);
+                }
             }
+            step("host message: WM_GETMINMAXINFO done");
             return result;
         }
         // SAFETY: passing the message on, as every subclass must.
-        unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+        let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+        step("host message: done");
+        result
+    }
+
+    /// The learned minimum (see LEARNED_MIN) as a whole-window size in real
+    /// pixels (frame included), or None while there's none.
+    fn min_window_size(hwnd: HWND) -> Option<(i32, i32)> {
+        let min = (*LEARNED_MIN.lock().unwrap())?;
+        let scale = APP.get()?.get_webview_window(WRAPPER_WINDOW)?.scale_factor().ok()?;
+        let (_, _, w, h) = window_rect(hwnd)?;
+        let (cw, ch) = client_size(hwnd)?;
+        let mut min = (
+            (min.0 * scale).ceil() as i32 + (w - cw),
+            (min.1 * scale).ceil() as i32 + (h - ch),
+        );
+        // Never more than the screen has room for
+        if let Some((room_w, room_h)) = screen_room(hwnd) {
+            min = (min.0.min(room_w), min.1.min(room_h));
+        }
+        Some(min)
     }
 
     /// The size of the work area (the screen minus the taskbar, real
@@ -1590,6 +2014,7 @@ mod windows_wrapper {
     /// the screen, where it waits out the drag. Only when Roon is showing
     /// through the hole right now.
     fn start_drag(host: HWND) {
+        step("start_drag");
         use windows::Win32::Foundation::TRUE;
         use windows::Win32::Graphics::Dwm::{
             DwmRegisterThumbnail, DwmUpdateThumbnailProperties, DWM_THUMBNAIL_PROPERTIES,
@@ -1717,6 +2142,7 @@ mod windows_wrapper {
     /// The drag is over: Roon goes to its spot behind the hole, then a sync
     /// pass opens the hole and removes the live pictures.
     fn end_drag(host: HWND) {
+        step("end_drag");
         use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOSIZE};
         if let (Some(roon), Some(now), Some((ox, oy))) =
             (roon_window(), window_rect(host), *ROON_OFFSET.lock().unwrap())
@@ -1815,5 +2241,707 @@ mod windows_wrapper {
                 keep_order(host, roon);
             }
         }
+    }
+
+    // ----- Roon's own player screen ---------------------------------------
+    //
+    // Roon's artist, album and track links only exist on its own player
+    // screen (Now Playing). So our links open Roon's player behind ours,
+    // click the same link there, and Roon goes to that page. Otherwise
+    // Roon's player is kept closed (so Roon's own page, and the sidebar
+    // filter over it, are always ready behind ours). The clicks are sent straight to Roon's window
+    // (no mouse movement): to its player bar (hidden under ours) to open
+    // it, to its down arrow to close it, and to the links. Whether it's open
+    // is read off a picture of Roon's window (taken even while it's
+    // covered): open, the bar's album art is gone and the down arrow shows.
+    // Checked when ours opens or closes and every second, and put right
+    // when it doesn't match. The bar's album art stays put (Roon's 100%
+    // scaling, measured from the bottom-left of its window); the down arrow
+    // and the links move with the window's size, so they're found in the
+    // picture (`player_screen`, `find_link`).
+
+    /// Where to click to open Roon's player: the bar's album art (from the
+    /// left, from the bottom; logical pixels).
+    const SPOT_OPEN: (f64, f64) = (53.0, 52.0);
+
+    /// Whether Roon's player should be open: never, outside a link click.
+    static PLAYER_WANTED: AtomicBool = AtomicBool::new(false);
+    /// Nothing is checked or clicked until then: Roon's player is still
+    /// opening or closing, or Roon is going to a page.
+    static PLAYER_QUIET: Mutex<Option<Instant>> = Mutex::new(None);
+    /// Clicks made in a row without it matching; stops at 3, so a Roon that
+    /// looks different (another language, a zoom) isn't clicked forever.
+    static PLAYER_TRIES: AtomicU8 = AtomicU8::new(0);
+    /// One check or click sequence at a time.
+    static PLAYER_BUSY: Mutex<()> = Mutex::new(());
+    /// One link click at a time.
+    static LINK_BUSY: Mutex<()> = Mutex::new(());
+    /// A link click or a close is using Roon's player (see `player_busy`).
+    static PLAYER_IN_USE: AtomicBool = AtomicBool::new(false);
+
+    /// Sets PLAYER_IN_USE for as long as it's held.
+    struct InUse;
+    impl InUse {
+        fn new() -> Self {
+            PLAYER_IN_USE.store(true, Ordering::Relaxed);
+            InUse
+        }
+    }
+    impl Drop for InUse {
+        fn drop(&mut self) {
+            PLAYER_IN_USE.store(false, Ordering::Relaxed);
+        }
+    }
+
+    pub fn player_busy() -> bool {
+        PLAYER_IN_USE.load(Ordering::Relaxed)
+    }
+
+    fn quiet_for(time: Duration) {
+        *PLAYER_QUIET.lock().unwrap() = Some(Instant::now() + time);
+    }
+
+    fn wait_out_quiet() {
+        let until = *PLAYER_QUIET.lock().unwrap();
+        if let Some(until) = until {
+            let now = Instant::now();
+            if until > now {
+                std::thread::sleep(until - now);
+            }
+        }
+    }
+
+    /// The page: our Now Playing opened or closed. Either way Roon's own
+    /// player stays (or gets) closed.
+    pub fn roon_player(_open: bool) {
+        check_soon();
+        PLAYER_WANTED.store(false, Ordering::Relaxed);
+        PLAYER_TRIES.store(0, Ordering::Relaxed);
+        std::thread::spawn(|| {
+            wait_out_quiet();
+            check_player();
+        });
+    }
+
+    /// How long after Roon's player looks closed before the page drops
+    /// ours: the rest of Roon's closing animation, so its sidebar (and our
+    /// filter over it) is back in place when ours is gone.
+    const SETTLE: Duration = Duration::from_millis(200);
+
+    /// The page: one of our Now Playing's links was clicked ("title",
+    /// "album" or "artist"). Opens Roon's player, clicks the link there as
+    /// soon as it can be seen, then waits for Roon to leave its player for
+    /// the page, so the page can drop ours onto it. Whether the link was
+    /// found and clicked (if not, Roon's player is closed again).
+    /// Blocking; run off the main thread.
+    pub fn roon_link(which: &str) -> bool {
+        // One at a time: clicks on our links while one is under way are
+        // dropped, not queued (queued ones reopened Roon's player again and
+        // again)
+        let Ok(_busy) = LINK_BUSY.try_lock() else {
+            return false;
+        };
+        let _player = PLAYER_BUSY.lock().unwrap();
+        if STATE.load(Ordering::Relaxed) != OPEN {
+            return false;
+        }
+        let _in_use = InUse::new();
+        let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
+            return false;
+        };
+        let scale = roon_scale();
+        let mut opened_at: Option<Instant> = None;
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut clicked = false;
+        while Instant::now() < deadline {
+            if let Some(picture) = capture_roon(roon) {
+                if screen_state(&picture, scale).is_some() {
+                    if let Some(spot) = find_link(&picture, scale, which) {
+                        click_at(roon, spot);
+                        clicked = true;
+                        break;
+                    }
+                } else if opened_at.is_none_or(|at| at.elapsed() > Duration::from_millis(800)) {
+                    roon_click(roon, SPOT_OPEN);
+                    opened_at = Some(Instant::now());
+                }
+            }
+            std::thread::sleep(Duration::from_millis(80));
+        }
+        PLAYER_WANTED.store(false, Ordering::Relaxed);
+        PLAYER_TRIES.store(0, Ordering::Relaxed);
+        if !clicked {
+            // Not found: Roon's player goes back down
+            wait_closed(roon, true);
+            return false;
+        }
+        // Roon goes to the page, its player closing by itself
+        wait_closed(roon, false);
+        true
+    }
+
+    /// Roon's own search box (Ctrl+F in Roon), for Search set to Roon.
+    /// Blocking; run off the main thread.
+    pub fn roon_search() -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
+            VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
+        if STATE.load(Ordering::Relaxed) != OPEN {
+            return false;
+        }
+        let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
+            return false;
+        };
+        // The hotkey's own keys may still be down (Ctrl+F with Alt still
+        // held is a different shortcut): wait for them to be let go
+        let held = || {
+            [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN].iter().any(|key| {
+                // SAFETY: a plain key state query.
+                (unsafe { GetAsyncKeyState(key.0 as i32) } as u16) & 0x8000 != 0
+            })
+        };
+        let deadline = Instant::now() + Duration::from_millis(1500);
+        while held() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if held() {
+            return false;
+        }
+        // Roon in front, so its search box gets the typing (the Wrapper
+        // comes back above it without taking the focus, as when Roon is
+        // clicked; see keep_order)
+        // SAFETY: plain window calls on a valid handle.
+        unsafe {
+            let _ = SetForegroundWindow(roon);
+        }
+        let deadline = Instant::now() + Duration::from_millis(400);
+        // SAFETY: a plain query.
+        while unsafe { GetForegroundWindow() } != roon && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // SAFETY: a plain query.
+        if unsafe { GetForegroundWindow() } != roon {
+            return false;
+        }
+        let key = |vk: VIRTUAL_KEY, up: bool| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: vk,
+                    dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                    ..Default::default()
+                },
+            },
+        };
+        let f = VIRTUAL_KEY(0x46);
+        let inputs = [key(VK_CONTROL, false), key(f, false), key(f, true), key(VK_CONTROL, true)];
+        let press = || {
+            // SAFETY: an array of keyboard inputs, with the size of one.
+            unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
+        };
+        // The first search after Roon starts takes two presses (Roon's own
+        // search button does too), so it's pressed again if Roon's search
+        // field doesn't show
+        let shows = |wait: Duration| {
+            let deadline = Instant::now() + wait;
+            loop {
+                if search_field_shown() {
+                    return true;
+                }
+                if Instant::now() >= deadline {
+                    return false;
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        };
+        if !press() {
+            return false;
+        }
+        if !shows(Duration::from_millis(700)) {
+            let _ = press();
+            return shows(Duration::from_millis(700));
+        }
+        true
+    }
+
+    /// Whether Roon's search field is up: a long white box along the top
+    /// of Roon's page, right of the middle (where its search, bookmark and
+    /// bell buttons sit otherwise). Read off the screen through the hole.
+    fn search_field_shown() -> bool {
+        use windows::Win32::Graphics::Gdi::{
+            BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
+            SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
+        };
+        let Some(hole) = *VISIBLE_HOLE.lock().unwrap() else {
+            return false;
+        };
+        let scale = roon_scale();
+        let x = hole[0] + hole[2] * 2 / 5;
+        let width = hole[2] - hole[2] * 2 / 5;
+        let height = ((72.0 * scale).round() as i32).min(hole[3]);
+        let run_needed = (120.0 * scale).round() as usize;
+        if width <= 0 || height <= 0 {
+            return false;
+        }
+        // SAFETY: GDI objects made and freed here; the DIB holds width *
+        // height 4-byte pixels while it's read.
+        unsafe {
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(Some(screen));
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits = std::ptr::null_mut();
+            let mut found = false;
+            if let Ok(bitmap) = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                let old = SelectObject(dc, bitmap.into());
+                if BitBlt(dc, 0, 0, width, height, Some(screen), x, hole[1], SRCCOPY).is_ok() {
+                    let pixels = std::slice::from_raw_parts(bits as *const u8, (width * height * 4) as usize);
+                    found = (0..height as usize).any(|row| {
+                        let line = &pixels[row * width as usize * 4..(row + 1) * width as usize * 4];
+                        let mut run = 0usize;
+                        line.chunks_exact(4).any(|p| {
+                            let white = p[0] >= 225 && p[1] >= 225 && p[2] >= 225;
+                            run = if white { run + 1 } else { 0 };
+                            run >= run_needed
+                        })
+                    });
+                }
+                SelectObject(dc, old);
+                let _ = DeleteObject(bitmap.into());
+            }
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+            found
+        }
+    }
+
+    /// The page is closing its Now Playing: closes Roon's player first and
+    /// returns once it's out of the way (at most about a second), so ours
+    /// drops onto Roon's page with its sidebar already back. Blocking; run
+    /// off the main thread.
+    pub fn roon_close() {
+        PLAYER_WANTED.store(false, Ordering::Relaxed);
+        PLAYER_TRIES.store(0, Ordering::Relaxed);
+        let _player = PLAYER_BUSY.lock().unwrap();
+        if STATE.load(Ordering::Relaxed) != OPEN {
+            return;
+        }
+        if let Some(roon) = roon_window().filter(|r| is_visible(*r)) {
+            let _in_use = InUse::new();
+            wait_closed(roon, true);
+        }
+    }
+
+    /// Waits (at most about a second) for Roon's player to be closed, then
+    /// for its animation to finish; with `close`, clicks its down arrow
+    /// (again only if a click hasn't taken in a while).
+    fn wait_closed(roon: HWND, close: bool) {
+        let scale = roon_scale();
+        let deadline = Instant::now() + Duration::from_millis(1200);
+        let mut clicked_at: Option<Instant> = None;
+        let mut was_open = false;
+        while Instant::now() < deadline {
+            let Some(picture) = capture_roon(roon) else { break };
+            match screen_state(&picture, scale) {
+                None if !was_open => break,
+                None => {
+                    std::thread::sleep(SETTLE);
+                    // Roon's page as it'll show: the sidebar filter finds
+                    // the sidebar in it now, so it's there the moment ours
+                    // drops (the hole is Roon's window minus its bar)
+                    if let Some(picture) = capture_roon(roon) {
+                        let bar = (ROON_BOTTOM_BAR * scale).round() as i32;
+                        crate::skin::prime(&picture.pixels, picture.width, picture.height - bar);
+                    }
+                    break;
+                }
+                Some(arrow) => {
+                    was_open = true;
+                    if close && clicked_at.is_none_or(|at| at.elapsed() > Duration::from_millis(600)) {
+                        click_at(roon, arrow);
+                        clicked_at = Some(Instant::now());
+                    }
+                }
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        quiet_for(Duration::from_millis(300));
+    }
+
+    /// Whether Roon's player should be looked at: after ours opens or
+    /// closes, the Wrapper opens or is resized, or a click to fix it. Not
+    /// all the time: each look is a picture of Roon's window (PrintWindow),
+    /// which every now and then made all of Roon flash.
+    static CHECK_DUE: AtomicBool = AtomicBool::new(true);
+
+    fn check_soon() {
+        CHECK_DUE.store(true, Ordering::Relaxed);
+    }
+
+    /// Every second while a look is due: Roon's player put in line with
+    /// ours.
+    fn watch_player() {
+        std::thread::spawn(|| loop {
+            std::thread::sleep(Duration::from_secs(1));
+            if CHECK_DUE.load(Ordering::Relaxed) {
+                check_player();
+            }
+        });
+    }
+
+    fn check_player() {
+        let Ok(_busy) = PLAYER_BUSY.try_lock() else {
+            return;
+        };
+        if STATE.load(Ordering::Relaxed) != OPEN || moving() {
+            return;
+        }
+        if PLAYER_QUIET.lock().unwrap().is_some_and(|until| Instant::now() < until) {
+            return;
+        }
+        if LAST_RESIZE.lock().unwrap().is_some_and(|at| at.elapsed() < RESIZE_QUIET + RESIZE_REPAINT + Duration::from_secs(1)) {
+            return;
+        }
+        let Some(host) = hwnd_of(&HOST_HWND) else { return };
+        let Some(roon) = roon_window() else { return };
+        if !is_visible(host) || is_minimized(host) || !is_visible(roon) || is_minimized(roon) {
+            return;
+        }
+        let wanted = PLAYER_WANTED.load(Ordering::Relaxed);
+        let Some(arrow) = player_screen(roon) else { return };
+        if arrow.is_some() == wanted {
+            PLAYER_TRIES.store(0, Ordering::Relaxed);
+            CHECK_DUE.store(false, Ordering::Relaxed);
+            return;
+        }
+        // Only on a second look a moment later that agrees (a Roon still
+        // repainting, after a resize say, can look like anything)
+        std::thread::sleep(Duration::from_millis(150));
+        let Some(again) = player_screen(roon) else { return };
+        let agrees = match (arrow, again) {
+            (Some(a), Some(b)) => (a.0 - b.0).abs() <= 4 && (a.1 - b.1).abs() <= 4,
+            (None, None) => true,
+            _ => false,
+        };
+        if !agrees {
+            return;
+        }
+        if PLAYER_TRIES.fetch_add(1, Ordering::Relaxed) >= 3 {
+            CHECK_DUE.store(false, Ordering::Relaxed);
+            return;
+        }
+        // DEBUG (temporary)
+        eprintln!("[wrapper] Roon's player looked {}, clicking to match ours", if arrow.is_some() { "open" } else { "closed" });
+        match arrow {
+            Some(arrow) => click_at(roon, arrow),
+            None => roon_click(roon, SPOT_OPEN),
+        }
+        quiet_for(Duration::from_millis(700));
+        // (Look again to see that it took)
+        check_soon();
+    }
+
+    /// The screen's scaling where Roon is (the Wrapper's; Roon sits behind it).
+    fn roon_scale() -> f64 {
+        APP.get()
+            .and_then(|app| app.get_webview_window(WRAPPER_WINDOW))
+            .and_then(|w| w.scale_factor().ok())
+            .unwrap_or(1.0)
+    }
+
+    /// A click sent straight to Roon's window at `spot` (from the left, from
+    /// the bottom of its client area, logical pixels): to whichever of its
+    /// windows is under that point. The mouse doesn't move.
+    fn roon_click(roon: HWND, (from_left, from_bottom): (f64, f64)) {
+        let Some((_, height)) = client_size(roon) else { return };
+        let scale = roon_scale();
+        click_at(
+            roon,
+            ((from_left * scale).round() as i32, height - (from_bottom * scale).round() as i32),
+        );
+    }
+
+    /// A click sent straight to Roon's window at (x, y) of its client area
+    /// (real pixels).
+    fn click_at(roon: HWND, (x, y): (i32, i32)) {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::Graphics::Gdi::MapWindowPoints;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ChildWindowFromPointEx, PostMessageW, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT,
+            WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+        };
+        let mut point = POINT { x, y };
+        // SAFETY: window queries and posted messages on valid handles.
+        unsafe {
+            let mut target = roon;
+            for _ in 0..10 {
+                let child = ChildWindowFromPointEx(target, point, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+                if child.is_invalid() || child == target {
+                    break;
+                }
+                let mut points = [point];
+                MapWindowPoints(Some(target), Some(child), &mut points);
+                point = points[0];
+                target = child;
+            }
+            let at = LPARAM(((point.y as u32 as isize) << 16) | (point.x as u16 as isize));
+            let _ = PostMessageW(Some(target), WM_MOUSEMOVE, WPARAM(0), at);
+            std::thread::sleep(Duration::from_millis(60));
+            // (wParam 1 = MK_LBUTTON: the left button is down)
+            let _ = PostMessageW(Some(target), WM_LBUTTONDOWN, WPARAM(1), at);
+            std::thread::sleep(Duration::from_millis(30));
+            let _ = PostMessageW(Some(target), WM_LBUTTONUP, WPARAM(0), at);
+        }
+    }
+
+    /// A picture of Roon's client area: BGRA rows, top down.
+    struct Picture {
+        pixels: Vec<u8>,
+        width: i32,
+        height: i32,
+    }
+
+    impl Picture {
+        fn rgb(&self, x: i32, y: i32) -> (i32, i32, i32) {
+            let x = x.clamp(0, self.width - 1);
+            let y = y.clamp(0, self.height - 1);
+            let i = ((y * self.width + x) * 4) as usize;
+            (self.pixels[i + 2] as i32, self.pixels[i + 1] as i32, self.pixels[i] as i32)
+        }
+
+        fn lightness(&self, x: i32, y: i32) -> i32 {
+            let (r, g, b) = self.rgb(x, y);
+            (r + g + b) / 3
+        }
+    }
+
+    /// Whether Roon's player screen is open, from a picture of its window:
+    /// None if no picture could be taken, Some(None) if it's closed, and
+    /// Some(Some(spot)) with its down arrow (real pixels in Roon's client
+    /// area) if it's open. Open, the player bar's album art spot is plain
+    /// and the bar's left part holds only the down arrow: one small mark
+    /// (closed, it holds the track's title and artist, or nothing).
+    fn player_screen(roon: HWND) -> Option<Option<(i32, i32)>> {
+        let picture = capture_roon(roon)?;
+        Some(screen_state(&picture, roon_scale()))
+    }
+
+    /// `player_screen`, from a picture already taken: its down arrow if
+    /// Roon's player is open.
+    fn screen_state(picture: &Picture, scale: f64) -> Option<(i32, i32)> {
+        let (width, height) = (picture.width, picture.height);
+        let px = |v: f64| (v * scale).round() as i32;
+        // The album art spot: plain?
+        let (mut low, mut high) = (255, 0);
+        for y in (height - px(72.0)).max(0)..(height - px(32.0)).min(height) {
+            for x in px(33.0)..px(73.0).min(width) {
+                let value = picture.lightness(x, y);
+                low = low.min(value);
+                high = high.max(value);
+            }
+        }
+        if high - low >= 12 {
+            return None;
+        }
+        // The marks in the bar's left part (column groups split by gaps of
+        // 6 or more)
+        let background = picture.lightness(px(10.0), height - px(10.0));
+        let (top, bottom) = ((height - px(70.0)).max(0), (height - px(38.0)).min(height));
+        let (left, right) = (px(100.0), (width as f64 * 0.3) as i32);
+        let ink = |x: i32| (top..bottom).any(|y| (picture.lightness(x, y) - background).abs() > 40);
+        let columns: Vec<bool> = (left..right).map(ink).collect();
+        let mut marks: Vec<(i32, i32)> = Vec::new();
+        let mut x = 0;
+        while x < columns.len() {
+            if !columns[x] {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            let mut end = x;
+            while x < columns.len() {
+                if columns[x] {
+                    end = x;
+                    x += 1;
+                } else {
+                    let blank = x;
+                    while x < columns.len() && !columns[x] {
+                        x += 1;
+                    }
+                    if x - blank >= px(6.0) as usize {
+                        break;
+                    }
+                }
+            }
+            marks.push((left + start as i32, left + end as i32));
+        }
+        let [(first, last)] = marks[..] else {
+            return None;
+        };
+        if last - first > px(30.0) {
+            return None;
+        }
+        // Its middle, top to bottom
+        let x = (first + last) / 2;
+        let rows: Vec<i32> = (top..bottom)
+            .filter(|&y| (first..=last).any(|x| (picture.lightness(x, y) - background).abs() > 40))
+            .collect();
+        let (&row_top, &row_bottom) = (rows.first()?, rows.last()?);
+        Some((x, (row_top + row_bottom) / 2))
+    }
+
+    /// Takes a picture of Roon's client area (even while it's covered).
+    fn capture_roon(roon: HWND) -> Option<Picture> {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+            BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS,
+        };
+        use windows::Win32::Storage::Xps::{PrintWindow, PRINT_WINDOW_FLAGS};
+        let (width, height) = client_size(roon)?;
+        if width < 300 || height < 200 {
+            return None;
+        }
+        // SAFETY: a bitmap of our own the size of Roon's client area, freed
+        // below; PrintWindow draws Roon into it (client area only, with
+        // what the GPU drew: flags 1 | 2).
+        let pixels: Vec<u8> = unsafe {
+            let screen = GetDC(None);
+            let memory = CreateCompatibleDC(Some(screen));
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+            let result = match CreateDIBSection(Some(screen), &info, DIB_RGB_COLORS, &mut bits, None, 0) {
+                Ok(bitmap) => {
+                    let old = SelectObject(memory, bitmap.into());
+                    let drawn = PrintWindow(roon, memory, PRINT_WINDOW_FLAGS(1 | 2)).as_bool();
+                    let copy = (drawn && !bits.is_null())
+                        .then(|| std::slice::from_raw_parts(bits as *const u8, (width * height * 4) as usize).to_vec());
+                    SelectObject(memory, old);
+                    let _ = DeleteObject(bitmap.into());
+                    copy
+                }
+                Err(_) => None,
+            };
+            let _ = DeleteDC(memory);
+            ReleaseDC(None, screen);
+            result
+        }?;
+        Some(Picture { pixels, width, height })
+    }
+
+    /// Where a link is on Roon's open player screen (real pixels in its
+    /// client area), found in a picture of it, since its place changes
+    /// with the window's size. Under the line that tops the player's info
+    /// panel come the track's lines: the title, "On" + album, and
+    /// "Performed by" + artist. Colors differ with the window's size, so
+    /// the words are told apart by the spaces between them: the album
+    /// starts at the line's second word, the artist at its third. A line
+    /// whose first word is short ("On") is the album's. The click goes just
+    /// inside the name's first letter.
+    fn find_link(picture: &Picture, scale: f64, which: &str) -> Option<(i32, i32)> {
+        let (width, height) = (picture.width, picture.height);
+        let px = |v: f64| (v * scale).round() as i32;
+        let background = picture.rgb(px(10.0), height - px(10.0));
+        let background_light = (background.0 + background.1 + background.2) / 3;
+        let differs = |a: (i32, i32, i32), b: (i32, i32, i32)| {
+            (a.0 - b.0).abs().max((a.1 - b.1).abs()).max((a.2 - b.2).abs())
+        };
+        // The panel's top line: from the bottom up, the first row that's
+        // one color from left to right and not the background
+        let (line_left, line_right) = (px(10.0), px(400.0).min(width - 1));
+        let top = (0..height).rev().find(|&y| {
+            let first = picture.rgb(line_left, y);
+            differs(first, background) > 20
+                && (line_left..line_right).step_by(4).all(|x| differs(picture.rgb(x, y), first) < 6)
+        })?;
+        // The first three lines of text under it, on the left (clear of the
+        // transport buttons)
+        let (left, right) = (px(20.0), (width as f64 * 0.35) as i32);
+        let ink = |x: i32, y: i32| (picture.lightness(x, y) - background_light).abs() > 40;
+        let mut lines = Vec::new();
+        let mut y = top + 1;
+        while y < height && lines.len() < 3 {
+            if (left..right).any(|x| ink(x, y)) {
+                let start = y;
+                while y < height && (left..right).any(|x| ink(x, y)) {
+                    y += 1;
+                }
+                lines.push((start, y));
+            }
+            y += 1;
+        }
+        // A line's words (first and last column of each): ink separated by
+        // a gap of at least a quarter of the line's height
+        let words = |y0: i32, y1: i32| -> Vec<(i32, i32)> {
+            let columns: Vec<bool> = (left..right).map(|x| (y0..y1).any(|y| ink(x, y))).collect();
+            let gap = ((y1 - y0) / 4).max(3) as usize;
+            let mut found = Vec::new();
+            let mut x = 0;
+            while x < columns.len() {
+                if !columns[x] {
+                    x += 1;
+                    continue;
+                }
+                let start = x;
+                let mut end = x;
+                while x < columns.len() {
+                    if columns[x] {
+                        end = x;
+                        x += 1;
+                    } else {
+                        let blank = x;
+                        while x < columns.len() && !columns[x] {
+                            x += 1;
+                        }
+                        if x - blank >= gap {
+                            break;
+                        }
+                    }
+                }
+                found.push((left + start as i32, left + end as i32));
+            }
+            found
+        };
+        let &(y0, y1) = lines.first()?;
+        if which == "title" {
+            let first = *words(y0, y1).first()?;
+            return Some((first.0 + (y1 - y0) / 2, (y0 + y1) / 2));
+        }
+        for &(y0, y1) in lines.iter().skip(1) {
+            let line = words(y0, y1);
+            if line.len() < 2 {
+                continue;
+            }
+            let is_album = ((line[0].1 - line[0].0) as f64) < 2.5 * (y1 - y0) as f64;
+            if which == "album" && is_album {
+                return Some((line[1].0 + px(3.0), (y0 + y1) / 2));
+            }
+            if which == "artist" && !is_album && line.len() >= 3 {
+                return Some((line[2].0 + px(3.0), (y0 + y1) / 2));
+            }
+        }
+        None
     }
 }
