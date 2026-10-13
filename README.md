@@ -3,60 +3,106 @@
 A Roon companion for Windows that lives in the tray. Press a hotkey to open a
 small player with now playing, your queue, browse and search, get a "now
 playing" toast when the track changes, put a mini player on your taskbar, or
-wrap the Roon app itself in a window with a player you can style your way.
+wrap the Roon app itself in a window with a Now Playing screen you design
+yourself: your layout, fonts, colors and animated bars.
 It works on its own, no Stream Deck needed, and pairs with
 [Roon: Dialed Up](https://marketplace.elgato.com/product/roon-dialed-up-f76699d9-4266-4d4a-ad94-eaddd148daa9)
 if you have a Stream Deck.
 
-<p align="center">
-  <img src="docs/toaster.png" alt="The Toaster showing what's playing in Roon" width="320">
-</p>
-
-## Features
-
-- **The Toaster:** now playing, queue, browse and search for any zone, with
-  playback, volume, shuffle, repeat, Roon Radio and zone controls. Opens from
-  the tray, a hotkey, or a `roon-toasted://` link.
-- **Now-playing toasts** when the track changes, in the corner and on the
-  monitor you choose, for as long as you like (2 to 30 seconds). Click one to
-  open the Toaster. They stay out of the way of full-screen games.
-- **Global hotkeys:** Ctrl + Alt + Z opens (or hides) the Toaster,
-  Ctrl + Alt + S opens it on Search. Both can be changed or turned off.
-- **Taskbar widget** (experimental): a small player on your main taskbar with
-  art, title, artist and playback buttons. Choose the side, position, width and
-  one or two lines of text.
-- **Album Art colors:** the Toaster, toasts and widget can take their colors
-  from the album that's playing.
-- **Auto-Hide:** the Toaster goes back to the tray when you click elsewhere
-  (or stays on the taskbar if you turn that off).
-- **Hearts & Library** (experimental): heart the playing track or album, or
-  add it to your library, plus an audio quality light (Low Quality, CD Quality,
-  Hi-Res) and real waveforms for local files.
-- Tray quick settings, Start with Windows, zoom, light and dark themes, and a
-  window that fits your screen.
+It has four parts, each of which you can switch on or off.
 
 ## Roon: Wrapped (experimental)
 
-The Wrapper puts the Roon app inside a Toasted window, with Toasted's player
-along the bottom, so everything Roon can do is right there. Switch it on in
-**Settings > The Wrapper**, then open it from the tray, with Ctrl + Alt + W, or
-from Settings. Closing it keeps Roon running out of sight, so it reopens
-instantly.
+**Roon, your way.** The Wrapper puts the Roon app inside a Toasted window and
+gives it a player you design yourself. Everything Roon can do is still right
+there; what changes is how your music looks while it plays.
 
-- **Now Playing:** click the album art in the player bar for a full-window
-  player. The pencil lets you move and resize every piece (art, track info,
-  controls, seek bar, zone, quality light, volume) and pick fonts, icon packs
-  and bar styles, in the app's colors, the album's or your own. Save layouts as
-  profiles, or start from the presets.
-- **Waveform:** with Hearts & Library on, the seek bar can show a local file's
-  real waveform from Roon, in several looks.
-- **Return Roon** gives Roon its own window back; an **Enable Wrapper** button
-  then sits in Roon's title bar to wrap it up again.
-- Only want the Wrapper? Switch the Toaster off in **Settings > Toaster**, and
-  its hotkeys and links open the Wrapper instead.
+<p align="center">
+  <img src="docs/wrapped.png" alt="Roon: Wrapped showing a full-window Now Playing in the album's colors, with animated seek and volume bars" width="800">
+</p>
+
+- **A full-window Now Playing you lay out yourself.** Click the album art in
+  the player bar, then the pencil: move and resize the art, track info,
+  controls, seek bar, zone, quality light and volume anywhere on the screen.
+- **Your fonts, icons and colors.** Pick a font per piece (bundled, or any font
+  on your PC), an icon pack (Lucide, Phosphor, Tabler, Material Symbols, Remix),
+  a plain or circled play button, and black outlines or glows for text and
+  icons. Colors follow the app, the playing album's art, or a color you pick.
+- **Animated bars** for the seek bar and volume: Wave, Spectrum, Beam, Glow
+  line, LED meter, Ribbon, Neon tube, Mountains, Particles, Plasma and Album
+  art, plus the classic Line, Thick, Hairline and Segments. The animated ones
+  come alive around the playhead while music plays.
+- **Real waveforms:** with Hearts & Library on, the seek bar can show a local
+  file's actual waveform from Roon, in six looks, optionally bouncing near the
+  playhead and colored by loudness.
+- **Profiles:** save layouts and switch between them, or start from the
+  Default, Waves and Waves Large presets. The player bar along the bottom can
+  follow the same style.
+
+Switch it on in **Settings > The Wrapper**, then open it from the tray, with
+Ctrl + Alt + W, or from Settings. Closing it keeps Roon running out of sight,
+so it reopens instantly. **Return Roon** gives Roon its own window back; an
+**Enable Wrapper** button then sits in Roon's title bar to wrap it up again.
+Only want the Wrapper? Switch the Toaster off in **Settings > Toaster**, and its
+hotkeys and links open the Wrapper instead.
 
 The Wrapper works with Roon's own window, so a Roon update could change how it
 behaves. It's experimental for that reason.
+
+## The Toaster
+
+A small player that opens from the tray, a hotkey (Ctrl + Alt + Z) or a
+`roon-toasted://` link, and goes back to the tray when you're done.
+
+<p align="center">
+  <img src="docs/toaster.png" alt="The Toaster showing what's playing in Roon" width="300">
+</p>
+
+- **Now playing, queue, browse and search** for any zone, with playback,
+  volume, shuffle, repeat, Roon Radio and zone controls.
+- **Search hotkey:** Ctrl + Alt + S opens it ready to type (or opens Roon's own
+  search in the Wrapper, if you prefer).
+- **Hearts & Library** (experimental): heart the playing track or album, or add
+  it to your library, and see the audio quality light (Low Quality, CD Quality,
+  Hi-Res).
+- **Auto-Hide:** it goes back to the tray when you click elsewhere (or stays on
+  the taskbar if you turn that off). Zoom, light and dark themes, and a window
+  that fits your screen.
+
+## Toasts
+
+A "now playing" toast when the track changes. Click one to open the Toaster
+(or the Wrapper).
+
+<p align="center">
+  <img src="docs/toast.png" alt="A now-playing toast" width="376">
+</p>
+
+- In the corner and on the monitor you choose, for as long as you like (2 to 30
+  seconds).
+- They stay out of the way of full-screen games.
+
+## Taskbar Widget (experimental)
+
+A small player on your main taskbar with art, title, artist and playback
+buttons.
+
+<p align="center">
+  <img src="docs/widget.png" alt="The taskbar widget" width="319">
+</p>
+
+- Choose the side, position, width and one or two lines of text.
+
+## Everywhere
+
+- **Album Art colors:** the Toaster, toasts, widget and Wrapper can take their
+  colors from the album that's playing.
+- **Main artist only:** tracks with a long list of supporting artists show just
+  the main one (Settings > General > Artists).
+- **Hotkeys** for the Toaster, Search and the Wrapper; all can be changed or
+  turned off.
+- **Tray menu** with Toaster, Wrapper and Taskbar Widget switches, plus Toasts
+  and Start with Windows.
 
 ## Install
 

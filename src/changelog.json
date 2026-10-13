@@ -21,7 +21,7 @@
       {
         "title": "Good to know",
         "items": [
-          ["Tray", "The tray menu has Toaster and Wrapper switches. While the Wrapper is on, Open Wrapper comes first and a double-click opens it."],
+          ["Tray", "The tray menu has Toaster, Wrapper and Taskbar Widget switches. While the Wrapper is on, Open Wrapper comes first and a double-click opens it."],
           ["Remember Player", "Settings > The Wrapper: Now Playing comes back as you left it, open or closed, even after a restart. Something Roon itself doesn't do."],
           ["Open at Launch", "Settings > The Wrapper and Settings > Toaster: open either one whenever Toasted starts, at sign-in or by hand. On for the Wrapper to begin with."],
           ["Wrapper size", "The Wrapper opens where and at the size you left it (maximized excepted)."],

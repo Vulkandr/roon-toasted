@@ -72,6 +72,8 @@ fn save_window_state_soon(app: &AppHandle) {
         tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         if TICKET.load(Ordering::Relaxed) == ticket {
             save_window_state(&app);
+            #[cfg(windows)]
+            wrapper::remember_size(&app);
         }
     });
 }
@@ -129,8 +131,11 @@ pub(crate) fn fit_to_screen(app: &AppHandle, label: &str, use_default_size: bool
     };
     let scale = monitor.scale_factor();
     let work = monitor.work_area();
-    let avail_w = (work.size.width as f64 / scale - 2.0 * SCREEN_MARGIN).max(200.0);
-    let avail_h = (work.size.height as f64 / scale - 2.0 * SCREEN_MARGIN).max(200.0);
+    // (The Wrapper may fill the whole screen: a margin shrank one left that
+    // wide every time it opened)
+    let margin = if label == wrapper::WRAPPER_WINDOW { 0.0 } else { SCREEN_MARGIN };
+    let avail_w = (work.size.width as f64 / scale - 2.0 * margin).max(200.0);
+    let avail_h = (work.size.height as f64 / scale - 2.0 * margin).max(200.0);
 
     let config = app
         .config()

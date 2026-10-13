@@ -45,10 +45,12 @@
 //! fitted to the new size, given a moment to repaint, and the hole opens
 //! again.
 //!
-//! Roon has a minimum window size of its own. When it's bigger than the
-//! hole, the Wrapper's minimum size grows by the difference (and the
-//! Wrapper grows if it's smaller), so Roon never hangs out below or beside
-//! it.
+//! Roon has a minimum window size of its own. The Wrapper's minimum is
+//! tauri.conf.json's, raised once to what Roon's minimum needs (plus our
+//! bars around the hole), so Roon never hangs out below or beside it. It's
+//! worked out from Roon's measured minimum, not learned along the way: a
+//! minimum that kept growing during resizes limited the Wrapper too early,
+//! and changing it mid-resize could lock the app up.
 //!
 //! Roon's window loses its resize borders (WS_THICKFRAME) while it's in
 //! the Wrapper. Otherwise its invisible borders, a few pixels outside what
@@ -56,8 +58,13 @@
 //! resize Roon instead of the Wrapper. They come back with "Return Roon".
 //!
 //! Roon's minimum size is measured when it's taken in (asked to be 1 x 1
-//! while hidden, it stops at its minimum), so the Wrapper's own minimum is
-//! big enough from the start, also in the middle of a resize.
+//! while hidden, it stops at its minimum; its resize borders are put back
+//! for that moment if they're gone), so the Wrapper's own minimum is big
+//! enough from the start.
+//!
+//! The size the Wrapper is left at is remembered in logical pixels
+//! (settings, `wrapperSize`) and put back once it's on screen: the saved
+//! real-pixel size came out wrong on a screen with other scaling.
 //!
 //! While Open or Parked, Roon's window is a tool window: no taskbar button
 //! or Alt-Tab entry of its own (the Wrapper is the one you switch to).
@@ -277,6 +284,13 @@ pub fn toggle(app: &AppHandle) {
     let _ = app;
 }
 
+/// Remembers the Wrapper's size in logical pixels (lib.rs, once it has
+/// settled after a move or resize).
+#[cfg(windows)]
+pub fn remember_size(app: &AppHandle) {
+    windows_wrapper::remember_size(app);
+}
+
 /// Closing the Wrapper: hides it and Roon; Roon keeps running.
 pub fn park(app: &AppHandle) {
     #[cfg(windows)]
@@ -479,13 +493,9 @@ mod windows_wrapper {
     /// (between WM_ENTERSIZEMOVE and WM_EXITSIZEMOVE).
     static IN_SIZE_MOVE: AtomicBool = AtomicBool::new(false);
 
-    /// The Wrapper's minimum size (logical pixels) once Roon has turned out
-    /// to need more than tauri.conf.json's.
-    static LEARNED_MIN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
-    /// How much bigger than asked Roon was on the last pass; only acted on
-    /// when two passes in a row agree, so a Roon still busy resizing
-    /// doesn't count.
-    static ROON_EXTRA: Mutex<Option<(i32, i32)>> = Mutex::new(None);
+    /// The Wrapper's minimum size (logical pixels): tauri.conf.json's, or
+    /// more where Roon's own minimum needs it (see `fit_minimum`).
+    static WRAPPER_MIN: Mutex<Option<(f64, f64)>> = Mutex::new(None);
     /// Roon's window style before we took its resize borders (0 = not
     /// changed).
     static ROON_STYLE: AtomicIsize = AtomicIsize::new(0);
@@ -683,14 +693,18 @@ mod windows_wrapper {
         crate::fit_to_screen(app, WRAPPER_WINDOW, false);
         // fit_to_screen sets the configured minimum; Roon may need more
         // (but never more than this screen has room for)
-        let learned = *LEARNED_MIN.lock().unwrap();
-        if let Some(min) = learned {
+        let min = *WRAPPER_MIN.lock().unwrap();
+        if let Some(min) = min {
             let (w, h) = within_screen(&window, min);
             let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(w, h))));
         }
+        restore_size(app);
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
+        // Again once it's on its screen: Windows rescales a window that
+        // comes up on a screen with other scaling
+        restore_size_soon(app);
         // Maximized isn't remembered (Vulk's call): it opens at the last
         // size it had un-maximized (restored at startup, lib.rs)
         sync(app);
@@ -961,17 +975,10 @@ mod windows_wrapper {
         };
         let bar = (ROON_BOTTOM_BAR * scale).round() as i32;
 
-        // The hole must fit Roon's minimum: checked on every pass, so even
-        // in the middle of a resize the Wrapper can't get smaller than that
-        if !maximized {
-            if let Some((min_w, min_h)) = *ROON_MIN_CLIENT.lock().unwrap() {
-                // In this screen's real pixels
-                let (min_w, min_h) = ((min_w * scale).ceil() as i32, (min_h * scale).ceil() as i32);
-                let extra = ((min_w - hole.2).max(0), (min_h - (hole.3 + bar)).max(0));
-                if extra.0 > 0 || extra.1 > 0 {
-                    grow_minimum(&window, scale, extra.0, extra.1);
-                }
-            }
+        // The minimum that fits Roon's (only changes when that or the room
+        // around the hole does; never touched while being resized)
+        if !maximized && !resizing && !IN_SIZE_MOVE.load(Ordering::Relaxed) {
+            fit_minimum(&window, scale, (client_w, client_h), (hole.2, hole.3));
         }
 
         // Being resized: Roon waits hidden until it stops
@@ -1022,18 +1029,6 @@ mod windows_wrapper {
             report.1 = Some([hole.0, hole.1, hole.2, hole.3]);
         }
 
-        // Roon still wouldn't get that small (its minimum wasn't measured,
-        // or changed): make the Wrapper's minimum bigger by the difference
-        if !maximized {
-            if let Some((roon_w, roon_h)) = client_size(roon) {
-                let extra = ((roon_w - client.2).max(0), (roon_h - client.3).max(0));
-                let too_big = extra.0 > 1 || extra.1 > 1;
-                let before = std::mem::replace(&mut *ROON_EXTRA.lock().unwrap(), too_big.then_some(extra));
-                if too_big && before == Some(extra) {
-                    grow_minimum(&window, scale, extra.0, extra.1);
-                }
-            }
-        }
     }
 
     /// A minimum size (logical pixels) cut down to what the Wrapper's
@@ -1055,21 +1050,9 @@ mod windows_wrapper {
         }
     }
 
-    /// Raises the Wrapper's minimum size so its hole fits Roon's minimum
-    /// (`extra_w` / `extra_h` real pixels more than now), growing the
-    /// Wrapper if it's smaller than that. Never past what the screen has
-    /// room for (`within_screen`): then Roon is a little bigger than the
-    /// hole instead.
-    fn grow_minimum(window: &tauri::WebviewWindow, scale: f64, extra_w: i32, extra_h: i32) {
-        use tauri::{LogicalSize, Size};
-        let Ok(inner) = window.inner_size() else {
-            return;
-        };
-        let need = (
-            (inner.width as f64 + extra_w as f64) / scale,
-            (inner.height as f64 + extra_h as f64) / scale,
-        );
-        let configured = window
+    /// tauri.conf.json's minimum size for the Wrapper (logical pixels).
+    fn configured_min(window: &tauri::WebviewWindow) -> (f64, f64) {
+        window
             .app_handle()
             .config()
             .app
@@ -1077,26 +1060,132 @@ mod windows_wrapper {
             .iter()
             .find(|w| w.label == WRAPPER_WINDOW)
             .map(|w| (w.min_width.unwrap_or(0.0), w.min_height.unwrap_or(0.0)))
-            .unwrap_or_default();
-        let (min, changed) = {
-            let mut learned = LEARNED_MIN.lock().unwrap();
-            let current = learned.unwrap_or(configured);
-            let min = (current.0.max(need.0).ceil(), current.1.max(need.1).ceil());
-            let min = within_screen(window, min);
-            let changed = Some(min) != *learned;
-            *learned = Some(min);
-            (min, changed)
+            .unwrap_or_default()
+    }
+
+    /// Sets the Wrapper's minimum size: tauri.conf.json's, or more where
+    /// Roon's measured minimum needs a bigger hole (our bars above and below
+    /// it added). Only when that comes out different from before, and never
+    /// bigger than the screen; grows the Wrapper if it's smaller. `client`
+    /// and `hole` are real pixels. No lock is held while asking the window
+    /// anything (those calls wait for the main thread, which may be waiting
+    /// for the same lock: that locked the app up).
+    fn fit_minimum(window: &tauri::WebviewWindow, scale: f64, client: (i32, i32), hole: (i32, i32)) {
+        use tauri::{LogicalSize, Size};
+        let roon_min = *ROON_MIN_CLIENT.lock().unwrap();
+        let Some((roon_w, roon_h)) = roon_min else {
+            return;
         };
-        if changed {
-            let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(min.0, min.1))));
+        if hole.0 <= 0 || hole.1 <= 0 {
+            return;
         }
-        // Smaller than that: grown to it, but not while it's being resized
-        // (Windows' resizing would put it right back where the mouse is,
-        // and it stayed there). Meanwhile WM_SIZING holds the edge at the
-        // minimum; once let go, the next pass grows it if it's still short.
+        // Roon's window is the hole plus its transport bar (hidden under
+        // our player bar); the rest of our window is around the hole
+        let around = ((client.0 - hole.0) as f64 / scale, (client.1 - hole.1) as f64 / scale);
+        let need = (roon_w + around.0, roon_h - ROON_BOTTOM_BAR + around.1);
+        let configured = configured_min(window);
+        let min = (configured.0.max(need.0).ceil(), configured.1.max(need.1).ceil());
+        let changed = {
+            let mut current = WRAPPER_MIN.lock().unwrap();
+            let changed = current.is_none_or(|c| (c.0 - min.0).abs() > 2.0 || (c.1 - min.1).abs() > 2.0);
+            if changed {
+                *current = Some(min);
+            }
+            changed
+        };
+        if !changed {
+            return;
+        }
+        let (w, h) = within_screen(window, min);
+        let _ = window.set_min_size(Some(Size::Logical(LogicalSize::new(w, h))));
+        let now = (client.0 as f64 / scale, client.1 as f64 / scale);
+        if now.0 < w - 0.5 || now.1 < h - 0.5 {
+            let _ = window.set_size(LogicalSize::new(now.0.max(w), now.1.max(h)));
+        }
+    }
+
+    /// Puts the Wrapper back at the size it was left at (logical pixels,
+    /// saved by lib.rs as `wrapperSize`), fitted to the screen it's on and
+    /// to its minimum, keeping it on that screen. Not while maximized.
+    fn restore_size(app: &AppHandle) {
+        use tauri::{PhysicalPosition, PhysicalSize};
+        let Some(window) = app.get_webview_window(WRAPPER_WINDOW) else {
+            return;
+        };
+        let Some([w, h]) = crate::settings::get_settings(app.clone()).wrapper_size else {
+            return;
+        };
+        if window.is_maximized().unwrap_or(false) {
+            return;
+        }
+        let Some(monitor) = window.current_monitor().ok().flatten() else {
+            return;
+        };
+        let scale = monitor.scale_factor();
+        let work = monitor.work_area();
+        let room = (work.size.width as f64 / scale, work.size.height as f64 / scale);
+        let min = (*WRAPPER_MIN.lock().unwrap()).unwrap_or_else(|| configured_min(&window));
+        let target = (
+            w.max(min.0).min(room.0),
+            h.max(min.1).min(room.1),
+        );
+        let Ok(inner) = window.inner_size() else {
+            return;
+        };
         let now = (inner.width as f64 / scale, inner.height as f64 / scale);
-        if (now.0 < min.0 || now.1 < min.1) && !IN_SIZE_MOVE.load(Ordering::Relaxed) {
-            let _ = window.set_size(LogicalSize::new(now.0.max(min.0), now.1.max(min.1)));
+        if (now.0 - target.0).abs() <= 1.5 && (now.1 - target.1).abs() <= 1.5 {
+            return;
+        }
+        let size = PhysicalSize::new((target.0 * scale).round() as u32, (target.1 * scale).round() as u32);
+        let _ = window.set_size(size);
+        // Still all on its screen
+        if let Ok(pos) = window.outer_position() {
+            let x = pos.x.clamp(work.position.x, (work.position.x + work.size.width as i32 - size.width as i32).max(work.position.x));
+            let y = pos.y.clamp(work.position.y, (work.position.y + work.size.height as i32 - size.height as i32).max(work.position.y));
+            if (x, y) != (pos.x, pos.y) {
+                let _ = window.set_position(PhysicalPosition::new(x, y));
+            }
+        }
+    }
+
+    /// `restore_size` again shortly after the Wrapper shows, once Windows
+    /// has finished putting it on its screen.
+    fn restore_size_soon(app: &AppHandle) {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(300));
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                if STATE.load(Ordering::Relaxed) == OPEN && !IN_SIZE_MOVE.load(Ordering::Relaxed) {
+                    restore_size(&handle);
+                }
+            });
+        });
+    }
+
+    /// Remembers the Wrapper's size in logical pixels (lib.rs, a second
+    /// after it's moved or resized): only a normal, visible window.
+    pub fn remember_size(app: &AppHandle) {
+        let Some(window) = app.get_webview_window(WRAPPER_WINDOW) else {
+            return;
+        };
+        if !window.is_visible().unwrap_or(false)
+            || window.is_maximized().unwrap_or(false)
+            || window.is_minimized().unwrap_or(false)
+        {
+            return;
+        }
+        let (Ok(inner), Ok(scale)) = (window.inner_size(), window.scale_factor()) else {
+            return;
+        };
+        let size = [(inner.width as f64 / scale).round(), (inner.height as f64 / scale).round()];
+        let Some(path) = crate::settings::path(app) else {
+            return;
+        };
+        let mut current = crate::settings::load(&path);
+        if current.wrapper_size != Some(size) {
+            current.wrapper_size = Some(size);
+            let _ = crate::settings::save(&path, &current);
         }
     }
 
@@ -1426,21 +1515,31 @@ mod windows_wrapper {
     }
 
     /// Finds the smallest client area Roon allows: asked to be 1 x 1 (it's
-    /// hidden), it stops at its minimum. Only while it still has its resize
-    /// borders, which is when Windows applies its minimum.
+    /// hidden), it stops at its minimum. Windows only applies that minimum
+    /// while Roon has its resize borders, so a Roon we already took them
+    /// from (parked in an earlier run) gets them back for the moment.
     fn measure_minimum(roon: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOZORDER,
-            WS_THICKFRAME,
+            GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
+            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_THICKFRAME,
         };
-        // SAFETY: a style query and a resize of a valid, hidden window.
-        unsafe {
-            if GetWindowLongPtrW(roon, GWL_STYLE) as u32 & WS_THICKFRAME.0 == 0 {
-                return;
+        // SAFETY: style queries and changes, and a resize, of a valid, hidden window.
+        let size = unsafe {
+            let style = GetWindowLongPtrW(roon, GWL_STYLE);
+            let borrowed = style as u32 & WS_THICKFRAME.0 == 0;
+            if borrowed {
+                SetWindowLongPtrW(roon, GWL_STYLE, style | WS_THICKFRAME.0 as isize);
+                let _ = SetWindowPos(roon, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
             }
             let _ = SetWindowPos(roon, None, 0, 0, 1, 1, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-        }
-        if let Some((w, h)) = client_size(roon) {
+            let size = client_size(roon);
+            if borrowed {
+                SetWindowLongPtrW(roon, GWL_STYLE, style);
+                let _ = SetWindowPos(roon, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            }
+            size
+        };
+        if let Some((w, h)) = size {
             if w > 50 && h > 50 {
                 // The scaling of the screen Roon is on (the Wrapper's, if
                 // Roon is somewhere off screen)
@@ -1661,8 +1760,7 @@ mod windows_wrapper {
         use windows::Win32::UI::Shell::DefSubclassProc;
         use windows::Win32::UI::WindowsAndMessaging::{
             SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-            SWP_NOZORDER, WINDOWPOS, WMSZ_BOTTOMLEFT, WMSZ_LEFT, WMSZ_TOP, WMSZ_TOPLEFT,
-            WMSZ_TOPRIGHT, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVING, WM_SIZING,
+            SWP_NOZORDER, WINDOWPOS, WM_ENTERSIZEMOVE, WM_EXITSIZEMOVE, WM_MOVING,
             WM_WINDOWPOSCHANGING,
         };
         // Moved to a screen with different scaling: icons for that size
@@ -1730,34 +1828,6 @@ mod windows_wrapper {
         } else if msg == WM_EXITSIZEMOVE {
             IN_SIZE_MOVE.store(false, Ordering::Relaxed);
         }
-        // Being resized by an edge: the edge stops at the minimum Roon
-        // needs, even when that minimum was only learned during this resize
-        // (Windows takes the minimum once, when the resize starts, so it
-        // went past it and stayed smaller than Roon)
-        if msg == WM_SIZING {
-            // SAFETY: passing the message on first, as every subclass must.
-            let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
-            // SAFETY: for this message lparam points at the dragged RECT.
-            let rect = unsafe { &mut *(lparam.0 as *mut RECT) };
-            if let Some((min_w, min_h)) = min_window_size(hwnd) {
-                let edge = wparam.0 as u32;
-                if rect.right - rect.left < min_w {
-                    if matches!(edge, WMSZ_LEFT | WMSZ_TOPLEFT | WMSZ_BOTTOMLEFT) {
-                        rect.left = rect.right - min_w;
-                    } else {
-                        rect.right = rect.left + min_w;
-                    }
-                }
-                if rect.bottom - rect.top < min_h {
-                    if matches!(edge, WMSZ_TOP | WMSZ_TOPLEFT | WMSZ_TOPRIGHT) {
-                        rect.top = rect.bottom - min_h;
-                    } else {
-                        rect.bottom = rect.top + min_h;
-                    }
-                }
-            }
-            return result;
-        }
         // The smallest size Windows lets the Wrapper be: whatever Tauri
         // says, but never bigger than the screen it's on. A minimum wider
         // than the screen (dragged from a big screen onto a small one, a
@@ -1778,24 +1848,6 @@ mod windows_wrapper {
         }
         // SAFETY: passing the message on, as every subclass must.
         unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
-    }
-
-    /// The learned minimum (see LEARNED_MIN) as a whole-window size in real
-    /// pixels (frame included), or None while there's none.
-    fn min_window_size(hwnd: HWND) -> Option<(i32, i32)> {
-        let min = (*LEARNED_MIN.lock().unwrap())?;
-        let scale = APP.get()?.get_webview_window(WRAPPER_WINDOW)?.scale_factor().ok()?;
-        let (_, _, w, h) = window_rect(hwnd)?;
-        let (cw, ch) = client_size(hwnd)?;
-        let mut min = (
-            (min.0 * scale).ceil() as i32 + (w - cw),
-            (min.1 * scale).ceil() as i32 + (h - ch),
-        );
-        // Never more than the screen has room for
-        if let Some((room_w, room_h)) = screen_room(hwnd) {
-            min = (min.0.min(room_w), min.1.min(room_h));
-        }
-        Some(min)
     }
 
     /// The size of the work area (the screen minus the taskbar, real

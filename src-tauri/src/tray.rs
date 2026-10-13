@@ -3,9 +3,9 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 //! The tray icon and its right-click menu: Open Wrapper and Open Toaster
-//! (each only while it's switched on), Settings, switches for the Toaster
-//! and the Wrapper themselves, a few quick settings (Toasts, Auto-Hide,
-//! Remember Window, Start with Windows) and Quit. Double-clicking the icon
+//! (each only while it's switched on), Settings, switches for the Toaster,
+//! the Wrapper and the Taskbar Widget themselves, two quick settings
+//! (Toasts, Start with Windows) and Quit. Double-clicking the icon
 //! opens the Wrapper while it's switched on, otherwise the Toaster, or
 //! Settings with both off. The icon is always the Roon: Toasted logo
 //! (icon.rs); the Wrapper keeps its own mark for its window.
@@ -23,7 +23,7 @@ use tauri::{
     App, AppHandle, Manager, Wry,
 };
 
-use crate::settings::{self, AppSettings, ToasterWindow};
+use crate::settings::{self, AppSettings};
 use crate::ToasterMode;
 
 /// The quick settings' menu items, kept so their check marks can be updated.
@@ -38,10 +38,8 @@ pub struct TrayMenu {
     /// The switches for the Toaster and the Wrapper themselves.
     toaster_on: CheckMenuItem<Wry>,
     wrapper_on: CheckMenuItem<Wry>,
+    widget_on: CheckMenuItem<Wry>,
     toasts: CheckMenuItem<Wry>,
-    auto_hide: CheckMenuItem<Wry>,
-    /// Settings' Window Size: checked = Last Position, unchecked = Default.
-    remember_window: CheckMenuItem<Wry>,
     start_with_windows: CheckMenuItem<Wry>,
     /// "Check for Updates", or "Update to x" once one is waiting (update.rs).
     update: MenuItem<Wry>,
@@ -58,20 +56,10 @@ pub fn build(app: &App) -> tauri::Result<()> {
         CheckMenuItem::with_id(app, "toaster_on", "Toaster", true, saved.toaster_enabled, None::<&str>)?;
     let wrapper_on =
         CheckMenuItem::with_id(app, "wrapper_on", "Wrapper", true, saved.wrapper_enabled, None::<&str>)?;
+    let widget_on =
+        CheckMenuItem::with_id(app, "widget_on", "Taskbar Widget", true, saved.widget_enabled, None::<&str>)?;
     let toasts =
         CheckMenuItem::with_id(app, "toasts", "Toasts", true, saved.toasts_enabled, None::<&str>)?;
-    let auto_hide =
-        CheckMenuItem::with_id(app, "auto_hide", "Auto-Hide", true, saved.hide_on_blur, None::<&str>)?;
-    let remember = saved.toaster_window == ToasterWindow::Remember;
-    // (The Toaster's own window size: nothing to set while it's off)
-    let remember_window = CheckMenuItem::with_id(
-        app,
-        "remember_window",
-        "Remember Window",
-        saved.toaster_enabled,
-        remember,
-        None::<&str>,
-    )?;
     let start_with_windows = CheckMenuItem::with_id(
         app,
         "start_with_windows",
@@ -90,10 +78,9 @@ pub fn build(app: &App) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &toaster_on,
             &wrapper_on,
+            &widget_on,
             &PredefinedMenuItem::separator(app)?,
             &toasts,
-            &auto_hide,
-            &remember_window,
             &start_with_windows,
             &PredefinedMenuItem::separator(app)?,
             &update,
@@ -148,9 +135,8 @@ pub fn build(app: &App) -> tauri::Result<()> {
         toaster_shown: AtomicBool::new(saved.toaster_enabled),
         toaster_on,
         wrapper_on,
+        widget_on,
         toasts,
-        auto_hide,
-        remember_window,
         start_with_windows,
         update,
     });
@@ -182,13 +168,9 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
         "update" => return crate::update::from_tray(app),
         "toaster_on" => json!({ "toasterEnabled": !saved.toaster_enabled }),
         "wrapper_on" => json!({ "wrapperEnabled": !saved.wrapper_enabled }),
+        "widget_on" => json!({ "widgetEnabled": !saved.widget_enabled }),
         "toasts" => json!({ "toastsEnabled": !saved.toasts_enabled }),
-        "auto_hide" => json!({ "hideOnBlur": !saved.hide_on_blur }),
         "start_with_windows" => json!({ "startWithWindows": !saved.start_with_windows }),
-        "remember_window" => {
-            let remember = saved.toaster_window == ToasterWindow::Remember;
-            json!({ "toasterWindow": if remember { "default" } else { "remember" } })
-        }
         _ => return,
     };
     // Saves, tells Settings, and puts the check marks right (Windows also
@@ -205,12 +187,8 @@ pub fn sync(app: &AppHandle, settings: &AppSettings) {
     };
     let _ = menu.toaster_on.set_checked(settings.toaster_enabled);
     let _ = menu.wrapper_on.set_checked(settings.wrapper_enabled);
+    let _ = menu.widget_on.set_checked(settings.widget_enabled);
     let _ = menu.toasts.set_checked(settings.toasts_enabled);
-    let _ = menu.auto_hide.set_checked(settings.hide_on_blur);
-    let _ = menu
-        .remember_window
-        .set_checked(settings.toaster_window == ToasterWindow::Remember);
-    let _ = menu.remember_window.set_enabled(settings.toaster_enabled);
     let _ = menu.start_with_windows.set_checked(settings.start_with_windows);
 
     // "Open Wrapper" and "Open Toaster" come and go with their switches

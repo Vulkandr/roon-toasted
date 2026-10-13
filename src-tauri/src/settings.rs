@@ -96,6 +96,10 @@ pub struct AppSettings {
     /// Where the paired Core was last seen. Asked directly on every search too,
     /// so finding it again doesn't depend on multicast. Set by roon.rs.
     pub last_core_host: Option<String>,
+    /// The Wrapper's size as last left, in logical pixels (wrapper.rs puts
+    /// it back; the window-state plugin's real-pixel size came out wrong on
+    /// a screen with other scaling). Set by wrapper.rs.
+    pub wrapper_size: Option<[f64; 2]>,
     /// The Wrapper (experimental, see wrapper.rs): Roon desktop inside a
     /// Toasted window. Off hides its tray entry and releases its hotkey.
     pub wrapper_enabled: bool,
@@ -158,6 +162,7 @@ impl Default for AppSettings {
             manual_core_host: None,
             manual_core_port: DEFAULT_CORE_PORT,
             last_core_host: None,
+            wrapper_size: None,
             wrapper_enabled: false,
             wrapper_at_launch: true,
             wrapper_remember_player: true,
