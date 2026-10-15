@@ -18,6 +18,7 @@ mod update;
 mod monitors;
 mod queue;
 mod roon;
+mod roonnav;
 mod settings;
 mod skin;
 mod status;
@@ -502,6 +503,8 @@ pub fn run() {
             wrapper::start(app.handle());
             // Roon's sidebar in the Wrapper's colors (see skin.rs)
             skin::start(app.handle());
+            // Which page Roon is on, from its log (see roonnav.rs)
+            roonnav::start(app.handle());
 
             // roon-toasted:// links, and opening the Toaster if a link or
             // --search started the app (see launch.rs)
@@ -620,6 +623,13 @@ pub fn run() {
             library::library_track_heart,
             library::library_track_add,
             library::library_play_track,
+            library::library_album_by_id,
+            library::library_artist_by_id,
+            library::library_album_card,
+            library::library_artist_card,
+            library::library_artist_albums_for,
+            library::library_search,
+            library::library_play_album,
             wrapper::wrapper_hole,
             wrapper::wrapper_status,
             wrapper::wrapper_put_back,
@@ -628,7 +638,8 @@ pub fn run() {
             wrapper::wrapper_roon_link,
             wrapper::wrapper_roon_close,
             wrapper::wrapper_roon_search,
-            skin::wrapper_colors
+            skin::wrapper_colors,
+            roonnav::wrapper_nav
         ])
         .build(tauri::generate_context!())
         .expect("error while running tauri application")

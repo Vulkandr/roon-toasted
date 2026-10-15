@@ -61,6 +61,18 @@ const stageUnsaved = $("#stage-unsaved");
 const stageEditor = $("#stage-editor");
 const guideV = $("#guide-v");
 const guideH = $("#guide-h");
+const wrappedBtn = $("#wrapped-btn");
+const wrappedOpen = $("#wrapped-open");
+const wrappedArrow = $("#wrapped-arrow");
+const wrappedPageBtn = $("#wrapped-page-btn");
+const wrappedPageOpen = $("#wrapped-page-open");
+const wrappedPageArrow = $("#wrapped-page-arrow");
+const wrappedMenu = $("#wrapped-menu");
+const wrapped = $("#wrapped");
+const wrappedTitle = $("#wrapped-title");
+const wrappedSub = $("#wrapped-sub");
+const wrappedBody = $("#wrapped-body");
+const wrappedBack = $("#wrapped-back");
 
 const darkScheme = matchMedia("(prefers-color-scheme: dark)");
 
@@ -72,6 +84,14 @@ let draggingVolume = false;
 let colorsMode = "default"; // "default" or "album", from Settings
 let addMode = "track"; // what "add to library" adds, from Settings
 let queue = { zoneId: null, items: [] };
+// Wrapped (the menu over Roon's logo and the page over Roon's content):
+// Roon's sidebar width in real pixels (null = collapsed, undefined = no
+// Roon), its grey, which page Roon is on (roonnav.rs), and our page stack
+let sidebarPx;
+let sidebarColor = null;
+let sidebarSeen = false; // whether skin.rs has reported a sidebar at least once
+let roonNav = { page: "", albumId: null, lastAlbumId: null, available: false };
+let wrappedStack = [];
 
 // ===== Helpers =============================================================
 
@@ -112,22 +132,32 @@ function setFill(slider) {
 
 // The hole's rectangle in CSS pixels, relative to the page (which fills the
 // window's client area), plus whatever we show over it (the zone menu, the
-// queue panel), which has to stay part of the window. Rust turns them into
-// real pixels.
+// queue panel, the Wrapped button, menu and page), which has to stay part
+// of the window. Rust turns them into real pixels.
 function reportHole() {
   const rect = hole.getBoundingClientRect();
-  const covers = [zoneMenu, queuePanel, stage]
-    .filter((element) => !element.hidden)
-    .map((element) => {
-      const r = element.getBoundingClientRect();
-      return [r.left, r.top, r.width, r.height];
-    });
+  const covers = [];
+  const radii = []; // a cover's rounded corners are cut too, so Roon shows there
+  for (const element of [zoneMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedMenu, wrapped]) {
+    if (element.hidden) continue;
+    const r = element.getBoundingClientRect();
+    const radius = parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0;
+    // The window's cut-out has hard (aliased) edges; a rounded one is made a
+    // pixel larger than the element, so the element's own soft corners and
+    // border stay intact and only a sliver of page background shows outside
+    // them (the sidebar button is the exception: under the color filter
+    // that sliver would be recolored, so it's cut exactly)
+    const pad = radius > 0 && element !== wrappedBtn ? 1 : 0;
+    covers.push([r.left - pad, r.top - pad, r.width + pad * 2, r.height + pad * 2]);
+    radii.push(radius > 0 ? radius + pad : 0);
+  }
   invoke("wrapper_hole", {
     x: rect.left,
     y: rect.top,
     width: rect.width,
     height: rect.height,
     covers,
+    radii,
   }).catch(() => {});
 }
 
@@ -136,6 +166,10 @@ holeWatcher.observe(hole);
 holeWatcher.observe(zoneMenu);
 holeWatcher.observe(queuePanel);
 holeWatcher.observe(stage);
+holeWatcher.observe(wrappedBtn);
+holeWatcher.observe(wrappedPageBtn);
+holeWatcher.observe(wrappedMenu);
+holeWatcher.observe(wrapped);
 reportHole();
 
 // Rust's one-line status: in the title bar when something's off, and in
@@ -157,6 +191,7 @@ async function refreshStatus() {
     } else if (!s.roonLost) {
       lostHandled = false;
     }
+    setSidebar(fine ? s.sidebar : undefined, s.sidebarColor, fine);
   } catch {
     status.hidden = true;
   }
@@ -2093,6 +2128,7 @@ function renderLibrary() {
   renderQuality();
   renderFormat();
   syncWaveform();
+  markWrappedPlaying();
   const show = libraryReady && zone != null && zone.nowPlaying != null;
   libraryBtn.classList.toggle("spacer", !show);
   if (!show) return;
@@ -2144,6 +2180,7 @@ libraryBtn.addEventListener("click", async () => {
 });
 
 function setLibraryStatus(status) {
+  const was = libraryReady;
   libraryReady = status.state === "ready";
   if (!libraryReady) {
     libraryTracks = {}; // states are only valid per connection
@@ -2151,6 +2188,8 @@ function setLibraryStatus(status) {
     formats = {};
   }
   renderLibrary();
+  // A Wrapped page waiting for the link (or showing handles from a dropped one)
+  if (was !== libraryReady && !wrapped.hidden) renderWrapped();
 }
 
 // ===== Queue panel =========================================================
@@ -2293,16 +2332,866 @@ document.addEventListener("pointerdown", (event) => {
 });
 window.addEventListener("resize", closeZoneMenu);
 window.addEventListener("blur", closeZoneMenu);
-// Escape: the zone menu first, then the queue panel, then Now Playing's
-// editing, then Now Playing itself
+// Escape: the zone menu first, then the Wrapped menu, the queue panel, Now
+// Playing's editing, Now Playing itself, then the Wrapped page
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (dialogOpen()) cancelDialog();
   else if (!zoneMenu.hidden) closeZoneMenu();
+  else if (!wrappedMenu.hidden) closeWrappedMenu();
   else if (!queuePanel.hidden) setQueueOpen(false);
   else if (editing) finishEditing();
   else if (!stage.hidden) closeStage();
+  else if (!wrapped.hidden) setWrappedOpen(false);
 });
+
+// ===== Wrapped =============================================================
+
+// The Wrapped button sits over Roon's logo, at the top-left of Roon's
+// sidebar (Roon's logo is drawn at a fixed spot in its sidebar, so the
+// button lands on it at any window size), and opens the Wrapped menu. The
+// Wrapped page covers Roon's content area, from the sidebar's right edge to
+// the window's edge, between the title bar and the player bar. Both are
+// covers (see reportHole), so Roon shows and gets clicks everywhere else.
+//
+// Where Roon's sidebar ends comes from skin.rs (it measures it to lay its
+// color filter over it). That filter also lies over our button, since the
+// button is in the sidebar part of the hole, and recolors whatever is under
+// it, so the button is drawn in Roon's own sidebar colors (its grey, its
+// text grey, its purple) and comes out in ours, like the rest of the
+// sidebar. With the sidebar collapsed there's no filter and the button is
+// drawn in our colors, right of Roon's hamburger.
+
+// Roon's logo spot and its collapsed-sidebar hamburger, in Roon's own
+// pixels (CSS px at 100%) from the top-left of its window's contents
+const ROON_LOGO = { x: 14, y: 16, width: 100, height: 36 };
+// Roon's content header (the row with the back arrow): where a button fits
+// after the back arrow, and, with the sidebar collapsed, after the hamburger
+// (Home has no back arrow then) or after both
+const ROON_HEADER = { y: 17, height: 38, afterBack: 76, afterHamburger: 56, afterBoth: 126 };
+// Roon's sidebar width while skin.rs hasn't measured it yet (Roon collapses
+// it by itself in windows narrower than about 1400)
+const ROON_SIDEBAR = 248;
+const ROON_COLLAPSES_BELOW = 1400;
+// Roon's text grey and purple in its sidebar (skin.rs maps these to ours)
+const ROON_TEXT = "rgb(168, 168, 168)";
+const ROON_BRIGHT = "rgb(230, 230, 230)";
+const ROON_ACCENT = "rgb(106, 110, 217)";
+
+// Rust's status (once a second): Roon's sidebar width and grey. The button
+// shows while Roon is in the Wrapper. A sidebar that was there and isn't
+// for a moment is usually Roon repainting (a resize, a page change), so
+// "collapsed" only counts once it has lasted a second.
+// During a resize Roon repaints at its new size and the measurement finds
+// nothing for as long as the resize goes on, so "collapsed" also waits
+// until a moment after the last resize.
+const SIDEBAR_GONE_AFTER = 1500;
+let sidebarGoneTimer = null;
+let lastResizeAt = 0;
+let roonHere = false;
+window.addEventListener("resize", () => {
+  lastResizeAt = Date.now();
+});
+function setSidebar(px, color, here) {
+  if (here !== roonHere) {
+    roonHere = here;
+    layoutWrapped();
+  }
+  if (px === null && typeof sidebarPx === "number") {
+    if (!sidebarGoneTimer) sidebarGoneTimer = setTimeout(sidebarGone, SIDEBAR_GONE_AFTER);
+    return;
+  }
+  if (sidebarGoneTimer) {
+    clearTimeout(sidebarGoneTimer);
+    sidebarGoneTimer = null;
+  }
+  applySidebar(px, color);
+}
+
+function sidebarGone() {
+  const sinceResize = Date.now() - lastResizeAt;
+  if (sinceResize < SIDEBAR_GONE_AFTER) {
+    sidebarGoneTimer = setTimeout(sidebarGone, SIDEBAR_GONE_AFTER - sinceResize);
+    return;
+  }
+  sidebarGoneTimer = null;
+  applySidebar(null, null);
+}
+
+function applySidebar(px, color) {
+  const changed = px !== sidebarPx || String(color) !== String(sidebarColor);
+  sidebarPx = px;
+  sidebarColor = color ?? null;
+  if (changed) layoutWrapped();
+}
+
+// Roon's sidebar width in CSS px: measured, or guessed from the window
+// width until it is; null while collapsed
+function sidebarWidth() {
+  if (sidebarPx === undefined) return null;
+  if (sidebarPx === null) {
+    const holeWidth = hole.getBoundingClientRect().width;
+    return sidebarColor === null && holeWidth >= ROON_COLLAPSES_BELOW && !sidebarSeen ? ROON_SIDEBAR : null;
+  }
+  return sidebarPx / (window.devicePixelRatio || 1);
+}
+
+function layoutWrapped() {
+  const h = hole.getBoundingClientRect();
+  if (sidebarPx !== null && sidebarPx !== undefined) sidebarSeen = true;
+  const width = sidebarWidth();
+  const collapsed = width === null;
+  const filtered = !collapsed && sidebarColor !== null;
+  const here = wrappedHere();
+
+  // The sidebar button: over the logo while the sidebar is there (it goes
+  // with the sidebar when Roon collapses it)
+  wrappedBtn.hidden = !roonHere || collapsed;
+  wrappedBtn.style.left = `${h.left + ROON_LOGO.x}px`;
+  wrappedBtn.style.top = `${h.top + ROON_LOGO.y}px`;
+  wrappedBtn.style.height = `${ROON_LOGO.height}px`;
+  wrappedBtn.style.minWidth = `${ROON_LOGO.width}px`;
+  // In Roon's colors under the filter (see above), ours otherwise
+  wrappedBtn.classList.toggle("through-filter", filtered);
+  if (filtered) {
+    const [r, g, b] = sidebarColor;
+    wrappedBtn.style.setProperty("--roon-bg", `rgb(${r}, ${g}, ${b})`);
+    wrappedBtn.style.setProperty("--roon-hover", `rgb(${r + 14}, ${g + 14}, ${b + 14})`);
+    wrappedBtn.style.setProperty("--roon-text", ROON_TEXT);
+    wrappedBtn.style.setProperty("--roon-bright", ROON_BRIGHT);
+    wrappedBtn.style.setProperty("--roon-accent", ROON_ACCENT);
+  }
+
+  // The content-header button: on Roon's album and artist pages it opens
+  // that page in Wrapped; with the sidebar collapsed it stands in for the
+  // sidebar button on every page. It sits after Roon's back arrow (and
+  // hamburger), in the header row that doesn't scroll.
+  const contentLeft = h.left + (collapsed ? 0 : width);
+  // Not while the Wrapped page is open (it would sit over the page's own
+  // header, and "open this album" is moot then)
+  const showPage = roonHere && wrapped.hidden && (collapsed || here !== null);
+  wrappedPageBtn.hidden = !showPage;
+  wrappedPageOpen.textContent = here ? `Open ${here.page} in Wrapped` : "Wrapped";
+  const offset = !collapsed ? ROON_HEADER.afterBack : roonNav.page === "home" || !roonNav.page ? ROON_HEADER.afterHamburger : ROON_HEADER.afterBoth;
+  wrappedPageBtn.style.left = `${contentLeft + offset}px`;
+  wrappedPageBtn.style.top = `${h.top + ROON_HEADER.y}px`;
+  wrappedPageBtn.style.height = `${ROON_HEADER.height}px`;
+
+  wrapped.style.left = `${contentLeft}px`;
+  if (!wrappedMenu.hidden) placeWrappedMenu();
+  // A move alone doesn't reach the hole's ResizeObserver (same size, new
+  // place), so the covers are reported here
+  reportHole();
+}
+new ResizeObserver(layoutWrapped).observe(hole);
+
+// ----- The menu -----
+
+const WRAPPED_ICONS = {
+  home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  album: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>',
+  artist: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
+  playlists: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>',
+  close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
+};
+
+// What Roon's current page would open in Wrapped: the album Roon shows,
+// or (on an artist page) the artist of the last album it showed
+function wrappedHere() {
+  if (roonNav.page === "album" && roonNav.albumId != null) {
+    return { page: "album", albumId: roonNav.albumId, label: "This album", icon: "album" };
+  }
+  if (roonNav.page === "artist" && roonNav.lastAlbumId != null) {
+    return { page: "artist", albumId: roonNav.lastAlbumId, label: "This artist", icon: "artist" };
+  }
+  return null;
+}
+
+function wrappedMenuItems() {
+  const items = [{ page: "home", label: "Home", icon: "home" }];
+  const here = wrappedHere();
+  if (here) items.push(here);
+  items.push({ page: "search", label: "Search", icon: "search" });
+  items.push({ page: "playlists", label: "Playlists", icon: "playlists" });
+  if (!wrapped.hidden) items.push({ close: true, label: "Close Wrapped", icon: "close" });
+  return items;
+}
+
+function fillWrappedMenu() {
+  wrappedMenu.replaceChildren();
+  for (const item of wrappedMenuItems()) {
+    const option = document.createElement("button");
+    option.className = "wrapped-option";
+    option.insertAdjacentHTML("beforeend", WRAPPED_ICONS[item.icon]);
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    option.append(label);
+    if (item.page && wrappedStack.at(-1)?.page === item.page && !wrapped.hidden) option.classList.add("selected");
+    option.addEventListener("click", () => {
+      closeWrappedMenu();
+      if (item.close) setWrappedOpen(false);
+      else openWrappedPage(item);
+    });
+    wrappedMenu.append(option);
+  }
+}
+
+// Under the button; to the right of the sidebar when the filter is over
+// the button (the menu would be recolored under it too)
+let wrappedMenuAnchor = wrappedBtn; // which button the menu hangs from
+function placeWrappedMenu() {
+  const b = wrappedMenuAnchor.getBoundingClientRect();
+  const h = hole.getBoundingClientRect();
+  const width = sidebarWidth();
+  if (wrappedMenuAnchor === wrappedBtn && width !== null && sidebarColor !== null) {
+    wrappedMenu.style.left = `${h.left + width + 8}px`;
+    wrappedMenu.style.top = `${b.top}px`;
+  } else {
+    wrappedMenu.style.left = `${b.left}px`;
+    wrappedMenu.style.top = `${b.bottom + 6}px`;
+  }
+}
+
+function openWrappedMenu(anchor = wrappedBtn) {
+  wrappedMenuAnchor = anchor;
+  fillWrappedMenu();
+  wrappedMenu.hidden = false;
+  anchor.classList.add("on");
+  placeWrappedMenu();
+  reportHole();
+}
+
+function closeWrappedMenu() {
+  if (wrappedMenu.hidden) return;
+  wrappedMenu.hidden = true;
+  wrappedBtn.classList.remove("on");
+  wrappedPageBtn.classList.remove("on");
+  reportHole();
+}
+
+// A split button: the name opens the Wrapped page (and closes it again),
+// the arrow opens the menu; a right-click anywhere on it opens the menu too
+wrappedOpen.addEventListener("click", () => {
+  closeWrappedMenu();
+  if (wrapped.hidden) openWrappedPage({ page: "home" });
+  else setWrappedOpen(false);
+});
+wrappedArrow.addEventListener("click", () => {
+  if (wrappedMenu.hidden) openWrappedMenu();
+  else closeWrappedMenu();
+});
+wrappedBtn.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  if (wrappedMenu.hidden) openWrappedMenu();
+});
+// The content-header button: the name opens Roon's current album or artist
+// in Wrapped (or the page itself when Roon is elsewhere), the arrow the menu
+wrappedPageOpen.addEventListener("click", () => {
+  closeWrappedMenu();
+  const here = wrappedHere();
+  if (here) openWrappedPage(here);
+  else if (wrapped.hidden) openWrappedPage({ page: "home" });
+  else setWrappedOpen(false);
+});
+wrappedPageArrow.addEventListener("click", () => {
+  if (wrappedMenu.hidden) openWrappedMenu(wrappedPageBtn);
+  else closeWrappedMenu();
+});
+wrappedPageBtn.addEventListener("contextmenu", (event) => {
+  event.preventDefault();
+  if (wrappedMenu.hidden) openWrappedMenu(wrappedPageBtn);
+});
+
+document.addEventListener("pointerdown", (event) => {
+  if (wrappedMenu.hidden) return;
+  if (wrappedMenu.contains(event.target) || wrappedBtn.contains(event.target) || wrappedPageBtn.contains(event.target)) return;
+  closeWrappedMenu();
+});
+window.addEventListener("resize", closeWrappedMenu);
+window.addEventListener("blur", closeWrappedMenu);
+
+// ----- The page -----
+
+function setWrappedOpen(open) {
+  if (!open) wrappedStack = [];
+  wrapped.hidden = !open;
+  layoutWrapped();
+  reportHole();
+}
+
+// Opens a page on top of the stack (back goes to the one before)
+function openWrappedPage(entry) {
+  const top = wrappedStack.at(-1);
+  const same = top && top.page === entry.page && top.albumId === entry.albumId && top.handle === entry.handle;
+  if (same) {
+    if (wrapped.hidden) setWrappedOpen(true);
+    return;
+  }
+  // Home and Search are single: going there again goes back to them
+  if (entry.page === "home") wrappedStack = [];
+  wrappedStack.push({ page: entry.page, albumId: entry.albumId, handle: entry.handle, query: entry.query });
+  if (wrapped.hidden) setWrappedOpen(true);
+  renderWrapped();
+}
+
+function wrappedBackPage() {
+  if (wrappedStack.length <= 1) return setWrappedOpen(false);
+  wrappedStack.pop();
+  renderWrapped();
+}
+
+function renderWrapped() {
+  const entry = wrappedStack.at(-1);
+  if (!entry) return;
+  wrappedBack.hidden = wrappedStack.length <= 1;
+  wrappedTrackRows = [];
+  wrappedBody.replaceChildren();
+  wrappedBody.scrollTop = 0;
+  wrappedTicket++;
+  const page = WRAPPED_PAGES[entry.page] || WRAPPED_PAGES.home;
+  Promise.resolve(page(entry)).catch((err) => console.error("wrapped page", err));
+}
+
+function wrappedHeading(title, sub) {
+  wrappedTitle.textContent = title;
+  wrappedSub.textContent = sub || "";
+  wrappedSub.hidden = !sub;
+}
+
+function wrappedNote(text, className = "wrapped-note") {
+  const p = document.createElement("p");
+  p.className = className;
+  p.textContent = text;
+  return p;
+}
+
+function wrappedTile(label, text, onClick) {
+  const tile = document.createElement("button");
+  tile.className = "wrapped-tile";
+  const head = document.createElement("div");
+  head.className = "wrapped-tile-title";
+  head.textContent = label;
+  const body = document.createElement("div");
+  body.className = "wrapped-tile-text";
+  body.textContent = text;
+  tile.append(head, body);
+  if (onClick) tile.addEventListener("click", onClick);
+  else tile.disabled = true;
+  return tile;
+}
+
+// ----- Pieces the pages are built from -----
+
+const HEART_ICONS =
+  '<svg class="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>' +
+  '<svg class="icon-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg>';
+const WRAPPED_PLAY_ICON = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M6 4.5v15a1 1 0 0 0 1.5.87l13-7.5a1 1 0 0 0 0-1.74l-13-7.5A1 1 0 0 0 6 4.5z"/></svg>';
+// The Wrapped radio mark (a broadcast icon): on every track, album and artist
+const RADIO_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>';
+
+// Art from the Core's image service (the roonimg scheme, see zones.rs),
+// or initials in a colored square while there's none
+function wrappedArt(imageKey, size, name, round) {
+  const box = document.createElement("div");
+  box.className = `wrapped-art${round ? " round" : ""}`;
+  if (imageKey) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.src = `${convertFileSrc(imageKey, "roonimg")}?width=${size}&height=${size}`;
+    img.addEventListener("error", () => img.replaceWith(wrappedInitials(name)));
+    box.append(img);
+  } else {
+    box.append(wrappedInitials(name));
+  }
+  return box;
+}
+
+function wrappedInitials(name) {
+  const el = document.createElement("div");
+  el.className = "wrapped-initials";
+  const words = (name || "").split(/\s+/).filter(Boolean);
+  el.textContent = words.slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "♪";
+  return el;
+}
+
+// Heart / add-to-library button in the player bar's style: "+" while the
+// thing isn't in the library, a heart once it is (filled when hearted).
+// `change(favorite)` returns the new state (or throws).
+function wrappedHeart(state, change) {
+  const btn = document.createElement("button");
+  btn.className = "icon-btn library";
+  btn.innerHTML = HEART_ICONS;
+  const paint = (st) => {
+    btn.classList.toggle("in-library", !!st.inLibrary);
+    btn.classList.toggle("on", !!st.favorite);
+    btn.title = !st.inLibrary ? "Add to library" : st.favorite ? "Remove heart" : "Heart";
+  };
+  paint(state);
+  btn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    btn.classList.add("busy");
+    try {
+      const next = await change(!(state.inLibrary && state.favorite));
+      if (next) {
+        state = next;
+        paint(state);
+      }
+    } catch (err) {
+      console.error("heart", err);
+    } finally {
+      btn.classList.remove("busy");
+    }
+  });
+  return btn;
+}
+
+function wrappedIconButton(icon, title, onClick, className = "") {
+  const btn = document.createElement("button");
+  btn.className = `icon-btn ${className}`.trim();
+  btn.innerHTML = icon;
+  btn.title = title;
+  if (onClick) {
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onClick();
+    });
+  } else {
+    btn.disabled = true;
+  }
+  return btn;
+}
+
+// The radio button: comes alive in the radio step
+function wrappedRadio(what) {
+  return wrappedIconButton(RADIO_ICON, `Wrapped radio from this ${what} (coming soon)`, null, "wrapped-radio");
+}
+
+function wrappedSection(title) {
+  const h = document.createElement("h3");
+  h.className = "wrapped-section";
+  h.textContent = title;
+  return h;
+}
+
+// A tile for an album or artist (art, title, a line under it)
+function wrappedCard(item, onClick) {
+  const tile = document.createElement("button");
+  tile.className = `wrapped-card${item.round ? " round" : ""}`;
+  tile.append(wrappedArt(item.imageKey, 400, item.title, item.round));
+  const title = document.createElement("div");
+  title.className = "wrapped-card-title";
+  title.textContent = item.title;
+  tile.append(title);
+  if (item.sub) {
+    const sub = document.createElement("div");
+    sub.className = "wrapped-card-sub";
+    sub.textContent = item.sub;
+    tile.append(sub);
+  }
+  tile.addEventListener("click", onClick);
+  return tile;
+}
+
+function wrappedGrid(items, onClick) {
+  const grid = document.createElement("div");
+  grid.className = "wrapped-cards";
+  grid.append(...items.map((item) => wrappedCard(item, () => onClick(item))));
+  return grid;
+}
+
+// The Wrapped pages run on the Hearts & Library link (Roon's internal
+// protocol); without it there's nothing to show
+function wrappedNeedsLibrary() {
+  if (libraryReady) return false;
+  wrappedBody.append(
+    wrappedNote("Wrapped reads your library through the Hearts & Library link, which is off or not connected."),
+  );
+  const open = document.createElement("button");
+  open.className = "wrapped-button";
+  open.textContent = "Open Settings";
+  open.addEventListener("click", () => send("open_window", { window: "settings" }));
+  wrappedBody.append(open);
+  return true;
+}
+
+// A page's fetches are dropped when another page has taken over meanwhile
+let wrappedTicket = 0;
+
+// The album page's track rows, with their ids, so the playing mark follows
+// the zone (renderLibrary calls markWrappedPlaying on every track change)
+let wrappedTrackRows = [];
+function markWrappedPlaying() {
+  if (!wrappedTrackRows.length) return;
+  // (The zone's track carries its ids as strings, the album's rows as numbers)
+  const track = zone ? libraryTracks[zone.zoneId] : null;
+  const ids = track ? [track.trackId, track.libraryTrackId].filter((id) => id != null).map(String) : [];
+  for (const { row, ids: own } of wrappedTrackRows) {
+    row.classList.toggle("playing", own.some((id) => ids.includes(String(id))));
+  }
+}
+
+function wrappedFailed(err) {
+  wrappedBody.replaceChildren(wrappedNote(typeof err === "string" ? err : "Roon didn't answer.", "wrapped-note error"));
+}
+
+// ----- The pages -----
+
+const WRAPPED_PAGES = {
+  home() {
+    wrappedHeading("Wrapped", "Playlists, radio and discovery, built on your Roon library");
+    const grid = document.createElement("div");
+    grid.className = "wrapped-grid";
+    const here = wrappedHere();
+    grid.append(
+      wrappedTile("Discover", "Weekly playlists from what you've been listening to, and from your whole library. Coming next."),
+      wrappedTile("Radio", "Roon Radio from any song, artist or mix of them, library only or not. Coming next."),
+      wrappedTile("Playlists", "The playlists Wrapped keeps for you.", () => openWrappedPage({ page: "playlists" })),
+      wrappedTile("Search", "Find an artist or album to start from.", () => openWrappedPage({ page: "search" })),
+    );
+    wrappedBody.append(grid);
+    if (here) {
+      wrappedBody.append(wrappedTile(here.label, "Open what Roon is showing now.", () => openWrappedPage(here)));
+    } else if (!roonNav.available) {
+      wrappedBody.append(wrappedNote("Roon's log wasn't found, so Wrapped can't tell which page Roon is on."));
+    }
+  },
+
+  // An album: by the Core's id (from Roon's log) or by a session handle
+  async album(entry) {
+    wrappedHeading("Album", "");
+    if (wrappedNeedsLibrary()) return;
+    const ticket = ++wrappedTicket;
+    wrappedBody.append(wrappedNote("Loading..."));
+    let card;
+    try {
+      card = entry.handle
+        ? await invoke("library_album_card", { handle: entry.handle })
+        : await invoke("library_album_by_id", { albumId: entry.albumId });
+    } catch (err) {
+      if (ticket === wrappedTicket) wrappedFailed(err);
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    entry.handle = card.handle;
+    wrappedHeading(card.title, card.artist);
+    wrappedBody.replaceChildren(albumHeader(card));
+    const list = document.createElement("div");
+    list.className = "wrapped-tracks";
+    list.append(wrappedNote("Loading tracks..."));
+    wrappedBody.append(list);
+    let tracks;
+    try {
+      tracks = await invoke("library_album_tracks_for", { zoneId: zone?.zoneId ?? "", handle: card.handle });
+    } catch (err) {
+      if (ticket === wrappedTicket) list.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    list.replaceChildren(...trackRows(tracks));
+    wrappedTrackRows = [...list.querySelectorAll(".wrapped-track")].map((row, i) => ({
+      row,
+      ids: [tracks[i].trackId, tracks[i].libraryTrackId].filter((id) => id != null),
+    }));
+    markWrappedPlaying();
+    const total = tracks.reduce((sum, t) => sum + (t.lengthSeconds || 0), 0);
+    const facts = [card.year, `${tracks.length} track${tracks.length === 1 ? "" : "s"}`, total ? formatLongTime(total) : null]
+      .filter(Boolean)
+      .join(" · ");
+    wrappedBody.querySelector(".wrapped-facts").textContent = facts;
+  },
+
+  // An artist: by a handle, or by the album Roon showed last (its main artist)
+  async artist(entry) {
+    wrappedHeading("Artist", "");
+    if (wrappedNeedsLibrary()) return;
+    const ticket = ++wrappedTicket;
+    wrappedBody.append(wrappedNote("Loading..."));
+    let card;
+    try {
+      if (!entry.handle) {
+        const album = await invoke("library_album_by_id", { albumId: entry.albumId });
+        if (!album.performerHandle) throw "Roon didn't say who that album's artist is.";
+        entry.handle = album.performerHandle;
+      }
+      card = await invoke("library_artist_card", { handle: entry.handle });
+    } catch (err) {
+      if (ticket === wrappedTicket) wrappedFailed(err);
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    wrappedHeading(card.name, card.albumCount ? `${card.albumCount} album${card.albumCount === 1 ? "" : "s"}` : "");
+    wrappedBody.replaceChildren(artistHeader(card));
+    const holder = document.createElement("div");
+    holder.append(wrappedNote("Loading albums..."));
+    wrappedBody.append(holder);
+    let albums;
+    try {
+      albums = await invoke("library_artist_albums_for", { handle: card.handle, zoneId: zone?.zoneId ?? null });
+    } catch (err) {
+      if (ticket === wrappedTicket) holder.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    holder.replaceChildren();
+    const groups = [
+      ["main", "Albums"],
+      ["other", "Singles & EPs"],
+      ["appearance", "Appears on"],
+    ];
+    for (const [group, label] of groups) {
+      const list = albums.filter((a) => a.group === group);
+      if (!list.length) continue;
+      holder.append(wrappedSection(label));
+      holder.append(
+        wrappedGrid(
+          list.map((a) => ({ handle: a.handle, title: a.title, sub: [a.year, a.inLibrary ? "In library" : null].filter(Boolean).join(" · "), imageKey: a.imageKey })),
+          (item) => openWrappedPage({ page: "album", handle: item.handle }),
+        ),
+      );
+    }
+    if (!albums.length) holder.append(wrappedNote("Roon lists no albums for this artist."));
+  },
+
+  search(entry) {
+    wrappedHeading("Search", "Artists, albums and tracks, from Roon's own search");
+    if (wrappedNeedsLibrary()) return;
+    const input = document.createElement("input");
+    input.className = "wrapped-search";
+    input.type = "search";
+    input.placeholder = "Search your library, Qobuz and TIDAL";
+    input.value = entry.query || "";
+    const results = document.createElement("div");
+    results.className = "wrapped-results";
+    wrappedBody.append(input, results);
+    let timer = null;
+    const run = async () => {
+      const query = input.value.trim();
+      entry.query = query;
+      if (!query) {
+        results.replaceChildren();
+        return;
+      }
+      const ticket = ++wrappedTicket;
+      results.replaceChildren(wrappedNote("Searching..."));
+      let hits;
+      try {
+        hits = await invoke("library_search", { query });
+      } catch (err) {
+        if (ticket === wrappedTicket) results.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+        return;
+      }
+      if (ticket !== wrappedTicket || input.value.trim() !== query) return;
+      results.replaceChildren(...searchResults(hits));
+    };
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      timer = setTimeout(run, 350);
+    });
+    input.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") {
+        clearTimeout(timer);
+        run();
+      }
+    });
+    if (entry.query) run();
+    setTimeout(() => input.focus(), 50);
+  },
+
+  playlists() {
+    wrappedHeading("Playlists", "Kept up to date by Wrapped");
+    wrappedBody.append(wrappedNote("Nothing here yet. Discover Weekly and Library Discover arrive with the playlist step."));
+  },
+};
+
+// The album page's top: art, title, artist (a link), facts, Play now, heart, radio
+function albumHeader(card) {
+  const head = document.createElement("div");
+  head.className = "wrapped-album-head";
+  head.append(wrappedArt(card.imageKey, 600, card.title));
+  const info = document.createElement("div");
+  info.className = "wrapped-album-info";
+  const title = document.createElement("h2");
+  title.className = "wrapped-album-title";
+  title.textContent = card.title;
+  const artist = document.createElement("button");
+  artist.className = "wrapped-link";
+  artist.textContent = card.artist;
+  if (card.performerHandle) {
+    artist.addEventListener("click", () => openWrappedPage({ page: "artist", handle: card.performerHandle }));
+  } else {
+    artist.disabled = true;
+  }
+  const facts = document.createElement("div");
+  facts.className = "wrapped-facts";
+  facts.textContent = card.year ? String(card.year) : "";
+  const actions = document.createElement("div");
+  actions.className = "wrapped-actions";
+  const play = document.createElement("button");
+  play.className = "wrapped-play";
+  play.innerHTML = `${WRAPPED_PLAY_ICON}<span>Play now</span>`;
+  play.addEventListener("click", () => {
+    if (!zone) return;
+    send("library_play_album", { zoneId: zone.zoneId, handle: card.handle });
+  });
+  actions.append(
+    play,
+    wrappedHeart({ inLibrary: card.inLibrary, favorite: card.favorite }, async (favorite) => {
+      const next = card.inLibrary || favorite
+        ? await invoke("library_album_heart_for", { handle: card.handle, favorite })
+        : await invoke("library_album_add_for", { handle: card.handle });
+      return { inLibrary: next.inLibrary, favorite: next.favorite };
+    }),
+    wrappedRadio("album"),
+  );
+  info.append(title, artist, facts, actions);
+  head.append(info);
+  return head;
+}
+
+function artistHeader(card) {
+  const head = document.createElement("div");
+  head.className = "wrapped-artist-head";
+  head.append(wrappedArt(card.imageKey, 600, card.name, true));
+  const info = document.createElement("div");
+  info.className = "wrapped-album-info";
+  const name = document.createElement("h2");
+  name.className = "wrapped-album-title";
+  name.textContent = card.name;
+  const actions = document.createElement("div");
+  actions.className = "wrapped-actions";
+  actions.append(wrappedRadio("artist"));
+  info.append(name, actions);
+  head.append(info);
+  return head;
+}
+
+// Track rows like Roon's: play, the Wrapped radio mark, number and title,
+// heart, length
+function trackRows(tracks) {
+  const multi = tracks.some((t) => (t.mediaNumber || 1) > 1);
+  const rows = [];
+  let media = null;
+  for (const track of tracks) {
+    if (multi && track.mediaNumber !== media) {
+      media = track.mediaNumber;
+      rows.push(wrappedSection(`Disc ${media}`));
+    }
+    const row = document.createElement("div");
+    row.className = `wrapped-track${track.playing ? " playing" : ""}`;
+    row.append(
+      wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
+        if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: track.handle });
+      }, "wrapped-track-play"),
+      wrappedRadio("song"),
+    );
+    const number = document.createElement("span");
+    number.className = "wrapped-track-number";
+    number.textContent = track.trackNumber ?? "";
+    const title = document.createElement("span");
+    title.className = "wrapped-track-title";
+    title.textContent = track.title;
+    row.append(number, title);
+    row.append(
+      wrappedHeart({ inLibrary: track.inLibrary, favorite: track.favorite }, async (favorite) => {
+        const next = track.inLibrary
+          ? await invoke("library_track_heart", { handle: track.handle, favorite })
+          : await invoke("library_track_add", { handle: track.handle });
+        return { inLibrary: next.inLibrary, favorite: next.favorite };
+      }),
+    );
+    const length = document.createElement("span");
+    length.className = "wrapped-track-length";
+    length.textContent = track.lengthSeconds ? formatTime(track.lengthSeconds) : "";
+    row.append(length);
+    rows.push(row);
+  }
+  return rows;
+}
+
+function searchResults(hits) {
+  const out = [];
+  if (hits.artists.length) {
+    out.push(wrappedSection("Artists"));
+    out.push(
+      wrappedGrid(
+        hits.artists.slice(0, 12).map((a) => ({ handle: a.handle, title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: a.imageKey, round: true })),
+        (item) => openWrappedPage({ page: "artist", handle: item.handle }),
+      ),
+    );
+  }
+  if (hits.albums.length) {
+    out.push(wrappedSection("Albums"));
+    out.push(
+      wrappedGrid(
+        hits.albums.slice(0, 18).map((a) => ({ handle: a.handle, title: a.title, sub: [a.artist, a.year].filter(Boolean).join(" · "), imageKey: a.imageKey })),
+        (item) => openWrappedPage({ page: "album", handle: item.handle }),
+      ),
+    );
+  }
+  if (hits.tracks.length) {
+    out.push(wrappedSection("Tracks"));
+    const list = document.createElement("div");
+    list.className = "wrapped-tracks";
+    for (const t of hits.tracks.slice(0, 20)) {
+      const row = document.createElement("div");
+      row.className = "wrapped-track";
+      row.append(
+        wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
+          if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: t.handle });
+        }, "wrapped-track-play"),
+        wrappedRadio("song"),
+      );
+      const art = wrappedArt(t.imageKey, 88, t.album);
+      art.classList.add("small");
+      const text = document.createElement("span");
+      text.className = "wrapped-track-text";
+      const title = document.createElement("span");
+      title.className = "wrapped-track-title";
+      title.textContent = t.title;
+      const sub = document.createElement("span");
+      sub.className = "wrapped-track-sub";
+      sub.textContent = [t.artist, t.album].filter(Boolean).join(" · ");
+      text.append(title, sub);
+      if (t.albumHandle) {
+        text.classList.add("link");
+        text.addEventListener("click", () => openWrappedPage({ page: "album", handle: t.albumHandle }));
+      }
+      row.append(art, text);
+      row.append(
+        wrappedHeart({ inLibrary: t.inLibrary, favorite: t.favorite }, async (favorite) => {
+          const next = t.inLibrary
+            ? await invoke("library_track_heart", { handle: t.handle, favorite })
+            : await invoke("library_track_add", { handle: t.handle });
+          return { inLibrary: next.inLibrary, favorite: next.favorite };
+        }),
+      );
+      const length = document.createElement("span");
+      length.className = "wrapped-track-length";
+      length.textContent = t.lengthSeconds ? formatTime(t.lengthSeconds) : "";
+      row.append(length);
+      list.append(row);
+    }
+    out.push(list);
+  }
+  if (!out.length) out.push(wrappedNote("Nothing found."));
+  return out;
+}
+
+$("#wrapped-close").addEventListener("click", () => setWrappedOpen(false));
+wrappedBack.addEventListener("click", wrappedBackPage);
+
+// Which page Roon is on (roonnav.rs reads Roon's log): the menu's "This
+// album" / "This artist" and the home page follow it
+function setRoonNav(nav) {
+  roonNav = nav;
+  layoutWrapped();
+  if (!wrappedMenu.hidden) fillWrappedMenu();
+  if (!wrapped.hidden && wrappedStack.at(-1)?.page === "home") renderWrapped();
+}
+invoke("wrapper_nav").then(setRoonNav).catch(() => {});
+listen("roon-nav", (event) => setRoonNav(event.payload));
 
 // ===== Window buttons ======================================================
 

@@ -31,6 +31,14 @@
 //! - For any album by the playing artist: `library_artist_albums({ zoneId })`
 //!   (the discography with album handles), then `library_album_tracks_for({ zoneId, handle })`,
 //!   `library_album_heart_for({ handle, favorite })` and `library_album_add_for({ handle })`.
+//! - For the Wrapper's Wrapped pages (any album or artist, not just the
+//!   playing one): `library_album_by_id({ albumId })` and `library_artist_by_id({ performerId })`
+//!   (the Core's durable ids, as Roon's log names its pages) give a card with
+//!   a handle; `library_album_card({ handle })` / `library_artist_card({ handle })`
+//!   read a card again; `library_artist_albums_for({ handle, zoneId? })` is the
+//!   discography of any artist; `library_search({ query })` is Roon's own
+//!   search (artists, albums, tracks with handles); `library_play_album({ zoneId, handle })`
+//!   plays an album now. The album track commands above take any album handle.
 //!
 //! The connection follows the paired Core: it opens once the Core is
 //! connected and its address is known, closes when the Core is lost or the
@@ -41,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumTrack, ArtistAlbum, ClientOptions, LibraryClient, LibraryError, LibraryEvent, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumTrack, ArtistAlbum, ArtistCard, ClientOptions, LibraryClient, LibraryError, LibraryEvent, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -462,6 +470,66 @@ pub async fn library_play_track(app: AppHandle, zone_id: String, handle: String)
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.play_track(&zone_id, &handle).await.map_err(describe)
+}
+
+// --- Wrapped pages ---
+
+/// An album by the Core's album id, as a card with a session handle.
+#[tauri::command]
+pub async fn library_album_by_id(app: AppHandle, album_id: u64) -> Result<AlbumCard, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.album_by_id(album_id).await.map_err(describe)
+}
+
+/// An artist by the Core's performer id, as a card with a session handle.
+#[tauri::command]
+pub async fn library_artist_by_id(app: AppHandle, performer_id: u64) -> Result<ArtistCard, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.artist_by_id(performer_id).await.map_err(describe)
+}
+
+/// An album card again, by handle (its heart / library state may have changed).
+#[tauri::command]
+pub fn library_album_card(library: State<'_, Library>, handle: String) -> Result<AlbumCard, String> {
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.album_card(&handle).ok_or_else(|| "That album is no longer known (the link reconnected).".to_string())
+}
+
+/// An artist card again, by handle.
+#[tauri::command]
+pub fn library_artist_card(library: State<'_, Library>, handle: String) -> Result<ArtistCard, String> {
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.artist_card(&handle).ok_or_else(|| "That artist is no longer known (the link reconnected).".to_string())
+}
+
+/// Any artist's discography (by the artist's handle), each album with a handle.
+#[tauri::command]
+pub async fn library_artist_albums_for(app: AppHandle, handle: String, zone_id: Option<String>) -> Result<Vec<ArtistAlbum>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.artist_albums_for(&handle, zone_id.as_deref()).await.map_err(describe)
+}
+
+/// Roon's own search: artists, albums and tracks, with handles.
+#[tauri::command]
+pub async fn library_search(app: AppHandle, query: String) -> Result<SearchHits, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Ok(SearchHits { query, ..Default::default() });
+    }
+    client.search(&query, 60).await.map_err(describe)
+}
+
+/// Plays an album (by handle) on the zone right now.
+#[tauri::command]
+pub async fn library_play_album(app: AppHandle, zone_id: String, handle: String) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.play_album(&zone_id, &handle).await.map_err(describe)
 }
 
 fn add_mode(app: &AppHandle) -> AddMode {

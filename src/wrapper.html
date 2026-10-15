@@ -362,6 +362,42 @@
 
       <!-- Zone picker dropdown: filled and positioned by wrapper.js -->
       <div id="zone-menu" class="zone-menu" hidden></div>
+
+      <!-- Wrapped: the button over Roon's logo (top-left of its sidebar),
+           its menu, and the page over Roon's content area. All three are
+           covers (wrapper.js tells wrapper.rs to keep them part of the
+           window); wrapper.js places them by Roon's sidebar. -->
+      <div id="wrapped-btn" class="wrapped-btn" hidden>
+        <button id="wrapped-open" class="wrapped-open" title="Open Wrapped">Wrapped</button>
+        <button id="wrapped-arrow" class="wrapped-arrow" title="Wrapped menu">
+          <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+      <!-- The same, in Roon's content header: opens Roon's current album or
+           artist in Wrapped, and stands in for the sidebar button while the
+           sidebar is collapsed -->
+      <div id="wrapped-page-btn" class="wrapped-page-btn" hidden>
+        <button id="wrapped-page-open" class="wrapped-page-open">Wrapped</button>
+        <button id="wrapped-page-arrow" class="wrapped-page-arrow" title="Wrapped menu">
+          <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+        </button>
+      </div>
+      <div id="wrapped-menu" class="wrapped-menu" hidden></div>
+      <section id="wrapped" class="wrapped" hidden>
+        <div class="wrapped-head">
+          <button id="wrapped-back" class="icon-btn" title="Back" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+          <div class="wrapped-heading">
+            <div id="wrapped-title" class="wrapped-title">Wrapped</div>
+            <div id="wrapped-sub" class="wrapped-sub" hidden></div>
+          </div>
+          <button id="wrapped-close" class="icon-btn" title="Close">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <div id="wrapped-body" class="wrapped-body"></div>
+      </section>
     </div>
   </body>
 </html>

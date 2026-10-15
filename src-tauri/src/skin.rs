@@ -100,6 +100,19 @@ pub fn prime(pixels: &[u8], width: i32, height: i32) {
     imp::prime(pixels, width, height);
 }
 
+/// Roon's sidebar as last seen: its width (real pixels from the hole's left
+/// edge) and Roon's own sidebar grey (RGB), or None while Roon has it
+/// collapsed or it hasn't been seen yet. The Wrapper page lays its Wrapped
+/// button and page out by the width, and draws the button in Roon's colors
+/// (the filter recolors it along with the sidebar).
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn sidebar() -> Option<(i32, [u8; 3])> {
+    #[cfg(windows)]
+    return imp::sidebar();
+    #[cfg(not(windows))]
+    None
+}
+
 #[cfg(windows)]
 mod imp {
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, Ordering};
@@ -198,6 +211,10 @@ mod imp {
     static PRIMED: Mutex<Option<(Sidebar, std::time::Instant)>> = Mutex::new(None);
     /// How long a primed sidebar stays good.
     const PRIMED_FOR: std::time::Duration = std::time::Duration::from_secs(2);
+
+    pub fn sidebar() -> Option<(i32, [u8; 3])> {
+        *SIDEBAR.lock().unwrap()
+    }
 
     pub fn prime(pixels: &[u8], width: i32, height: i32) {
         if width < 200 || height < 100 || pixels.len() < (width * height * 4) as usize {

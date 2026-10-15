@@ -1966,3 +1966,617 @@ html.invert-colors {
   color: var(--accent);
   font-weight: 600;
 }
+
+/* ----- Wrapped ----- */
+
+/* The button over Roon's logo (wrapper.js places it): a split button, the
+   name opens the page, the arrow the menu. Its rounded corners are cut
+   from the window too (see reportHole), so Roon shows around them. Under
+   the sidebar filter (see wrapper.js) it's drawn in Roon's colors (the
+   --roon-* variables) and comes out in ours; with Roon's sidebar collapsed
+   there's no filter and it's in ours to begin with. */
+.wrapped-btn {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: stretch;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.wrapped-btn[hidden] {
+  display: none;
+}
+
+.wrapped-open,
+.wrapped-arrow {
+  display: flex;
+  align-items: center;
+}
+
+.wrapped-open {
+  padding: 0 6px 0 10px;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.wrapped-arrow {
+  padding: 0 7px 0 4px;
+  color: var(--muted);
+}
+
+.wrapped-open:hover,
+.wrapped-arrow:hover,
+.wrapped-btn.on .wrapped-arrow {
+  background: var(--hover);
+}
+
+.wrapped-btn.through-filter {
+  background: var(--roon-bg);
+  color: var(--roon-bright);
+}
+
+.wrapped-btn.through-filter .wrapped-arrow {
+  color: var(--roon-text);
+}
+
+.wrapped-btn.through-filter .wrapped-open:hover,
+.wrapped-btn.through-filter .wrapped-arrow:hover,
+.wrapped-btn.through-filter.on .wrapped-arrow {
+  background: var(--roon-hover);
+}
+
+.wrapped-chevron {
+  width: 15px;
+  height: 15px;
+  transition: transform 0.15s;
+}
+
+.wrapped-btn.on .wrapped-chevron {
+  transform: rotate(180deg);
+}
+
+/* The content-header button: outlined in the accent, on Roon's own
+   background (no filter there), rounded corners cut from the window too */
+.wrapped-page-btn {
+  position: absolute;
+  z-index: 6;
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--border);
+  /* Square: the window's cut-out for it has hard edges, and a rounded one
+     left a fringe around the corners (see reportHole) */
+  border-radius: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.wrapped-page-btn[hidden] {
+  display: none;
+}
+
+.wrapped-page-open,
+.wrapped-page-arrow {
+  display: flex;
+  align-items: center;
+}
+
+.wrapped-page-open {
+  padding: 0 8px 0 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.wrapped-page-arrow {
+  padding: 0 7px 0 5px;
+  border-left: 1px solid var(--border);
+}
+
+.wrapped-page-open:hover,
+.wrapped-page-arrow:hover,
+.wrapped-page-btn.on .wrapped-page-arrow {
+  background: var(--hover);
+}
+
+.wrapped-page-btn.on .wrapped-chevron {
+  transform: rotate(180deg);
+}
+
+/* The menu: like the zone picker, opening under the button or beside the
+   sidebar (wrapper.js places it) */
+.wrapped-menu {
+  position: fixed;
+  z-index: 10;
+  min-width: 200px;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.wrapped-menu[hidden] {
+  display: none;
+}
+
+.wrapped-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.wrapped-option:hover {
+  background: var(--hover);
+}
+
+.wrapped-option svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  color: var(--muted);
+}
+
+.wrapped-option.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.wrapped-option.selected svg {
+  color: var(--accent);
+}
+
+/* The page: over Roon's content area, right of its sidebar (wrapper.js sets
+   the left edge), between the title bar and the player bar; under Now
+   Playing and the queue panel */
+.wrapped {
+  position: absolute;
+  top: 39px;
+  bottom: 109px;
+  right: var(--edge);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+}
+
+.wrapped[hidden] {
+  display: none;
+}
+
+.wrapped-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 12px 10px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped-heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.wrapped-title {
+  font-size: 18px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wrapped-sub {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wrapped-sub[hidden] {
+  display: none;
+}
+
+.wrapped-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px 24px 32px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
+}
+
+.wrapped-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.wrapped-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+  text-align: left;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.wrapped-tile:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--hover);
+}
+
+.wrapped-tile:disabled {
+  opacity: 0.6;
+}
+
+.wrapped-tile-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.wrapped-tile-text {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.wrapped-note {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 12px 0;
+}
+
+.wrapped-search {
+  width: 100%;
+  max-width: 520px;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+}
+
+/* ----- Wrapped pages: albums, artists, search ----- */
+
+.wrapped-section {
+  margin: 22px 0 10px;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wrapped-section:first-child {
+  margin-top: 4px;
+}
+
+/* Art: the Core's picture, or initials on a tinted square */
+.wrapped-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.wrapped-art.round {
+  border-radius: 50%;
+}
+
+.wrapped-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wrapped-art.small {
+  width: 44px;
+  flex: none;
+  border-radius: 4px;
+}
+
+.wrapped-initials {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  background: color-mix(in srgb, var(--accent) 35%, var(--card));
+  color: var(--on-accent);
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.wrapped-art.small .wrapped-initials {
+  font-size: 13px;
+}
+
+/* Tiles for albums and artists */
+.wrapped-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 18px 14px;
+}
+
+.wrapped-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 8px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.wrapped-card:hover {
+  background: var(--hover);
+}
+
+.wrapped-card.round {
+  align-items: center;
+  text-align: center;
+}
+
+.wrapped-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.wrapped-card-sub {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Album and artist page heads */
+.wrapped-album-head,
+.wrapped-artist-head {
+  display: flex;
+  gap: 28px;
+  align-items: flex-end;
+  margin-bottom: 24px;
+}
+
+.wrapped-album-head .wrapped-art,
+.wrapped-artist-head .wrapped-art {
+  width: 220px;
+  flex: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+.wrapped-artist-head {
+  align-items: center;
+}
+
+.wrapped-artist-head .wrapped-art {
+  width: 180px;
+}
+
+.wrapped-album-info {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.wrapped-album-title {
+  margin: 0;
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1.15;
+}
+
+.wrapped-link {
+  align-self: flex-start;
+  font-size: 15px;
+  color: var(--text);
+}
+
+.wrapped-link:hover:not(:disabled) {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.wrapped-link:disabled {
+  opacity: 1;
+  cursor: default;
+}
+
+.wrapped-facts {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.wrapped-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.wrapped-play {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px 0 12px;
+  margin-right: 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wrapped-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wrapped-play:hover {
+  filter: brightness(1.1);
+}
+
+.wrapped-button {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+
+.wrapped-button:hover {
+  border-color: var(--accent);
+}
+
+/* The Wrapped radio mark (greyed until the radio step) */
+.wrapped-radio {
+  color: var(--muted);
+}
+
+.wrapped-radio:disabled {
+  opacity: 0.3;
+}
+
+/* Track rows: play, radio, number, title, heart, length */
+.wrapped-tracks {
+  display: flex;
+  flex-direction: column;
+}
+
+.wrapped-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 48px;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped-track:hover {
+  background: var(--hover);
+}
+
+.wrapped-track.playing .wrapped-track-title,
+.wrapped-track.playing .wrapped-track-number {
+  color: var(--accent);
+}
+
+.wrapped-track-play {
+  color: var(--accent);
+}
+
+.wrapped-track-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wrapped-track-number {
+  width: 28px;
+  flex: none;
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.wrapped-track-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wrapped-track-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 0 8px;
+}
+
+.wrapped-track-text .wrapped-track-title {
+  flex: none;
+  padding: 0;
+}
+
+.wrapped-track-text.link {
+  cursor: pointer;
+}
+
+.wrapped-track-text.link:hover .wrapped-track-title {
+  color: var(--accent);
+}
+
+.wrapped-track-sub {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wrapped-track .library {
+  width: 34px;
+  height: 34px;
+  display: grid;
+}
+
+.wrapped-track-length {
+  width: 50px;
+  flex: none;
+  text-align: right;
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  padding-right: 6px;
+}
+
+.wrapped-results {
+  margin-top: 16px;
+}
+
+.wrapped-note.error {
+  color: var(--warn);
+}
+
+.wrapped-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}

@@ -20,7 +20,11 @@
 //!   button, and the foreground hook in wrapper.rs puts the button back
 //!   above it, again a moment later (Windows can finish raising Roon after
 //!   telling us it came to the front, which left the button under Roon
-//!   until Roon moved).
+//!   until Roon moved). While Roon is the active window the button is
+//!   always-on-top instead: Windows doesn't let another program put a
+//!   window above the active one (it lands right under it, which hid the
+//!   button on every click until Roon moved); it drops back to an ordinary
+//!   window right above Roon when something else comes to the front.
 //!
 //! Hidden while Roon is minimized, on another virtual desktop, full screen
 //! (no title bar), or too narrow for the button to stay clear of its title.
@@ -90,6 +94,10 @@ pub(super) fn on_foreground(window: HWND) {
         && wrapper::is_roon_main_window(window)
     {
         attach(app, window);
+    } else if ROON.load(Ordering::Relaxed) != 0 {
+        // Something else came to the front: the button stops being
+        // always-on-top and goes back to just above Roon (under that window)
+        place(app);
     }
 }
 
@@ -276,15 +284,42 @@ fn is_cloaked(hwnd: HWND) -> bool {
 }
 
 /// Shows the button at `rect`, directly above Roon, without taking focus.
+/// While Roon is the active window the button is always-on-top (see the
+/// module doc); otherwise it's an ordinary window right above Roon.
 fn show_above(button: HWND, roon: HWND, (x, y, w, h): (i32, i32, i32, i32)) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindow, GetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GW_HWNDPREV, HWND_TOP,
-        SWP_NOACTIVATE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_EX_TOPMOST,
+        GetForegroundWindow, GetWindow, GetWindowLongPtrW, SetWindowPos, GWL_EXSTYLE, GW_HWNDPREV,
+        HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, WS_EX_TOPMOST,
     };
     // SAFETY: plain window queries and a move on valid handles.
     unsafe {
+        // Never waiting on another window's thread for the move (Roon may be
+        // in the middle of its own drag)
+        let topmost_now = GetWindowLongPtrW(button, GWL_EXSTYLE) & WS_EX_TOPMOST.0 as isize != 0;
+        if GetForegroundWindow() == roon {
+            // Only moved once it's already on top and showing: no stacking
+            // change on every step of Roon's drag
+            let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS;
+            if topmost_now && wrapper::is_visible(button) {
+                flags |= SWP_NOZORDER;
+            }
+            let _ = SetWindowPos(button, Some(HWND_TOPMOST), x, y, w, h, flags);
+            return;
+        }
+        if topmost_now {
+            let _ = SetWindowPos(
+                button,
+                Some(HWND_NOTOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE | SWP_ASYNCWINDOWPOS,
+            );
+        }
         let above = GetWindow(roon, GW_HWNDPREV).ok().filter(|w| !w.is_invalid());
-        let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+        let mut flags = SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS;
         // Under whatever is right above Roon, which puts it right above
         // Roon; at the top when nothing is (or only always-on-top windows)
         let after = match above {

@@ -138,6 +138,15 @@ pub struct WrapperStatus {
     /// Roon couldn't be started after a few tries: the page says so,
     /// large, or opens Now Playing if there's a zone to show.
     pub roon_lost: bool,
+    /// How wide Roon's sidebar is right now (real pixels from the hole's
+    /// left edge, as skin.rs measures it), or null while it's collapsed or
+    /// not known yet. The page puts its Wrapped button and page by it.
+    pub sidebar: Option<i32>,
+    /// Roon's own sidebar grey (RGB), with `sidebar`. The page draws its
+    /// Wrapped button in Roon's colors: the sidebar filter (skin.rs) lies
+    /// over that part of the hole and recolors everything under it, the
+    /// button included, so drawn like Roon's sidebar it comes out in ours.
+    pub sidebar_color: Option<[u8; 3]>,
 }
 
 /// Whether the Wrapper is switched on in Settings.
@@ -148,7 +157,9 @@ pub fn enabled(app: &AppHandle) -> bool {
 /// Called by the page with the hole's rectangle in CSS pixels, relative to
 /// the page (which fills the window's client area), whenever it changes;
 /// `covers` are the page's own panels and menus over the hole ([x, y,
-/// width, height] each), which stay part of the window.
+/// width, height] each), which stay part of the window; `radii`, one per
+/// cover (0 or missing = square), round a cover's corners, so what's
+/// outside them is Roon, not the page's background.
 #[tauri::command]
 pub fn wrapper_hole(
     app: AppHandle,
@@ -157,11 +168,17 @@ pub fn wrapper_hole(
     width: f64,
     height: f64,
     covers: Option<Vec<[f64; 4]>>,
+    radii: Option<Vec<f64>>,
 ) {
     #[cfg(windows)]
-    windows_wrapper::set_hole(&app, [x, y, width, height], covers.unwrap_or_default());
+    windows_wrapper::set_hole(
+        &app,
+        [x, y, width, height],
+        covers.unwrap_or_default(),
+        radii.unwrap_or_default(),
+    );
     #[cfg(not(windows))]
-    let _ = (app, x, y, width, height, covers);
+    let _ = (app, x, y, width, height, covers, radii);
 }
 
 #[tauri::command]
@@ -394,6 +411,8 @@ mod windows_wrapper {
     struct Hole {
         rect: [f64; 4],
         covers: Vec<[f64; 4]>,
+        /// Corner radius per cover (CSS px; 0 = square)
+        radii: Vec<f64>,
     }
     static HOLE: Mutex<Option<Hole>> = Mutex::new(None);
 
@@ -566,6 +585,8 @@ mod windows_wrapper {
             roon_found: roon_window().is_some(),
             note: NOTE.lock().unwrap().clone(),
             roon_lost: ROON_LOST.load(Ordering::Relaxed),
+            sidebar: crate::skin::sidebar().map(|(width, _)| width),
+            sidebar_color: crate::skin::sidebar().map(|(_, color)| color),
         }
     }
 
@@ -655,8 +676,8 @@ mod windows_wrapper {
         sync(app);
     }
 
-    pub fn set_hole(app: &AppHandle, rect: [f64; 4], covers: Vec<[f64; 4]>) {
-        *HOLE.lock().unwrap() = Some(Hole { rect, covers });
+    pub fn set_hole(app: &AppHandle, rect: [f64; 4], covers: Vec<[f64; 4]>, radii: Vec<f64>) {
+        *HOLE.lock().unwrap() = Some(Hole { rect, covers, radii });
         sync(app);
     }
 
@@ -910,12 +931,15 @@ mod windows_wrapper {
                 (r[3] * scale).round() as i32,
             ]
         };
-        let (hole, covers) = {
+        let (hole, covers, radii) = {
             let guard = HOLE.lock().unwrap();
             let Some(saved) = guard.as_ref() else {
                 return;
             };
-            (to_window(&saved.rect), saved.covers.iter().map(to_window).collect::<Vec<_>>())
+            let radii: Vec<i32> = (0..saved.covers.len())
+                .map(|i| (saved.radii.get(i).copied().unwrap_or(0.0) * scale).round() as i32)
+                .collect();
+            (to_window(&saved.rect), saved.covers.iter().map(to_window).collect::<Vec<_>>(), radii)
         };
         let hole_on_screen = (host_rect.0 + hole[0], host_rect.1 + hole[1], hole[2], hole[3]);
 
@@ -953,6 +977,7 @@ mod windows_wrapper {
             for cover in &covers {
                 region_key.extend_from_slice(cover);
             }
+            region_key.extend_from_slice(&radii);
         }
         // The lock is let go before the region is set: from the sync loop,
         // SetWindowRgn waits for the main thread, which may be in here too
@@ -966,7 +991,7 @@ mod windows_wrapper {
             changed
         };
         if region_changed {
-            set_region(host, bounds, open_hole.then_some(hole), &covers);
+            set_region(host, bounds, open_hole.then_some(hole), &covers, &radii);
         }
         // A drag just ended: the hole is back, so the live pictures that
         // stood in for Roon can go (after the next screen refresh, so the
@@ -1341,9 +1366,10 @@ mod windows_wrapper {
         bounds: [i32; 4],
         hole: Option<[i32; 4]>,
         covers: &[[i32; 4]],
+        radii: &[i32],
     ) {
         use windows::Win32::Graphics::Gdi::{
-            CombineRgn, CreateRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
+            CombineRgn, CreateRectRgn, CreateRoundRectRgn, DeleteObject, SetWindowRgn, RGN_DIFF,
         };
         // SAFETY: GDI calls on regions we just made; the window takes
         // ownership of the final region in SetWindowRgn.
@@ -1352,8 +1378,14 @@ mod windows_wrapper {
             let whole = CreateRectRgn(x, y, x + w, y + h);
             if let Some(hole) = hole {
                 let cut = CreateRectRgn(hole[0], hole[1], hole[0] + hole[2], hole[1] + hole[3]);
-                for c in covers {
-                    let cover = CreateRectRgn(c[0], c[1], c[0] + c[2], c[1] + c[3]);
+                for (i, c) in covers.iter().enumerate() {
+                    let radius = radii.get(i).copied().unwrap_or(0);
+                    let cover = if radius > 0 {
+                        // The round-rect region's right/bottom edges are exclusive too
+                        CreateRoundRectRgn(c[0], c[1], c[0] + c[2], c[1] + c[3], radius * 2, radius * 2)
+                    } else {
+                        CreateRectRgn(c[0], c[1], c[0] + c[2], c[1] + c[3])
+                    };
                     let _ = CombineRgn(Some(cut), Some(cut), Some(cover), RGN_DIFF);
                     let _ = DeleteObject(cover.into());
                 }
@@ -1927,7 +1959,7 @@ mod windows_wrapper {
 
         // Close the hole (the next sync pass after the drag opens it again)
         let bounds = [origin.x - host_rect.0, origin.y - host_rect.1, client_w, client_h];
-        set_region(host, bounds, None, &[]);
+        set_region(host, bounds, None, &[], &[]);
         *LAST_REGION.lock().unwrap() = None;
         // Roon waits off the screen, still showing (so its live picture
         // keeps working), without waiting on it
