@@ -48,19 +48,15 @@
 //! Roon has a minimum window size of its own. The Wrapper's minimum is
 //! tauri.conf.json's, raised once to what Roon's minimum needs (plus our
 //! bars around the hole), so Roon never hangs out below or beside it. It's
-//! worked out from Roon's measured minimum, not learned along the way: a
-//! minimum that kept growing during resizes limited the Wrapper too early,
-//! and changing it mid-resize could lock the app up.
+//! worked out from Roon's known minimum (ROON_MIN_CLIENT, a fixed fact
+//! about Roon), not learned along the way: a minimum that kept growing
+//! during resizes limited the Wrapper too early, and changing it mid-resize
+//! could lock the app up.
 //!
 //! Roon's window loses its resize borders (WS_THICKFRAME) while it's in
 //! the Wrapper. Otherwise its invisible borders, a few pixels outside what
 //! it draws, poke out past the Wrapper's edges, and grabbing there would
 //! resize Roon instead of the Wrapper. They come back with "Return Roon".
-//!
-//! Roon's minimum size is measured when it's taken in (asked to be 1 x 1
-//! while hidden, it stops at its minimum; its resize borders are put back
-//! for that moment if they're gone), so the Wrapper's own minimum is big
-//! enough from the start.
 //!
 //! The size the Wrapper is left at is remembered in logical pixels
 //! (settings, `wrapperSize`) and put back once it's on screen: the saved
@@ -374,9 +370,10 @@ mod windows_wrapper {
     /// on Roon 2.x.
     const ROON_BOTTOM_BAR: f64 = 104.0;
 
-    // Roon's width is always exactly the hole's: Roon collapses its sidebar
-    // below about 1400 logical px, so the Wrapper's minimum width in
-    // tauri.conf.json (1440) keeps the hole wide enough.
+    // Roon's width is always exactly the hole's. Roon collapses its sidebar
+    // below about 1400 logical px; that's allowed (the hamburger button
+    // brings it back), so the Wrapper's minimum width is only what Roon's
+    // own minimum needs (ROON_MIN_CLIENT plus our edges, see fit_minimum).
 
 
     /// After the last resize step: how long the hole stays closed, then how
@@ -499,10 +496,16 @@ mod windows_wrapper {
     /// Roon's window style before we took its resize borders (0 = not
     /// changed).
     static ROON_STYLE: AtomicIsize = AtomicIsize::new(0);
-    /// The smallest client area Roon allows, measured when it's taken in,
-    /// in logical pixels: in real pixels it depends on the screen's scaling,
-    /// so it's worked out again for whichever screen the Wrapper is on.
-    static ROON_MIN_CLIENT: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+    /// The smallest client area Roon allows, in logical pixels (measured
+    /// on Roon 2.x at 100% scaling: a 760 x 783 window, 744 x 744 inside).
+    /// A fixed fact about Roon, like ROON_BOTTOM_BAR: it used to be measured
+    /// by shrinking Roon's window when it was taken in, but that came back
+    /// wrong or not at all (Roon sets its minimum a moment after its window
+    /// exists; a Roon parked by an earlier run wasn't re-measured), and the
+    /// Wrapper then let itself be made smaller than Roon, with Roon hanging
+    /// out below. In real pixels it depends on the screen's scaling, so
+    /// it's worked out again for whichever screen the Wrapper is on.
+    const ROON_MIN_CLIENT: (f64, f64) = (744.0, 744.0);
 
     /// Every font family Windows knows, once each, sorted; the "@" ones
     /// (vertical versions of East Asian fonts) left out.
@@ -951,13 +954,19 @@ mod windows_wrapper {
                 region_key.extend_from_slice(cover);
             }
         }
-        {
+        // The lock is let go before the region is set: from the sync loop,
+        // SetWindowRgn waits for the main thread, which may be in here too
+        // (a resize) waiting for this lock, and that locked the app up.
+        let region_changed = {
             let mut last = LAST_REGION.lock().unwrap();
-            if last.as_ref() != Some(&region_key) {
-                let hole = open_hole.then_some(hole);
-                set_region(host, bounds, hole, &covers);
+            let changed = last.as_ref() != Some(&region_key);
+            if changed {
                 *last = Some(region_key);
             }
+            changed
+        };
+        if region_changed {
+            set_region(host, bounds, open_hole.then_some(hole), &covers);
         }
         // A drag just ended: the hole is back, so the live pictures that
         // stood in for Roon can go (after the next screen refresh, so the
@@ -981,15 +990,17 @@ mod windows_wrapper {
             fit_minimum(&window, scale, (client_w, client_h), (hole.2, hole.3));
         }
 
-        // Being resized: Roon waits hidden until it stops
+        // Being resized: Roon waits hidden until it stops. Without waiting
+        // on Roon: this runs on the main thread during a resize, and Roon
+        // may be waiting on us just then
         if resizing {
-            hide(roon);
+            hide_async(roon);
             return;
         }
 
         // We're minimized or hidden: Roon waits out of sight
         if is_minimized(host) || !is_visible(host) {
-            hide(roon);
+            hide_async(roon);
             return;
         }
         // Roon got minimized on its own (Win+D, "minimize all"): bring it
@@ -1072,10 +1083,7 @@ mod windows_wrapper {
     /// for the same lock: that locked the app up).
     fn fit_minimum(window: &tauri::WebviewWindow, scale: f64, client: (i32, i32), hole: (i32, i32)) {
         use tauri::{LogicalSize, Size};
-        let roon_min = *ROON_MIN_CLIENT.lock().unwrap();
-        let Some((roon_w, roon_h)) = roon_min else {
-            return;
-        };
+        let (roon_w, roon_h) = ROON_MIN_CLIENT;
         if hole.0 <= 0 || hole.1 <= 0 {
             return;
         }
@@ -1499,7 +1507,6 @@ mod windows_wrapper {
         *ROON_RESTORE.lock().unwrap() = if ours { None } else { window_rect(roon) };
         restore_if_maximized(roon);
         hide(roon);
-        measure_minimum(roon);
         remove_resize_borders(roon);
         // SAFETY: style queries and changes on a valid window handle.
         unsafe {
@@ -1510,47 +1517,6 @@ mod windows_wrapper {
             let tool = (exstyle | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
             if tool != exstyle {
                 SetWindowLongPtrW(roon, GWL_EXSTYLE, tool);
-            }
-        }
-    }
-
-    /// Finds the smallest client area Roon allows: asked to be 1 x 1 (it's
-    /// hidden), it stops at its minimum. Windows only applies that minimum
-    /// while Roon has its resize borders, so a Roon we already took them
-    /// from (parked in an earlier run) gets them back for the moment.
-    fn measure_minimum(roon: HWND) {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            GetWindowLongPtrW, SetWindowLongPtrW, SetWindowPos, GWL_STYLE, SWP_FRAMECHANGED, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, WS_THICKFRAME,
-        };
-        // SAFETY: style queries and changes, and a resize, of a valid, hidden window.
-        let size = unsafe {
-            let style = GetWindowLongPtrW(roon, GWL_STYLE);
-            let borrowed = style as u32 & WS_THICKFRAME.0 == 0;
-            if borrowed {
-                SetWindowLongPtrW(roon, GWL_STYLE, style | WS_THICKFRAME.0 as isize);
-                let _ = SetWindowPos(roon, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            }
-            let _ = SetWindowPos(roon, None, 0, 0, 1, 1, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-            let size = client_size(roon);
-            if borrowed {
-                SetWindowLongPtrW(roon, GWL_STYLE, style);
-                let _ = SetWindowPos(roon, None, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
-            }
-            size
-        };
-        if let Some((w, h)) = size {
-            if w > 50 && h > 50 {
-                // The scaling of the screen Roon is on (the Wrapper's, if
-                // Roon is somewhere off screen)
-                let app = APP.get();
-                let scale = app
-                    .zip(window_rect(roon))
-                    .and_then(|(app, (x, y, _, _))| app.monitor_from_point(x as f64 + 1.0, y as f64 + 1.0).ok().flatten())
-                    .map(|monitor| monitor.scale_factor())
-                    .or_else(|| app?.get_webview_window(WRAPPER_WINDOW)?.scale_factor().ok())
-                    .unwrap_or(1.0);
-                *ROON_MIN_CLIENT.lock().unwrap() = Some((w as f64 / scale, h as f64 / scale));
             }
         }
     }
@@ -1692,6 +1658,19 @@ mod windows_wrapper {
             // SAFETY: a valid window handle.
             unsafe {
                 let _ = ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+    }
+
+    /// Like `hide`, but without waiting for the window's thread to do it
+    /// (ShowWindowAsync): safe from the main thread, which must never wait
+    /// on Roon.
+    fn hide_async(hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindowAsync, SW_HIDE};
+        if is_visible(hwnd) {
+            // SAFETY: a valid window handle.
+            unsafe {
+                let _ = ShowWindowAsync(hwnd, SW_HIDE);
             }
         }
     }

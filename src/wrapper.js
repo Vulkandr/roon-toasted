@@ -1018,6 +1018,11 @@ function barChanged(slider) {
 }
 
 new ResizeObserver(layoutStage).observe(stageCanvas);
+// In the player bar the sliders stretch with the window (narrow windows
+// shorten them), and the canvas behind a drawn bar has to follow
+new ResizeObserver(() => {
+  if (stage.hidden) fitWaves();
+}).observe($(".player"));
 
 // A layout from Settings or a profile: each piece's saved values over the
 // defaults, so pieces or fields added later just get theirs

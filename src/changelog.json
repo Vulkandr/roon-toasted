@@ -1,5 +1,25 @@
 [
   {
+    "version": "1.2.1",
+    "date": "2026-10-15",
+    "sections": [
+      {
+        "title": "Fixes",
+        "items": [
+          ["Wrapper freezing", "Resizing the Wrapper could lock it up (Not Responding, tray menu dead, force close needed). Two parts of Toasted were waiting on each other; they no longer can."],
+          ["Wrapper too small", "The Wrapper could be made shorter than Roon's own minimum, leaving Roon hanging out below the player bar. It now stops at a size that fits Roon."],
+          ["Play greyed out", "After a PC restart the zone could show as not ready (play greyed out, Fixed volume, 0:00) until Roon's next change. Zone updates from Roon that carry several changes at once are now read in full."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["Narrower Wrapper", "The Wrapper can go down to about 760 px wide now (Roon folds its sidebar away below about 1400, the hamburger button brings it back). The player bar's seek and volume bars shorten to fit; text, icons and art stay the same."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.2.0",
     "date": "2026-10-13",
     "sections": [

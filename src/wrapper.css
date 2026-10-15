@@ -94,6 +94,9 @@ button:disabled {
    maximized */
 .panel {
   --edge: 7px; /* frame left and right of Roon, where the resize borders are */
+  /* The player bar's narrow rules go by this width (a container query
+     can only look at an ancestor, not at the bar itself) */
+  container: panel / inline-size;
   position: relative;
   display: flex;
   flex-direction: column;
@@ -1437,6 +1440,10 @@ input[type="range"] {
   appearance: none;
   flex: 1;
   min-width: 0;
+  /* No width of its own: a slider is 129 px by default and, in the player
+     bar's rows, never shrank below that (so the volume's dB value was
+     pushed off the right edge). From 0 it grows to the room it gets. */
+  width: 0;
   height: 4px;
   margin: 8px 0;
   border-radius: 2px;
@@ -1457,6 +1464,28 @@ input[type="range"]::-webkit-slider-thumb {
 input[type="range"]:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+/* ----- Narrow player bar -----
+   The three columns can't go below 200 / 320 / 200 px (784 with the gaps
+   and padding), and the Wrapper can be narrower than that now (Roon's
+   sidebar is allowed to collapse). Then the right column was pushed off
+   the window, zone button and all. Below ~900 px the columns may shrink
+   to what their fixed parts need (art and text, the transport buttons,
+   mute and the level), and the seek and volume sliders, which stretch to
+   fill, give up the width instead. Text, icons and art stay the same
+   size. A container query on the panel, so this follows the window's
+   width, whatever else is going on. */
+@container panel (max-width: 900px) {
+  .player {
+    grid-template-columns: minmax(110px, 1fr) minmax(352px, 2fr) minmax(140px, 1fr);
+    gap: 10px;
+    padding: 0 10px;
+  }
+
+  .volume-value {
+    min-width: 36px;
+  }
 }
 
 /* Zone and volume */

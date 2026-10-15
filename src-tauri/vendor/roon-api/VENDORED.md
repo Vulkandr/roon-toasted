@@ -30,6 +30,13 @@ see LICENSE-APACHE).
    retrying the address it first connected to forever, so a Core that got a
    new IP address (DHCP, a router change) was never found again until the app
    restarted. A waiting reconnect tries a new address right away.
+6. `src/transport.rs`, zone and output subscriptions: every key of a
+   "Changed" message is read (removed, then added, then changed, then seek
+   positions), like RoonLabs' node-roon-api-transport. The published version
+   stops at the first key it finds, so when Roon sent, say, a zone removed and
+   a zone added in one message, the removal was lost and the old zone stayed.
+   Lists are also read one item at a time, so one item that doesn't parse is
+   skipped and logged instead of dropping the whole update.
 
 If a future roon-api release includes these fixes (and anything added below),
 remove this folder and the `[patch.crates-io]` entry and go back to the

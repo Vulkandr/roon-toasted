@@ -185,11 +185,12 @@ impl Transport {
                 if msg.verb == MooVerb::Complete {
                     break;
                 }
-                if let Some(body) = msg.json_body()
-                    && let Some(event) = parse_zone_event(&msg.name, body)
-                    && tx.send(event).await.is_err()
-                {
-                    break;
+                let Some(body) = msg.json_body() else { continue };
+                // One message can carry several kinds of change at once.
+                for event in parse_zone_events(&msg.name, body) {
+                    if tx.send(event).await.is_err() {
+                        return;
+                    }
                 }
             }
         });
@@ -214,11 +215,11 @@ impl Transport {
                 if msg.verb == MooVerb::Complete {
                     break;
                 }
-                if let Some(body) = msg.json_body()
-                    && let Some(event) = parse_output_event(&msg.name, body)
-                    && tx.send(event).await.is_err()
-                {
-                    break;
+                let Some(body) = msg.json_body() else { continue };
+                for event in parse_output_events(&msg.name, body) {
+                    if tx.send(event).await.is_err() {
+                        return;
+                    }
                 }
             }
         });
@@ -544,56 +545,66 @@ impl Transport {
     }
 }
 
-fn parse_zone_event(status: &str, body: &serde_json::Value) -> Option<ZoneEvent> {
-    match status {
-        "Subscribed" => {
-            let zones: Vec<Zone> = serde_json::from_value(body["zones"].clone()).ok()?;
-            Some(ZoneEvent::Initial(zones))
-        }
-        "Changed" => {
-            if let Some(zones) = body.get("zones_changed") {
-                let zones: Vec<Zone> = serde_json::from_value(zones.clone()).ok()?;
-                return Some(ZoneEvent::Changed(zones));
+/// Reads a list from a Roon message one item at a time, so one item that
+/// doesn't parse is skipped (and logged) instead of losing the whole update.
+fn parse_list<T: serde::de::DeserializeOwned>(value: Option<&serde_json::Value>, what: &str) -> Vec<T> {
+    let Some(items) = value.and_then(|v| v.as_array()) else {
+        return Vec::new();
+    };
+    items
+        .iter()
+        .filter_map(|item| match serde_json::from_value(item.clone()) {
+            Ok(parsed) => Some(parsed),
+            Err(e) => {
+                eprintln!("[roon-api] skipped a {what} Roon sent: {e}");
+                None
             }
-            if let Some(zones) = body.get("zones_added") {
-                let zones: Vec<Zone> = serde_json::from_value(zones.clone()).ok()?;
-                return Some(ZoneEvent::Added(zones));
-            }
-            if let Some(zones) = body.get("zones_removed") {
-                let ids: Vec<String> = serde_json::from_value(zones.clone()).ok()?;
-                return Some(ZoneEvent::Removed(ids));
-            }
-            if let Some(zones) = body.get("zones_seek_changed") {
-                let seeks: Vec<ZoneSeek> = serde_json::from_value(zones.clone()).ok()?;
-                return Some(ZoneEvent::Seeked(seeks));
-            }
-            None
-        }
-        _ => None,
-    }
+        })
+        .collect()
 }
 
-fn parse_output_event(status: &str, body: &serde_json::Value) -> Option<OutputEvent> {
+/// Roon can put several changes in one "Changed" message (for example a zone
+/// removed and another added, or a zone change plus seek positions), so every
+/// key is read, removals first, like RoonLabs' node-roon-api-transport.
+fn parse_zone_events(status: &str, body: &serde_json::Value) -> Vec<ZoneEvent> {
+    let mut events = Vec::new();
     match status {
-        "Subscribed" => {
-            let outputs: Vec<Output> = serde_json::from_value(body["outputs"].clone()).ok()?;
-            Some(OutputEvent::Initial(outputs))
-        }
+        "Subscribed" => events.push(ZoneEvent::Initial(parse_list(body.get("zones"), "zone"))),
         "Changed" => {
-            if let Some(outputs) = body.get("outputs_changed") {
-                let outputs: Vec<Output> = serde_json::from_value(outputs.clone()).ok()?;
-                return Some(OutputEvent::Changed(outputs));
+            if body.get("zones_removed").is_some() {
+                events.push(ZoneEvent::Removed(parse_list(body.get("zones_removed"), "removed zone id")));
             }
-            if let Some(outputs) = body.get("outputs_added") {
-                let outputs: Vec<Output> = serde_json::from_value(outputs.clone()).ok()?;
-                return Some(OutputEvent::Added(outputs));
+            if body.get("zones_added").is_some() {
+                events.push(ZoneEvent::Added(parse_list(body.get("zones_added"), "added zone")));
             }
-            if let Some(outputs) = body.get("outputs_removed") {
-                let ids: Vec<String> = serde_json::from_value(outputs.clone()).ok()?;
-                return Some(OutputEvent::Removed(ids));
+            if body.get("zones_changed").is_some() {
+                events.push(ZoneEvent::Changed(parse_list(body.get("zones_changed"), "changed zone")));
             }
-            None
+            if body.get("zones_seek_changed").is_some() {
+                events.push(ZoneEvent::Seeked(parse_list(body.get("zones_seek_changed"), "seek position")));
+            }
         }
-        _ => None,
+        _ => {}
     }
+    events
+}
+
+fn parse_output_events(status: &str, body: &serde_json::Value) -> Vec<OutputEvent> {
+    let mut events = Vec::new();
+    match status {
+        "Subscribed" => events.push(OutputEvent::Initial(parse_list(body.get("outputs"), "output"))),
+        "Changed" => {
+            if body.get("outputs_removed").is_some() {
+                events.push(OutputEvent::Removed(parse_list(body.get("outputs_removed"), "removed output id")));
+            }
+            if body.get("outputs_added").is_some() {
+                events.push(OutputEvent::Added(parse_list(body.get("outputs_added"), "added output")));
+            }
+            if body.get("outputs_changed").is_some() {
+                events.push(OutputEvent::Changed(parse_list(body.get("outputs_changed"), "changed output")));
+            }
+        }
+        _ => {}
+    }
+    events
 }
