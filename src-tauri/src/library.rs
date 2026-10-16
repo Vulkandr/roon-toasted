@@ -129,7 +129,7 @@ impl Library {
         self.inner.lock().unwrap().status.clone()
     }
 
-    fn client(&self) -> Option<LibraryClient> {
+    pub(crate) fn client(&self) -> Option<LibraryClient> {
         let inner = self.inner.lock().unwrap();
         inner.client.clone().filter(|c| c.is_connected())
     }

@@ -2505,6 +2505,7 @@ const WRAPPED_ICONS = {
   artist: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
   playlists: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
   history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
 };
@@ -2528,6 +2529,7 @@ function wrappedMenuItems() {
   items.push({ page: "search", label: "Search", icon: "search" });
   items.push({ page: "playlists", label: "Playlists", icon: "playlists" });
   items.push({ page: "history", label: "History", icon: "history" });
+  items.push({ page: "settings", label: "Settings", icon: "settings" });
   if (!wrapped.hidden) items.push({ close: true, label: "Close Wrapped", icon: "close" });
   return items;
 }
@@ -2638,14 +2640,26 @@ function setWrappedOpen(open) {
 function openWrappedPage(entry) {
   const top = wrappedStack.at(-1);
   const same =
-    top && top.page === entry.page && top.albumId === entry.albumId && top.handle === entry.handle && top.name === entry.name;
+    top &&
+    top.page === entry.page &&
+    top.albumId === entry.albumId &&
+    top.handle === entry.handle &&
+    top.name === entry.name &&
+    top.performerId === entry.performerId;
   if (same) {
     if (wrapped.hidden) setWrappedOpen(true);
     return;
   }
   // Home and Search are single: going there again goes back to them
   if (entry.page === "home") wrappedStack = [];
-  wrappedStack.push({ page: entry.page, albumId: entry.albumId, handle: entry.handle, query: entry.query, name: entry.name });
+  wrappedStack.push({
+    page: entry.page,
+    albumId: entry.albumId,
+    performerId: entry.performerId,
+    handle: entry.handle,
+    query: entry.query,
+    name: entry.name,
+  });
   wrapped.hidden = false;
   renderWrapped();
   layoutWrapped();
@@ -2972,12 +2986,15 @@ const WRAPPED_PAGES = {
     wrappedBody.append(wrappedNote("Loading..."));
     let card;
     try {
-      if (!entry.handle) {
+      if (!entry.handle && entry.performerId) {
+        card = await invoke("library_artist_by_id", { performerId: entry.performerId });
+        entry.handle = card.handle;
+      } else if (!entry.handle) {
         const album = await invoke("library_album_by_id", { albumId: entry.albumId });
         if (!album.performerHandle) throw "Roon didn't say who that album's artist is.";
         entry.handle = album.performerHandle;
       }
-      card = await invoke("library_artist_card", { handle: entry.handle });
+      card ||= await invoke("library_artist_card", { handle: entry.handle });
     } catch (err) {
       if (ticket === wrappedTicket) wrappedFailed(err);
       return;
@@ -3161,31 +3178,40 @@ async function wrappedHomeExtras(holder, ticket) {
   wrappedPicks(holder, "Artists Roon recommends for you", artists.map(artistItem), openArtist);
 }
 
-// Roon's play history: the newest plays, and the most played artists,
-// albums and tracks counted over them (a play counts when at least half
-// of the track was heard)
-const HISTORY_LOAD = 500;
-let wrappedHistory = null; // the last load, kept while the page is reopened
+// Roon's play history, from Wrapped's own copy of it (wrapped.rs keeps it
+// on disk and syncs it from the Core): the newest plays, and the most
+// played artists, albums and tracks over a period
+const HISTORY_PERIODS = [
+  [28, "4 weeks"],
+  [91, "3 months"],
+  [365, "A year"],
+  [null, "All time"],
+];
+let historyStatus = null;
+
+function historyProgress(holder, p) {
+  const n = (x) => x.toLocaleString();
+  if (p.error) holder.replaceChildren(wrappedNote(p.error, "wrapped-note error"));
+  else if (p.done) holder.replaceChildren();
+  else if (!p.wanted) holder.replaceChildren(wrappedNote("Checking Roon for new plays..."));
+  else holder.replaceChildren(wrappedNote(`Reading your history from Roon: ${n(p.loaded)} of ${n(p.wanted)} plays...`));
+}
 
 WRAPPED_PAGES.history = async function (entry) {
   wrappedHeading("History", "What Roon has logged for your profile");
   if (wrappedNeedsLibrary()) return;
   const ticket = ++wrappedTicket;
-  if (!wrappedHistory) {
-    wrappedBody.append(wrappedNote("Reading your history..."));
-    try {
-      wrappedHistory = await invoke("library_history", { limit: HISTORY_LOAD });
-    } catch (err) {
-      if (ticket === wrappedTicket) wrappedFailed(err);
-      return;
-    }
-    if (ticket !== wrappedTicket) return;
+  try {
+    historyStatus = await invoke("wrapped_history_status");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
   }
-  const history = wrappedHistory;
-  wrappedHeading("History", `${history.total} plays in Roon, the newest ${history.plays.length} read`);
+  if (ticket !== wrappedTicket) return;
   wrappedBody.replaceChildren();
   const tabs = document.createElement("div");
   tabs.className = "wrapped-tabs";
+  const progress = document.createElement("div");
   const holder = document.createElement("div");
   const views = [
     ["recent", "Recent"],
@@ -3194,11 +3220,41 @@ WRAPPED_PAGES.history = async function (entry) {
     ["tracks", "Top tracks"],
   ];
   entry.view ||= "recent";
-  const show = () => {
-    for (const tab of tabs.children) tab.classList.toggle("selected", tab.dataset.view === entry.view);
+  entry.days ??= 91;
+  const heading = () => {
+    const n = historyStatus.plays.toLocaleString();
+    const when = historyStatus.syncedAt ? `, read ${historyWhen(historyStatus.syncedAt)}` : "";
+    wrappedHeading("History", historyStatus.plays ? `${n} plays${historyStatus.complete ? "" : " so far"}${when}` : "Not read from Roon yet");
+  };
+  const show = async () => {
+    for (const tab of tabs.querySelectorAll(".wrapped-tab[data-view]")) tab.classList.toggle("selected", tab.dataset.view === entry.view);
+    heading();
     holder.replaceChildren();
-    if (entry.view === "recent") holder.append(historyRows(history.plays));
-    else holder.append(historyTop(history.plays, entry.view));
+    if (!historyStatus.plays) {
+      if (!historyStatus.syncing) holder.append(wrappedNote("Nothing read yet."));
+      return;
+    }
+    if (entry.view === "recent") {
+      const plays = await invoke("wrapped_history_recent", { limit: 500 });
+      if (ticket !== wrappedTicket || entry.view !== "recent") return;
+      holder.replaceChildren(historyRows(plays));
+    } else {
+      const periods = document.createElement("div");
+      periods.className = "wrapped-tabs small";
+      for (const [days, label] of HISTORY_PERIODS) {
+        const pill = document.createElement("button");
+        pill.className = `wrapped-tab${entry.days === days ? " selected" : ""}`;
+        pill.textContent = label;
+        pill.addEventListener("click", () => {
+          entry.days = days;
+          show();
+        });
+        periods.append(pill);
+      }
+      const rows = await invoke("wrapped_history_top", { what: entry.view, days: entry.days, limit: 60 });
+      if (ticket !== wrappedTicket || entry.view === "recent") return;
+      holder.replaceChildren(periods, historyTop(rows, entry.view));
+    }
   };
   for (const [view, label] of views) {
     const tab = document.createElement("button");
@@ -3211,15 +3267,37 @@ WRAPPED_PAGES.history = async function (entry) {
     });
     tabs.append(tab);
   }
+  const sync = async (full) => {
+    try {
+      historyStatus = await invoke("wrapped_history_sync", { full });
+    } catch (err) {
+      progress.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+      return;
+    }
+    historyProgress(progress, { loaded: 0, wanted: historyStatus.complete ? 0 : historyStatus.total || 0, done: false });
+  };
   const reload = document.createElement("button");
   reload.className = "wrapped-tab reload";
-  reload.textContent = "Reload";
-  reload.addEventListener("click", () => {
-    wrappedHistory = null;
-    renderWrapped();
-  });
+  reload.textContent = historyStatus.plays ? "Check for new plays" : "Read from Roon";
+  reload.addEventListener("click", () => sync(false));
   tabs.append(reload);
-  wrappedBody.append(tabs, holder);
+  wrappedBody.append(tabs, progress, holder);
+  // Progress of a sync (started here or elsewhere), while this page shows
+  const unlisten = await listen("wrapped-history", (event) => {
+    if (ticket !== wrappedTicket) return unlisten();
+    historyProgress(progress, event.payload);
+    if (event.payload.done) {
+      if (event.payload.status) historyStatus = event.payload.status;
+      if (event.payload.added != null) {
+        const n = event.payload.added;
+        wrappedToast(n ? `${n.toLocaleString()} new play${n === 1 ? "" : "s"}` : "Nothing new since the last read");
+      }
+      reload.textContent = "Check for new plays";
+      show();
+    }
+  });
+  if (historyStatus.syncing) historyProgress(progress, { loaded: 0, wanted: historyStatus.complete ? 0 : historyStatus.total || 0, done: false });
+  else if (!historyStatus.plays) sync(false);
   show();
 };
 
@@ -3234,6 +3312,14 @@ function historyWhen(ms) {
   const d = Math.floor(h / 24);
   if (d < 7) return `${d} d ago`;
   return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: d > 300 ? "numeric" : undefined });
+}
+
+// Opens an album or artist page from a play or a top row: by the Core's
+// ids, which outlive the session (the handles don't)
+function openFromHistory(kind, row) {
+  if (kind === "artist" && row.performerId) return openWrappedPage({ page: "artist", performerId: row.performerId });
+  if (row.albumId) return openWrappedPage({ page: kind, albumId: row.albumId });
+  wrappedToast("Roon didn't keep an id for that one.");
 }
 
 function historyRows(plays) {
@@ -3253,8 +3339,7 @@ function historyRows(plays) {
     sub.className = "wrapped-track-sub";
     sub.textContent = [play.artist, play.album].filter(Boolean).join(" · ");
     text.append(title, sub);
-    if (play.albumHandle) text.addEventListener("click", () => openWrappedPage({ page: "album", handle: play.albumHandle }));
-    else text.disabled = true;
+    text.addEventListener("click", () => openFromHistory("album", play));
     const when = document.createElement("span");
     when.className = "wrapped-track-length";
     const heard = play.secondsPlayed != null && play.lengthSeconds ? Math.min(100, Math.round((play.secondsPlayed / play.lengthSeconds) * 100)) : null;
@@ -3266,31 +3351,135 @@ function historyRows(plays) {
   return rows;
 }
 
-function historyTop(plays, what) {
-  const counts = new Map();
-  for (const play of plays) {
-    const heard = play.secondsPlayed != null && play.lengthSeconds ? play.secondsPlayed / play.lengthSeconds : 1;
-    if (heard < 0.5) continue;
-    const key =
-      what === "artists" ? play.artist : what === "albums" ? `${play.album}\u0000${play.artist}` : `${play.title}\u0000${play.artist}`;
-    if (!key || key.startsWith("\u0000")) continue;
-    const row = counts.get(key) || { plays: 0, play };
-    row.plays++;
-    counts.set(key, row);
-  }
-  const top = [...counts.values()].sort((a, b) => b.plays - a.plays).slice(0, 60);
-  if (!top.length) return wrappedNote("Nothing played far enough to count yet.");
-  const items = top.map(({ plays: n, play }) => {
-    const times = `${n} play${n === 1 ? "" : "s"}`;
-    if (what === "artists") return { handle: play.performerHandle, title: play.artist, sub: times, imageKey: play.imageKey, round: true };
-    if (what === "albums") return { handle: play.albumHandle, title: play.album, sub: `${play.artist} · ${times}`, imageKey: play.imageKey };
-    return { handle: play.albumHandle, title: play.title, sub: `${play.artist} · ${times}`, imageKey: play.imageKey };
+function historyTop(rows, what) {
+  if (!rows.length) return wrappedNote("Nothing played far enough to count in that time.");
+  const items = rows.map((row) => {
+    const times = `${row.plays} play${row.plays === 1 ? "" : "s"}`;
+    if (what === "artists") return { row, title: row.name, sub: times, imageKey: row.imageKey, round: true };
+    return { row, title: row.name, sub: `${row.artist} · ${times}`, imageKey: row.imageKey };
   });
-  return wrappedGrid(items, (item) => {
-    if (!item.handle) return;
-    openWrappedPage({ page: what === "artists" ? "artist" : "album", handle: item.handle });
-  });
+  return wrappedGrid(items, (item) => openFromHistory(what === "artists" ? "artist" : "album", item.row));
 }
+
+// Wrapped's own settings: the Last.fm key, how "Similar by" starts out,
+// and the state of Wrapped's records (history copy, tag cache)
+const SIMILAR_BY = [
+  ["roon", "Roon"],
+  ["genre", "Genre"],
+  ["style", "Style"],
+  ["scene", "Scene"],
+  ["era", "Era"],
+];
+
+WRAPPED_PAGES.settings = async function () {
+  wrappedHeading("Settings", "Wrapped's own settings; Toasted's are in the app's Settings window");
+  const ticket = ++wrappedTicket;
+  let tagCount = 0;
+  try {
+    [wrappedSettings, historyStatus, tagCount] = await Promise.all([
+      invoke("wrapped_settings_get"),
+      invoke("wrapped_history_status").catch(() => null),
+      invoke("wrapped_tags_count").catch(() => 0),
+    ]);
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedBody.replaceChildren();
+  const save = async (changes) => {
+    try {
+      wrappedSettings = await invoke("wrapped_settings_update", { changes });
+      wrappedToast("Saved");
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  };
+  const field = (label, text) => {
+    const block = document.createElement("div");
+    block.className = "wrapped-setting";
+    const h = document.createElement("div");
+    h.className = "wrapped-setting-label";
+    h.textContent = label;
+    const p = document.createElement("div");
+    p.className = "wrapped-setting-text";
+    p.textContent = text;
+    block.append(h, p);
+    wrappedBody.append(block);
+    return block;
+  };
+
+  const key = field(
+    "Last.fm API key",
+    'Tags like "melodic death metal" and "viking metal" come from Last.fm\'s listeners; Roon\'s own genres stop at "Death Metal". A key is free: last.fm/api/account/create (any name and description will do). Without one, only MusicBrainz is asked.',
+  );
+  const row = document.createElement("div");
+  row.className = "wrapped-setting-row";
+  const input = document.createElement("input");
+  input.className = "wrapped-search";
+  input.type = "password";
+  input.placeholder = "32 characters";
+  input.value = wrappedSettings.lastfmKey || "";
+  input.autocomplete = "off";
+  const show = document.createElement("button");
+  show.className = "wrapped-button";
+  show.textContent = "Show";
+  show.addEventListener("click", () => {
+    input.type = input.type === "password" ? "text" : "password";
+    show.textContent = input.type === "password" ? "Show" : "Hide";
+  });
+  const saveKey = document.createElement("button");
+  saveKey.className = "wrapped-button";
+  saveKey.textContent = "Save";
+  saveKey.addEventListener("click", () => save({ lastfmKey: input.value.trim() }));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveKey.click();
+  });
+  row.append(input, show, saveKey);
+  key.append(row);
+
+  const similar = field(
+    "Similar by",
+    'Which row the "Similar" section under artists and albums opens with. Roon is Roon\'s own picks; the others come from the tags.',
+  );
+  const pills = document.createElement("div");
+  pills.className = "wrapped-tabs small";
+  for (const [value, label] of SIMILAR_BY) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${wrappedSettings.similarBy === value ? " selected" : ""}`;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      await save({ similarBy: value });
+      for (const other of pills.children) other.classList.toggle("selected", other === pill);
+    });
+    pills.append(pill);
+  }
+  similar.append(pills);
+
+  const n = (x) => (x ?? 0).toLocaleString();
+  const copied = historyStatus
+    ? `${n(historyStatus.plays)} plays copied from Roon's history${historyStatus.syncedAt ? `, read ${historyWhen(historyStatus.syncedAt)}` : ""}`
+    : "History not read yet";
+  const records = field(
+    "Wrapped's records",
+    `${copied}. ${n(tagCount)} artist${tagCount === 1 ? "" : "s"} in the tag cache. Both live in the app's data folder.`,
+  );
+  const actions = document.createElement("div");
+  actions.className = "wrapped-setting-row";
+  const reread = document.createElement("button");
+  reread.className = "wrapped-button";
+  reread.textContent = "Read the whole history again";
+  reread.addEventListener("click", async () => {
+    try {
+      await invoke("wrapped_history_sync", { full: true });
+      wrappedToast("Reading the history from Roon; the History page shows the progress.");
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  });
+  actions.append(reread);
+  records.append(actions);
+};
 
 WRAPPED_PAGES.genre = async function (entry) {
   wrappedHeading(entry.name, "Genre");
@@ -3455,10 +3644,12 @@ function artistHeader(card) {
   facts.className = "wrapped-facts";
   const genres = document.createElement("div");
   genres.className = "wrapped-genres";
+  const outside = document.createElement("div");
+  outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
   actions.append(wrappedRadio("artist", { artists: [card.handle] }));
-  info.append(name, facts, genres, actions);
+  info.append(name, facts, genres, outside, actions);
   head.append(info);
   return head;
 }
@@ -3475,6 +3666,42 @@ function wrappedGenreChips(holder, genres) {
   }
 }
 
+// The outside world's tags for an artist (Last.fm, MusicBrainz; tags.rs),
+// under Roon's: genre, style and scene, each its own color
+async function wrappedOutsideTags(holder, name, ticket) {
+  let tags;
+  try {
+    tags = await invoke("wrapped_artist_tags", { name });
+  } catch (err) {
+    console.warn("tags", err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  holder.replaceChildren();
+  if (!tags.tags.length) {
+    const note = document.createElement("span");
+    note.className = "wrapped-genre-note";
+    note.textContent =
+      tags.fromLastfm || tags.fromMusicbrainz
+        ? "No outside tags for this artist."
+        : wrappedSettings?.lastfmKey
+          ? "Couldn't reach Last.fm or MusicBrainz."
+          : "Add a Last.fm key in Wrapped's settings for richer tags.";
+    holder.append(note);
+    return;
+  }
+  for (const tag of tags.tags) {
+    const chip = document.createElement("button");
+    chip.className = `wrapped-genre outside ${tag.kind}`;
+    chip.textContent = tag.name;
+    chip.title = `${tag.kind}, weight ${tag.weight}`;
+    chip.addEventListener("click", () => openWrappedPage({ page: "search", query: tag.name }));
+    holder.append(chip);
+  }
+}
+
+let wrappedSettings = null;
+
 async function wrappedFacts(kind, card, ticket) {
   let facts;
   try {
@@ -3487,6 +3714,8 @@ async function wrappedFacts(kind, card, ticket) {
   const genres = wrappedBody.querySelector(".wrapped-genres");
   if (genres) wrappedGenreChips(genres, facts.genres);
   if (kind === "artist") {
+    const outside = wrappedBody.querySelector(".wrapped-genres.outside");
+    if (outside) wrappedOutsideTags(outside, card.name, ticket);
     // (The birthplace usually ends with the country already)
     const where = [facts.from, facts.country].filter(Boolean).filter((v, i, all) => i === 0 || !all[0].endsWith(v));
     const line = [where.length ? where.join(", ") : null, facts.activeSince ? `since ${facts.activeSince}` : null]

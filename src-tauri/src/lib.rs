@@ -25,6 +25,8 @@ mod status;
 mod toast;
 mod tray;
 mod widget;
+mod tags;
+mod wrapped;
 mod wrapper;
 mod zonekeeper;
 mod zones;
@@ -430,6 +432,8 @@ pub fn run() {
         .manage(toast::ToastState::default())
         .manage(launch::StartupMode::default())
         .manage(library::Library::default())
+        .manage(wrapped::Wrapped::default())
+        .manage(tags::Tags::default())
         .manage(update::Updates::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -632,6 +636,14 @@ pub fn run() {
             library::library_artist_facts,
             library::library_genre_page,
             library::library_history,
+            wrapped::wrapped_history_status,
+            wrapped::wrapped_history_sync,
+            wrapped::wrapped_history_recent,
+            wrapped::wrapped_history_top,
+            wrapped::wrapped_settings_get,
+            wrapped::wrapped_settings_update,
+            tags::wrapped_artist_tags,
+            tags::wrapped_tags_count,
             library::library_album_facts,
             library::library_album_extras,
             library::library_recommended_artists,

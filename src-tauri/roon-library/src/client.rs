@@ -323,8 +323,9 @@ enum Subject<'a> {
     Name(&'a str),
 }
 
-/// One play from Roon's history (see `history`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
+/// One play from Roon's history (see `history`). The handles are good for
+/// this session; the ids (album, track, performer) are the Core's and keep.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Play {
     /// When it was played, as Unix milliseconds.
@@ -1151,6 +1152,18 @@ impl LibraryClient {
     /// 100 retained one after the other; the HistoryPlay objects arrive as
     /// pushes; the query is disposed afterwards).
     pub async fn history(&self, limit: usize) -> Result<History, LibraryError> {
+        self.history_since(limit, None, &|_, _| {}).await
+    }
+
+    /// `history`, stopping early once a page holds a play from `stop_at`
+    /// (Unix ms) or before (the plays already known), and reporting each
+    /// page as (plays read so far, plays wanted) to `progress`.
+    pub async fn history_since(
+        &self,
+        limit: usize,
+        stop_at: Option<i64>,
+        progress: &(dyn Fn(usize, usize) + Sync),
+    ) -> Result<History, LibraryError> {
         const PAGE: usize = 100;
         let (library, profile) = {
             let g = self.inner.graph.lock().unwrap();
@@ -1185,12 +1198,20 @@ impl LibraryClient {
         // The plays already in the graph are an earlier query's: only the
         // ones this query pushes count
         let before: HashSet<u64> = self.inner.graph.lock().unwrap().find_by_type("HistoryPlay").map(|o| o.oid).collect();
-        let result = self.history_pages(query, limit, PAGE, &before).await;
+        let result = self.history_pages(query, limit, PAGE, &before, stop_at, progress).await;
         let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_DISPOSE, &[]);
         result
     }
 
-    async fn history_pages(&self, query: u64, limit: usize, page_size: usize, before: &HashSet<u64>) -> Result<History, LibraryError> {
+    async fn history_pages(
+        &self,
+        query: u64,
+        limit: usize,
+        page_size: usize,
+        before: &HashSet<u64>,
+        stop_at: Option<i64>,
+        progress: &(dyn Fn(usize, usize) + Sync),
+    ) -> Result<History, LibraryError> {
         let count = |g: &ObjectGraph| g.get(query).and_then(|q| q.field("Count")).and_then(Value::as_int);
         if !self.wait_until(Duration::from_secs(5), |g| count(g).is_some()).await {
             return Err(LibraryError::Unconfirmed("Roon did not say how many plays it has".into()));
@@ -1216,6 +1237,19 @@ impl LibraryClient {
             })
             .await;
             let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_RELEASE, arg.as_bytes());
+            progress(want, target);
+            // Reached what the caller already has: no need for older pages
+            if let Some(stop_at) = stop_at {
+                let g = self.inner.graph.lock().unwrap();
+                let reached = g
+                    .find_by_type("HistoryPlay")
+                    .filter(|o| !before.contains(&o.oid))
+                    .filter_map(|p| describe_play(&g, p))
+                    .any(|p| p.played_at <= stop_at);
+                if reached {
+                    break;
+                }
+            }
         }
         let g = self.inner.graph.lock().unwrap();
         let mut seen = HashSet::new();

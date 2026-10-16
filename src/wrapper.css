@@ -2619,6 +2619,53 @@ body > .wrapped-toast {
   z-index: 60;
 }
 
+/* Outside tags (Last.fm, MusicBrainz) under Roon's genres */
+.wrapped-genre.outside.genre {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.wrapped-genre.outside.style {
+  border-color: color-mix(in srgb, #d97a6c 55%, var(--border));
+}
+
+.wrapped-genre.outside.scene {
+  border-color: color-mix(in srgb, #5fb0a0 55%, var(--border));
+}
+
+.wrapped-genre-note {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+/* Wrapped's settings page */
+.wrapped-setting {
+  max-width: 640px;
+  margin-bottom: 22px;
+}
+
+.wrapped-setting-label {
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.wrapped-setting-text {
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+  margin-bottom: 10px;
+}
+
+.wrapped-setting-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.wrapped-setting-row .wrapped-search {
+  height: 32px;
+  font-size: 13px;
+}
+
 /* The History page's views */
 .wrapped-tabs {
   display: flex;
@@ -2649,6 +2696,15 @@ body > .wrapped-toast {
 
 .wrapped-tab.reload {
   margin-left: auto;
+}
+
+.wrapped-tabs.small {
+  margin-bottom: 10px;
+}
+
+.wrapped-tabs.small .wrapped-tab {
+  padding: 3px 10px;
+  font-size: 11.5px;
 }
 
 .wrapped-track-length {

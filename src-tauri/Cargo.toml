@@ -35,6 +35,9 @@ ico = "0.5"
 # Prints library warnings to the terminal in dev builds
 tracing-subscriber = "0.3"
 tauri-plugin-updater = "2"
+# Artist tags from Last.fm and MusicBrainz for Wrapped (see wrapped.rs); the
+# same client roon-api already builds
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Desktop-only plugins
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
