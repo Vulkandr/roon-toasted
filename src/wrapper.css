@@ -2619,6 +2619,42 @@ body > .wrapped-toast {
   z-index: 60;
 }
 
+/* The History page's views */
+.wrapped-tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+
+.wrapped-tab {
+  padding: 5px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.wrapped-tab:hover {
+  color: var(--text);
+}
+
+.wrapped-tab.selected {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.wrapped-tab.reload {
+  margin-left: auto;
+}
+
+.wrapped-track-length {
+  white-space: nowrap;
+}
+
 /* Roon's picks under an album's tracks or an artist's albums */
 .wrapped-extras {
   margin-top: 18px;

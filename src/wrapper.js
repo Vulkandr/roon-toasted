@@ -2505,6 +2505,7 @@ const WRAPPED_ICONS = {
   artist: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
   playlists: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>',
+  history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
 };
 
@@ -2526,6 +2527,7 @@ function wrappedMenuItems() {
   if (here) items.push(here);
   items.push({ page: "search", label: "Search", icon: "search" });
   items.push({ page: "playlists", label: "Playlists", icon: "playlists" });
+  items.push({ page: "history", label: "History", icon: "history" });
   if (!wrapped.hidden) items.push({ close: true, label: "Close Wrapped", icon: "close" });
   return items;
 }
@@ -2896,6 +2898,7 @@ const WRAPPED_PAGES = {
       wrappedTile("Radio", "Roon Radio from any song, artist or mix of them, library only or not. Coming next."),
       wrappedTile("Playlists", "The playlists Wrapped keeps for you.", () => openWrappedPage({ page: "playlists" })),
       wrappedTile("Search", "Find an artist or album to start from.", () => openWrappedPage({ page: "search" })),
+      wrappedTile("History", "What you've played, and what you play most.", () => openWrappedPage({ page: "history" })),
     );
     wrappedBody.append(grid);
     if (here) {
@@ -3156,6 +3159,137 @@ async function wrappedHomeExtras(holder, ticket) {
   }
   if (ticket !== wrappedTicket) return;
   wrappedPicks(holder, "Artists Roon recommends for you", artists.map(artistItem), openArtist);
+}
+
+// Roon's play history: the newest plays, and the most played artists,
+// albums and tracks counted over them (a play counts when at least half
+// of the track was heard)
+const HISTORY_LOAD = 500;
+let wrappedHistory = null; // the last load, kept while the page is reopened
+
+WRAPPED_PAGES.history = async function (entry) {
+  wrappedHeading("History", "What Roon has logged for your profile");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  if (!wrappedHistory) {
+    wrappedBody.append(wrappedNote("Reading your history..."));
+    try {
+      wrappedHistory = await invoke("library_history", { limit: HISTORY_LOAD });
+    } catch (err) {
+      if (ticket === wrappedTicket) wrappedFailed(err);
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+  }
+  const history = wrappedHistory;
+  wrappedHeading("History", `${history.total} plays in Roon, the newest ${history.plays.length} read`);
+  wrappedBody.replaceChildren();
+  const tabs = document.createElement("div");
+  tabs.className = "wrapped-tabs";
+  const holder = document.createElement("div");
+  const views = [
+    ["recent", "Recent"],
+    ["artists", "Top artists"],
+    ["albums", "Top albums"],
+    ["tracks", "Top tracks"],
+  ];
+  entry.view ||= "recent";
+  const show = () => {
+    for (const tab of tabs.children) tab.classList.toggle("selected", tab.dataset.view === entry.view);
+    holder.replaceChildren();
+    if (entry.view === "recent") holder.append(historyRows(history.plays));
+    else holder.append(historyTop(history.plays, entry.view));
+  };
+  for (const [view, label] of views) {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.view = view;
+    tab.textContent = label;
+    tab.addEventListener("click", () => {
+      entry.view = view;
+      show();
+    });
+    tabs.append(tab);
+  }
+  const reload = document.createElement("button");
+  reload.className = "wrapped-tab reload";
+  reload.textContent = "Reload";
+  reload.addEventListener("click", () => {
+    wrappedHistory = null;
+    renderWrapped();
+  });
+  tabs.append(reload);
+  wrappedBody.append(tabs, holder);
+  show();
+};
+
+function historyWhen(ms) {
+  // (Floored, as Roon's own History page counts)
+  const diff = Date.now() - ms;
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h ago`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} d ago`;
+  return new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: d > 300 ? "numeric" : undefined });
+}
+
+function historyRows(plays) {
+  const rows = document.createElement("div");
+  rows.className = "wrapped-tracks";
+  for (const play of plays) {
+    const row = document.createElement("div");
+    row.className = "wrapped-track";
+    const art = wrappedArt(play.imageKey, 88, play.album || play.title);
+    art.classList.add("small");
+    const text = document.createElement("button");
+    text.className = "wrapped-track-text link";
+    const title = document.createElement("span");
+    title.className = "wrapped-track-title";
+    title.textContent = play.title;
+    const sub = document.createElement("span");
+    sub.className = "wrapped-track-sub";
+    sub.textContent = [play.artist, play.album].filter(Boolean).join(" · ");
+    text.append(title, sub);
+    if (play.albumHandle) text.addEventListener("click", () => openWrappedPage({ page: "album", handle: play.albumHandle }));
+    else text.disabled = true;
+    const when = document.createElement("span");
+    when.className = "wrapped-track-length";
+    const heard = play.secondsPlayed != null && play.lengthSeconds ? Math.min(100, Math.round((play.secondsPlayed / play.lengthSeconds) * 100)) : null;
+    when.textContent = [historyWhen(play.playedAt), heard != null && heard < 90 ? `${heard}%` : null].filter(Boolean).join(" · ");
+    row.append(art, text, when);
+    rows.append(row);
+  }
+  if (!plays.length) rows.append(wrappedNote("Roon has no plays logged yet."));
+  return rows;
+}
+
+function historyTop(plays, what) {
+  const counts = new Map();
+  for (const play of plays) {
+    const heard = play.secondsPlayed != null && play.lengthSeconds ? play.secondsPlayed / play.lengthSeconds : 1;
+    if (heard < 0.5) continue;
+    const key =
+      what === "artists" ? play.artist : what === "albums" ? `${play.album}\u0000${play.artist}` : `${play.title}\u0000${play.artist}`;
+    if (!key || key.startsWith("\u0000")) continue;
+    const row = counts.get(key) || { plays: 0, play };
+    row.plays++;
+    counts.set(key, row);
+  }
+  const top = [...counts.values()].sort((a, b) => b.plays - a.plays).slice(0, 60);
+  if (!top.length) return wrappedNote("Nothing played far enough to count yet.");
+  const items = top.map(({ plays: n, play }) => {
+    const times = `${n} play${n === 1 ? "" : "s"}`;
+    if (what === "artists") return { handle: play.performerHandle, title: play.artist, sub: times, imageKey: play.imageKey, round: true };
+    if (what === "albums") return { handle: play.albumHandle, title: play.album, sub: `${play.artist} · ${times}`, imageKey: play.imageKey };
+    return { handle: play.albumHandle, title: play.title, sub: `${play.artist} · ${times}`, imageKey: play.imageKey };
+  });
+  return wrappedGrid(items, (item) => {
+    if (!item.handle) return;
+    openWrappedPage({ page: what === "artists" ? "artist" : "album", handle: item.handle });
+  });
 }
 
 WRAPPED_PAGES.genre = async function (entry) {

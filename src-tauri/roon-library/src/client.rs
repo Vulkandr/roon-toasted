@@ -59,6 +59,10 @@ const SIG_SIMILAR_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarAl
 const SIG_ALBUM_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumRecommendedForYou(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
 const SIG_ALBUM_SIMILAR_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumSimilarPerformers(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
 const SIG_RECOMMENDED_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxRecommendedPerformers(System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_HISTORY_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualHistoryQuery(System.Sooid, Sooloos.Broker.Api.HistoryQueryCriteria, Sooloos.Broker.Api.VirtualQueryParameters, Base.ResultCallback<Sooloos.Broker.Api.VirtualHistoryPlayQuery>)";
+const SIG_HISTORY_RETAIN: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::RetainPage(int, Base.ResultCallback)";
+const SIG_HISTORY_RELEASE: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::ReleasePage(int, Base.ResultCallback)";
+const SIG_HISTORY_DISPOSE: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::Dispose()";
 const SIG_GENRE_TOP_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreTopPerformers(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerLite>>)";
 const SIG_GENRE_RECOMMENDED_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreRecommendedPerformers(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
 const SIG_GENRE_TOP_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreTopAlbums(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
@@ -317,6 +321,34 @@ enum Subject<'a> {
     Oid(u64),
     /// A name (a genre)
     Name(&'a str),
+}
+
+/// One play from Roon's history (see `history`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Play {
+    /// When it was played, as Unix milliseconds.
+    pub played_at: i64,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub album_handle: Option<String>,
+    pub album_id: Option<u64>,
+    pub track_handle: Option<String>,
+    pub track_id: Option<u64>,
+    pub performer_handle: Option<String>,
+    pub performer_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub seconds_played: Option<i32>,
+    pub length_seconds: Option<i32>,
+}
+
+/// Roon's play history: how many plays it holds, and the newest `limit`.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct History {
+    pub total: u32,
+    pub plays: Vec<Play>,
 }
 
 /// A track found by `search`.
@@ -1112,6 +1144,90 @@ impl LibraryClient {
             genres: g.get(full).map(|a| strings_of(&g, a.field("Genres"))).unwrap_or_default(),
             ..Facts::default()
         })
+    }
+
+    /// Roon's play history for the profile, newest first, up to `limit`
+    /// plays: the same VirtualHistoryQuery Roon's History page uses (pages of
+    /// 100 retained one after the other; the HistoryPlay objects arrive as
+    /// pushes; the query is disposed afterwards).
+    pub async fn history(&self, limit: usize) -> Result<History, LibraryError> {
+        const PAGE: usize = 100;
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let criteria = self.inner.remoting.inline_struct("Sooloos.Broker.Api.HistoryQueryCriteria", &[])?;
+        let mut page_size = Writer::new();
+        page_size.integer(PAGE as i32);
+        let params = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.VirtualQueryParameters",
+            &[StructField {
+                name: "int Sooloos.Broker.Api.VirtualQueryParameters::PageSize",
+                prop_type: PropertyType::Int,
+                value: page_size.into_bytes(),
+            }],
+        )?;
+        let mut args = Writer::new();
+        args.sooid(&profile).bytes(&criteria).bytes(&params);
+        let res = self.inner.remoting.call(library, SIG_HISTORY_QUERY, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "VirtualHistoryQuery".into(), status: res.status }.into());
+        }
+        let query = Reader::new(&res.payload)
+            .flex_long()
+            .ok()
+            .filter(|oid| *oid != 0)
+            .ok_or_else(|| LibraryError::Unconfirmed("the history query did not open".into()))?;
+
+        // The plays already in the graph are an earlier query's: only the
+        // ones this query pushes count
+        let before: HashSet<u64> = self.inner.graph.lock().unwrap().find_by_type("HistoryPlay").map(|o| o.oid).collect();
+        let result = self.history_pages(query, limit, PAGE, &before).await;
+        let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_DISPOSE, &[]);
+        result
+    }
+
+    async fn history_pages(&self, query: u64, limit: usize, page_size: usize, before: &HashSet<u64>) -> Result<History, LibraryError> {
+        let count = |g: &ObjectGraph| g.get(query).and_then(|q| q.field("Count")).and_then(Value::as_int);
+        if !self.wait_until(Duration::from_secs(5), |g| count(g).is_some()).await {
+            return Err(LibraryError::Unconfirmed("Roon did not say how many plays it has".into()));
+        }
+        let total = count(&self.inner.graph.lock().unwrap()).unwrap_or(0).max(0) as usize;
+        let target = total.min(limit);
+        let new_plays = |g: &ObjectGraph| g.find_by_type("HistoryPlay").filter(|o| !before.contains(&o.oid)).count();
+        let pages = target.div_ceil(page_size);
+        for page in 0..pages {
+            let mut arg = Writer::new();
+            arg.integer(page as i32);
+            let res = self.inner.remoting.call(query, SIG_HISTORY_RETAIN, arg.as_bytes()).await?;
+            if !res.success() {
+                return Err(RemotingError::Failed { method: format!("RetainPage({page})"), status: res.status }.into());
+            }
+            let want = total.min((page + 1) * page_size);
+            // The page's plays, then their tracks and albums (names), up to 5 s
+            self.wait_until(Duration::from_secs(5), |g| new_plays(g) >= want).await;
+            self.wait_until(Duration::from_secs(3), |g| {
+                g.find_by_type("HistoryPlay")
+                    .filter(|o| !before.contains(&o.oid))
+                    .all(|p| p.has_field("Time") && g.deref(p.field("Track")).is_some_and(|t| t.has_field("Title")))
+            })
+            .await;
+            let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_RELEASE, arg.as_bytes());
+        }
+        let g = self.inner.graph.lock().unwrap();
+        let mut seen = HashSet::new();
+        let mut plays: Vec<Play> = g
+            .find_by_type("HistoryPlay")
+            .filter(|o| !before.contains(&o.oid))
+            .filter(|p| seen.insert(play_identity(p)))
+            .filter_map(|p| describe_play(&g, p))
+            .collect();
+        plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
+        plays.truncate(target);
+        Ok(History { total: total as u32, plays })
     }
 
     /// Roon's genre page, by the genre's name as Roon spells it: top and
@@ -2312,6 +2428,50 @@ fn describe_album(g: &ObjectGraph, a: &RoonObject, group: &str, profile: Option<
         year: year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate"))),
         image_key: image_key(g, a, "Image"),
     }
+}
+
+/// What tells one HistoryPlay from another (its id, or failing that its
+/// time and track), so a play pushed twice counts once.
+fn play_identity(p: &RoonObject) -> String {
+    match p.field("HistoryPlayId") {
+        Some(Value::Long(id)) => format!("id:{id}"),
+        Some(Value::Int(id)) => format!("id:{id}"),
+        Some(Value::Str(id)) => format!("id:{id}"),
+        Some(Value::Bytes(id)) => format!("id:{id:?}"),
+        _ => format!("oid:{}", p.oid),
+    }
+}
+
+/// A HistoryPlay as a `Play`: its time (.NET ticks, the kind bits masked
+/// off) and what its track and album say. None without a time or a track.
+fn describe_play(g: &ObjectGraph, p: &RoonObject) -> Option<Play> {
+    const TICKS_MASK: u64 = (1 << 62) - 1;
+    const UNIX_EPOCH_TICKS: u64 = 621_355_968_000_000_000;
+    let ticks = p.long_field("Time")? & TICKS_MASK;
+    let played_at = (ticks as i64 - UNIX_EPOCH_TICKS as i64) / 10_000;
+    let track = g.deref(p.field("Track"))?;
+    let album = g.deref(track.field("Album"));
+    let performer = album.and_then(|a| g.deref(a.field("MainPerformers"))).and_then(|list| list.items.as_ref()?.first().copied());
+    let track_id = match p.field("TrackBase") {
+        Some(Value::Inline(base)) => base.field("TrackId").and_then(Value::as_long),
+        _ => None,
+    }
+    .or_else(|| track.long_field("TrackId"));
+    Some(Play {
+        played_at,
+        title: track.str_field("Title").unwrap_or_default().to_string(),
+        artist: strip_credit_markup(album.and_then(|a| a.str_field("PerformedBy")).unwrap_or_default()),
+        album: album.and_then(|a| a.str_field("Title")).unwrap_or_default().to_string(),
+        album_handle: album.map(|a| a.oid.to_string()),
+        album_id: album.and_then(|a| a.long_field("AlbumId")),
+        track_handle: Some(track.oid.to_string()),
+        track_id,
+        performer_handle: performer.map(|oid| oid.to_string()),
+        performer_id: performer.and_then(|oid| g.get(oid)).and_then(|p| p.long_field("PerformerId")),
+        image_key: album.and_then(|a| image_key(g, a, "Image")),
+        seconds_played: p.field("SecondsPlayed").and_then(Value::as_int),
+        length_seconds: track.field("LengthSeconds").and_then(Value::as_int),
+    })
 }
 
 /// The strings of a `DataList<string>` member (Genres): the list came by

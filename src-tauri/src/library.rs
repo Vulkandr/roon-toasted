@@ -49,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -559,6 +559,14 @@ pub async fn library_genre_page(app: AppHandle, name: String) -> Result<GenrePag
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.genre_page(&name).await.map_err(describe)
+}
+
+/// Roon's play history, newest first, up to `limit` plays.
+#[tauri::command]
+pub async fn library_history(app: AppHandle, limit: Option<usize>) -> Result<History, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.history(limit.unwrap_or(500).clamp(1, 20_000)).await.map_err(describe)
 }
 
 /// Roon's own search: artists, albums and tracks, with handles.

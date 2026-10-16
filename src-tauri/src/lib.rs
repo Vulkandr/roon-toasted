@@ -631,6 +631,7 @@ pub fn run() {
             library::library_artist_extras,
             library::library_artist_facts,
             library::library_genre_page,
+            library::library_history,
             library::library_album_facts,
             library::library_album_extras,
             library::library_recommended_artists,
