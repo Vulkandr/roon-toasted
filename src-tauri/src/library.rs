@@ -569,6 +569,22 @@ pub async fn library_history(app: AppHandle, limit: Option<usize>) -> Result<His
     client.history(limit.unwrap_or(500).clamp(1, 20_000)).await.map_err(describe)
 }
 
+/// Every main artist in the library.
+#[tauri::command]
+pub async fn library_artists(app: AppHandle) -> Result<Vec<ArtistCard>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.library_artists(&|_, _| {}).await.map_err(describe)
+}
+
+/// Roon's share link for an artist or album (the Roon app opens it).
+#[tauri::command]
+pub async fn library_share_link(app: AppHandle, handle: String) -> Result<String, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.share_link(&handle).await.map_err(describe)
+}
+
 /// Roon's own search: artists, albums and tracks, with handles.
 #[tauri::command]
 pub async fn library_search(app: AppHandle, query: String) -> Result<SearchHits, String> {

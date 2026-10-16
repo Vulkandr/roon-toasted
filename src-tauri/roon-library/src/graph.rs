@@ -519,6 +519,13 @@ impl ObjectGraph {
             .filter(move |o| o.type_name == exact || o.type_name.ends_with(&suffix))
     }
 
+    /// Objects whose type name starts with `prefix` (after the namespace),
+    /// e.g. "VirtualQueryElement<".
+    pub fn find_by_type_prefix<'a>(&'a self, prefix: &str) -> impl Iterator<Item = &'a RoonObject> + 'a {
+        let prefix = prefix.to_string();
+        self.objects.values().filter(move |o| o.short_type().starts_with(&prefix) || o.type_name.contains(&format!(".{prefix}")))
+    }
+
     pub fn first_of_type(&self, name: &str) -> Option<&RoonObject> {
         self.find_by_type(name).next()
     }

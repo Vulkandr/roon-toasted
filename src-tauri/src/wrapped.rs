@@ -130,6 +130,16 @@ pub enum SimilarBy {
     Era,
 }
 
+/// Where the tag-based "Similar" rows look: inside the library, or only
+/// outside it (discovery).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SimilarScope {
+    #[default]
+    Library,
+    Discover,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WrappedSettings {
@@ -137,6 +147,7 @@ pub struct WrappedSettings {
     /// it only MusicBrainz is asked for tags.
     pub lastfm_key: String,
     pub similar_by: SimilarBy,
+    pub similar_scope: SimilarScope,
 }
 
 impl WrappedSettings {
@@ -369,6 +380,139 @@ pub fn wrapped_history_top(app: AppHandle, what: String, days: Option<u32>, limi
     rows.sort_by(|a, b| b.plays.cmp(&a.plays).then(b.last_played.cmp(&a.last_played)));
     rows.truncate(limit.unwrap_or(60));
     rows
+}
+
+// ----- The library's artists (a copy, like the history) -----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryArtist {
+    pub name: String,
+    pub performer_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub album_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct LibraryStore {
+    synced_at: Option<i64>,
+    artists: Vec<LibraryArtist>,
+}
+
+#[derive(Default)]
+pub struct LibraryCopy {
+    store: Mutex<Option<LibraryStore>>,
+    syncing: AtomicBool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryStatus {
+    pub artists: usize,
+    pub synced_at: Option<i64>,
+    pub syncing: bool,
+}
+
+impl LibraryCopy {
+    fn path(app: &AppHandle) -> Option<PathBuf> {
+        app.path().app_data_dir().ok().map(|dir| dir.join("wrapped-library.json"))
+    }
+
+    fn with_store<T>(&self, app: &AppHandle, f: impl FnOnce(&mut LibraryStore) -> T) -> T {
+        let mut guard = self.store.lock().unwrap();
+        let store = guard.get_or_insert_with(|| Self::path(app).and_then(|p| read_json(&p)).unwrap_or_default());
+        f(store)
+    }
+
+    pub fn artists(&self, app: &AppHandle) -> Vec<LibraryArtist> {
+        self.with_store(app, |s| s.artists.clone())
+    }
+
+    /// The library's artist names, lower-cased, for "is this in the library".
+    pub fn names(&self, app: &AppHandle) -> std::collections::HashSet<String> {
+        self.with_store(app, |s| s.artists.iter().map(|a| a.name.to_lowercase()).collect())
+    }
+
+    fn status(&self, app: &AppHandle) -> LibraryStatus {
+        let (artists, synced_at) = self.with_store(app, |s| (s.artists.len(), s.synced_at));
+        LibraryStatus { artists, synced_at, syncing: self.syncing.load(Ordering::SeqCst) }
+    }
+}
+
+/// Who an artist page is, from the pictures Roon fetched for it: a library
+/// artist by its photo key, or any performer the session has seen.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistMatch {
+    pub name: String,
+    pub performer_id: Option<u64>,
+    pub handle: Option<String>,
+}
+
+#[tauri::command]
+pub fn wrapped_artist_by_images(app: AppHandle, keys: Vec<String>) -> Option<ArtistMatch> {
+    if keys.is_empty() {
+        return None;
+    }
+    let copy = app.state::<LibraryCopy>();
+    let from_library = copy.artists(&app).into_iter().find(|a| a.image_key.as_ref().is_some_and(|k| keys.contains(k)));
+    if let Some(a) = from_library {
+        return Some(ArtistMatch { name: a.name, performer_id: a.performer_id, handle: None });
+    }
+    let client = app.state::<Library>().client()?;
+    client.artist_by_image(&keys).map(|c| ArtistMatch { name: c.name, performer_id: c.performer_id, handle: Some(c.handle) })
+}
+
+#[tauri::command]
+pub fn wrapped_library_status(app: AppHandle) -> LibraryStatus {
+    app.state::<LibraryCopy>().status(&app)
+}
+
+/// Reads the library's artists from the Core in the background (progress
+/// as "wrapped-library" events) and keeps them beside the history copy.
+#[tauri::command]
+pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
+    let copy = app.state::<LibraryCopy>();
+    if copy.syncing.swap(true, Ordering::SeqCst) {
+        return Ok(copy.status(&app));
+    }
+    let library = app.state::<Library>();
+    let Some(client) = library.client() else {
+        copy.syncing.store(false, Ordering::SeqCst);
+        return Err("Not connected to the Roon Core's library yet.".into());
+    };
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let copy = app2.state::<LibraryCopy>();
+        let progress = |read: usize, total: usize| {
+            let _ = app2.emit("wrapped-library", serde_json::json!({ "read": read, "total": total, "done": false }));
+        };
+        match client.library_artists(&progress).await {
+            Ok(cards) => {
+                let artists: Vec<LibraryArtist> = cards
+                    .into_iter()
+                    .map(|c| LibraryArtist { name: c.name, performer_id: c.performer_id, image_key: c.image_key, album_count: c.album_count })
+                    .collect();
+                let n = artists.len();
+                copy.with_store(&app2, |s| {
+                    s.artists = artists;
+                    s.synced_at = Some(now_ms());
+                });
+                if let Some(path) = LibraryCopy::path(&app2) {
+                    copy.with_store(&app2, |s| write_json(&path, s));
+                }
+                println!("[wrapped] library copy: {n} artists");
+                copy.syncing.store(false, Ordering::SeqCst);
+                let _ = app2.emit("wrapped-library", serde_json::json!({ "read": n, "total": n, "done": true }));
+            }
+            Err(e) => {
+                copy.syncing.store(false, Ordering::SeqCst);
+                let _ = app2.emit("wrapped-library", serde_json::json!({ "read": 0, "total": 0, "done": true, "error": format!("Reading the library failed: {e}") }));
+            }
+        }
+    });
+    Ok(copy.status(&app))
 }
 
 /// An artist as the history copy knows it: plays, the Core's id, and an

@@ -16,6 +16,7 @@ mod launch;
 mod library;
 mod update;
 mod monitors;
+mod ocr;
 mod queue;
 mod roon;
 mod roonnav;
@@ -433,6 +434,7 @@ pub fn run() {
         .manage(launch::StartupMode::default())
         .manage(library::Library::default())
         .manage(wrapped::Wrapped::default())
+        .manage(wrapped::LibraryCopy::default())
         .manage(tags::Tags::default())
         .manage(update::Updates::default())
         .plugin(tauri_plugin_opener::init())
@@ -636,10 +638,17 @@ pub fn run() {
             library::library_artist_facts,
             library::library_genre_page,
             library::library_history,
+            library::library_artists,
+            library::library_share_link,
             wrapped::wrapped_history_status,
             wrapped::wrapped_history_sync,
             wrapped::wrapped_history_recent,
             wrapped::wrapped_history_top,
+            wrapped::wrapped_artist_by_images,
+            ocr::wrapper_read_page_name,
+            ocr::wrapper_open_in_roon,
+            wrapped::wrapped_library_status,
+            wrapped::wrapped_library_sync,
             wrapped::wrapped_settings_get,
             wrapped::wrapped_settings_update,
             tags::wrapped_artist_tags,
@@ -668,6 +677,7 @@ pub fn run() {
             wrapper::wrapper_roon_link,
             wrapper::wrapper_roon_close,
             wrapper::wrapper_roon_search,
+            wrapper::wrapper_roon_search_for,
             skin::wrapper_colors,
             roonnav::wrapper_nav
         ])

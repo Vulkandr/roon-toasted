@@ -112,6 +112,24 @@ pub(crate) fn player_busy() -> bool {
     windows_wrapper::player_busy()
 }
 
+/// Roon's search run for `text` (blocking). For ocr.rs.
+#[cfg(windows)]
+pub(crate) fn roon_search_for(text: &str) -> bool {
+    windows_wrapper::roon_search_for(text)
+}
+
+/// Scrolls Roon's page to its top (wheel-up messages). For ocr.rs.
+#[cfg(windows)]
+pub(crate) fn scroll_roon_to_top(sidebar: i32) -> bool {
+    windows_wrapper::scroll_roon_to_top(sidebar)
+}
+
+/// A click on Roon's client area at (x, y), real pixels. For ocr.rs.
+#[cfg(windows)]
+pub(crate) fn click_roon_at(x: i32, y: i32) -> bool {
+    windows_wrapper::click_roon_at(x, y)
+}
+
 /// The Wrapper window's label, as set in tauri.conf.json.
 pub(crate) const WRAPPER_WINDOW: &str = "wrapper";
 
@@ -261,6 +279,23 @@ pub async fn wrapper_roon_search() -> Result<bool, String> {
     }
     #[cfg(not(windows))]
     Ok(false)
+}
+
+/// Roon's own search run for `text` (its results page comes up). False if
+/// Roon couldn't be put in front for it.
+#[tauri::command]
+pub async fn wrapper_roon_search_for(text: String) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(move || windows_wrapper::roon_search_for(&text))
+            .await
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = text;
+        Ok(false)
+    }
 }
 
 /// The page's "Return Roon" button.
@@ -2476,10 +2511,79 @@ mod windows_wrapper {
         true
     }
 
+    /// Roon's search box with `text` typed in and entered: Roon goes to its
+    /// results page for it. Blocking; run off the main thread.
+    pub fn roon_search_for(text: &str) -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VK_RETURN,
+        };
+        if !roon_search() {
+            return false;
+        }
+        // The box takes a moment to take the focus
+        std::thread::sleep(Duration::from_millis(250));
+        let mut inputs: Vec<INPUT> = Vec::new();
+        for unit in text.encode_utf16() {
+            for up in [false, true] {
+                inputs.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wScan: unit,
+                            dwFlags: if up { KEYEVENTF_UNICODE | KEYEVENTF_KEYUP } else { KEYEVENTF_UNICODE },
+                            ..Default::default()
+                        },
+                    },
+                });
+            }
+        }
+        // SAFETY: an array of keyboard inputs, with the size of one.
+        let typed = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 };
+        if !typed {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(150));
+        let enter = [false, true].map(|up| INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: INPUT_0 {
+                ki: KEYBDINPUT { wVk: VK_RETURN, dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() }, ..Default::default() },
+            },
+        });
+        // SAFETY: as above.
+        unsafe { SendInput(&enter, std::mem::size_of::<INPUT>() as i32) == enter.len() as u32 }
+    }
+
     /// Whether Roon's search field is up: a long white box along the top
     /// of Roon's page, right of the middle (where its search, bookmark and
     /// bell buttons sit otherwise). Read off the screen through the hole.
     fn search_field_shown() -> bool {
+        // Roon's own picture first (the Wrapped page or Now Playing may be
+        // over it on the screen); the screen when no picture can be taken
+        if let Some(found) = search_field_in_picture() {
+            return found;
+        }
+        search_field_on_screen()
+    }
+
+    /// The search box in a picture of Roon's window (see `capture_roon`).
+    fn search_field_in_picture() -> Option<bool> {
+        let roon = roon_window()?;
+        let picture = capture_roon(roon)?;
+        let scale = roon_scale();
+        let x0 = picture.width * 2 / 5;
+        let height = ((72.0 * scale).round() as i32).min(picture.height);
+        let run_needed = (120.0 * scale).round() as i32;
+        Some((0..height).any(|y| {
+            let mut run = 0;
+            (x0..picture.width).any(|x| {
+                let (r, g, b) = picture.rgb(x, y);
+                run = if r >= 225 && g >= 225 && b >= 225 { run + 1 } else { 0 };
+                run >= run_needed
+            })
+        }))
+    }
+
+    fn search_field_on_screen() -> bool {
         use windows::Win32::Graphics::Gdi::{
             BitBlt, CreateCompatibleDC, CreateDIBSection, DeleteDC, DeleteObject, GetDC, ReleaseDC,
             SelectObject, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, SRCCOPY,
@@ -2679,6 +2783,62 @@ mod windows_wrapper {
             roon,
             ((from_left * scale).round() as i32, height - (from_bottom * scale).round() as i32),
         );
+    }
+
+    /// A click on Roon at (x, y) of its client area (real pixels), for
+    /// ocr.rs (a search result read off the screen).
+    pub fn click_roon_at(x: i32, y: i32) -> bool {
+        let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
+            return false;
+        };
+        click_at(roon, (x, y));
+        true
+    }
+
+    /// Scrolls Roon's page back to its top: mouse-wheel-up messages sent to
+    /// the window under a point in the middle of the page (right of the
+    /// sidebar), as if the wheel were turned there. For ocr.rs, which reads
+    /// a page's title where it sits at the top.
+    pub fn scroll_roon_to_top(sidebar: i32) -> bool {
+        use windows::Win32::Foundation::{LPARAM, WPARAM};
+        use windows::Win32::Graphics::Gdi::MapWindowPoints;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            ChildWindowFromPointEx, PostMessageW, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, WM_MOUSEWHEEL,
+        };
+        let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
+            return false;
+        };
+        let (Some((width, height)), Some(origin)) = (client_size(roon), client_origin(roon)) else {
+            return false;
+        };
+        let (x, y) = (sidebar + (width - sidebar) / 2, height / 3);
+        // The wheel message carries the point in screen pixels; the window
+        // it goes to is the one under that point, as for a click
+        let screen = LPARAM((((origin.y + y) as u16 as isize) << 16) | ((origin.x + x) as u16 as isize));
+        let mut point = POINT { x, y };
+        // SAFETY: window queries and posted messages on valid handles.
+        unsafe {
+            let mut target = roon;
+            for _ in 0..10 {
+                let child = ChildWindowFromPointEx(target, point, CWP_SKIPINVISIBLE | CWP_SKIPTRANSPARENT);
+                if child.is_invalid() || child == target {
+                    break;
+                }
+                let mut points = [point];
+                MapWindowPoints(Some(target), Some(child), &mut points);
+                point = points[0];
+                target = child;
+            }
+            // Up, a notch at a time (a page is rarely more than a few dozen
+            // notches long; Roon smooths each one)
+            // (the high word is the turn: +120, one notch away from the user)
+            let up = WPARAM(120usize << 16);
+            for _ in 0..40 {
+                let _ = PostMessageW(Some(target), WM_MOUSEWHEEL, up, screen);
+                std::thread::sleep(Duration::from_millis(8));
+            }
+        }
+        true
     }
 
     /// A click sent straight to Roon's window at (x, y) of its client area

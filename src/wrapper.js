@@ -2479,7 +2479,7 @@ function layoutWrapped() {
   // header, and "open this album" is moot then)
   const showPage = overRoon && wrapped.hidden && (collapsed || here !== null);
   wrappedPageBtn.hidden = !showPage;
-  wrappedPageOpen.textContent = here ? `Open ${here.page} in Wrapped` : "Wrapped";
+  wrappedPageOpen.textContent = here ? (here.find ? "Find artist in Wrapped" : `Open ${here.page} in Wrapped`) : "Wrapped";
   const offset = !collapsed ? ROON_HEADER.afterBack : roonNav.page === "home" || !roonNav.page ? ROON_HEADER.afterHamburger : ROON_HEADER.afterBoth;
   wrappedPageBtn.style.left = `${contentLeft + offset}px`;
   wrappedPageBtn.style.top = `${h.top + ROON_HEADER.y}px`;
@@ -2512,12 +2512,44 @@ const WRAPPED_ICONS = {
 
 // What Roon's current page would open in Wrapped: the album Roon shows,
 // or (on an artist page) the artist of the last album it showed
+// Roon's page title read off the screen, searched; an empty search when
+// nothing could be read
+async function wrappedFindOnScreen() {
+  let read = null;
+  try {
+    read = await invoke("wrapper_read_page_name");
+  } catch (err) {
+    console.warn("read page name", err);
+  }
+  const name = read?.name || "";
+  if (!name) wrappedToast("Couldn't read the artist's name off Roon's page; search for it here.");
+  if (name) {
+    // An exact hit goes straight to the artist; otherwise the results
+    try {
+      const hits = await invoke("library_search", { query: name });
+      const hit = hits.artists.find((a) => a.name.toLowerCase() === name.toLowerCase());
+      if (hit) return openWrappedPage({ page: "artist", handle: hit.handle });
+    } catch (err) {
+      console.warn("find on screen", err);
+    }
+  }
+  openWrappedPage({ page: "search", query: name });
+}
+
 function wrappedHere() {
   if (roonNav.page === "album" && roonNav.albumId != null) {
     return { page: "album", albumId: roonNav.albumId, label: "This album", icon: "album" };
   }
-  if (roonNav.page === "artist" && roonNav.lastAlbumId != null) {
-    return { page: "artist", albumId: roonNav.lastAlbumId, label: "This artist", icon: "artist" };
+  // An artist page: known when Roon reached it from an album (roonnav.rs
+  // keeps that album); otherwise the log names nobody, so Wrapped offers
+  // its search
+  if (roonNav.page === "artist") {
+    if (roonNav.albumId != null) return { page: "artist", albumId: roonNav.albumId, label: "This artist", icon: "artist" };
+    // Otherwise by the pictures Roon fetched for the page (a library
+    // artist's photo, or a performer seen this session); the artist page
+    // resolves them, and falls back to the search
+    if (roonNav.imageKeys?.length) return { page: "artist", imageKeys: roonNav.imageKeys.slice(), label: "This artist", icon: "artist" };
+    return { page: "search", label: "Find this artist", icon: "search", find: true };
   }
   return null;
 }
@@ -2547,6 +2579,7 @@ function fillWrappedMenu() {
     option.addEventListener("click", () => {
       closeWrappedMenu();
       if (item.close) setWrappedOpen(false);
+      else if (item.find) wrappedFindOnScreen();
       else openWrappedPage(item);
     });
     wrappedMenu.append(option);
@@ -2605,7 +2638,8 @@ wrappedBtn.addEventListener("contextmenu", (event) => {
 wrappedPageOpen.addEventListener("click", () => {
   closeWrappedMenu();
   const here = wrappedHere();
-  if (here) openWrappedPage(here);
+  if (here?.find) wrappedFindOnScreen();
+  else if (here) openWrappedPage(here);
   else setWrappedOpen(wrapped.hidden);
 });
 wrappedPageArrow.addEventListener("click", () => {
@@ -2645,7 +2679,8 @@ function openWrappedPage(entry) {
     top.albumId === entry.albumId &&
     top.handle === entry.handle &&
     top.name === entry.name &&
-    top.performerId === entry.performerId;
+    top.performerId === entry.performerId &&
+    (entry.imageKeys == null || top.imageKeys?.join() === entry.imageKeys.join());
   if (same) {
     if (wrapped.hidden) setWrappedOpen(true);
     return;
@@ -2659,6 +2694,7 @@ function openWrappedPage(entry) {
     handle: entry.handle,
     query: entry.query,
     name: entry.name,
+    imageKeys: entry.imageKeys,
   });
   wrapped.hidden = false;
   renderWrapped();
@@ -2989,6 +3025,18 @@ const WRAPPED_PAGES = {
     wrappedBody.append(wrappedNote("Loading..."));
     let card;
     try {
+      if (!entry.handle && !entry.performerId && entry.imageKeys) {
+        const found = await invoke("wrapped_artist_by_images", { keys: entry.imageKeys });
+        if (!found) {
+          // Nobody by those pictures: the name off Roon's screen (ocr.rs),
+          // into Wrapped's search
+          wrappedStack.pop();
+          await wrappedFindOnScreen();
+          return;
+        }
+        if (found.handle) entry.handle = found.handle;
+        else entry.performerId = found.performerId;
+      }
       if (!entry.handle && entry.performerId) {
         card = await invoke("library_artist_by_id", { performerId: entry.performerId });
         entry.handle = card.handle;
@@ -3144,13 +3192,18 @@ async function wrappedSimilarBlock(holder, subject, roonRows, ticket) {
   const title = wrappedSection("Similar artists");
   const pills = document.createElement("div");
   pills.className = "wrapped-tabs small";
+  const scopes = document.createElement("div");
+  scopes.className = "wrapped-tabs small scope";
   const body = document.createElement("div");
-  head.append(title, pills);
+  head.append(title, pills, scopes);
   block.append(head, body);
   holder.append(block);
   let current = wrappedSettings.similarBy || "roon";
+  let scope = wrappedSettings.similarScope || "library";
   const show = async () => {
     for (const pill of pills.children) pill.classList.toggle("selected", pill.dataset.by === current);
+    for (const pill of scopes.children) pill.classList.toggle("selected", pill.dataset.scope === scope);
+    scopes.hidden = current === "roon";
     body.replaceChildren();
     if (current === "roon") {
       if (roonRows.length) body.append(wrappedGrid(roonRows.map(artistItem), openArtist));
@@ -3158,29 +3211,61 @@ async function wrappedSimilarBlock(holder, subject, roonRows, ticket) {
       return;
     }
     const by = current;
-    body.append(wrappedNote("Comparing tags..."));
-    let rows;
+    const mine = scope;
+    body.append(wrappedNote(scope === "discover" ? "Asking Last.fm for neighbours..." : "Comparing tags..."));
+    let answer;
     let status;
     try {
-      [rows, status] = await Promise.all([
-        invoke("wrapped_similar", { artist: subject.artist, album: subject.album || null, by, limit: 30 }),
+      [answer, status] = await Promise.all([
+        invoke("wrapped_similar", { artist: subject.artist, album: subject.album || null, by, scope, limit: 30 }),
         invoke("wrapped_tags_status").catch(() => null),
       ]);
     } catch (err) {
       if (ticket === wrappedTicket) body.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
       return;
     }
-    if (ticket !== wrappedTicket || current !== by) return;
+    if (ticket !== wrappedTicket || current !== by || scope !== mine) return;
     body.replaceChildren();
-    if (rows.length) {
-      body.append(
-        wrappedGrid(
+    if (!status?.library) {
+      body.append(wrappedNote("The library hasn't been read yet; Library and Discover need it. Read it in Wrapped's settings."));
+    }
+    const grid = document.createElement("div");
+    const pendingNote = document.createElement("div");
+    body.append(grid, pendingNote);
+    const paint = (rows, pending) => {
+      grid.replaceChildren();
+      if (rows.length) {
+        const cards = wrappedGrid(
           rows.map((r) => ({ row: r, title: r.name, sub: r.why.slice(0, 3).join(" · "), imageKey: r.imageKey, round: true })),
           (item) => openFromHistory("artist", item.row),
-        ),
-      );
-    } else {
-      body.append(wrappedNote(`No tagged artist shares this one's ${by === "era" ? "era and genre" : by} tags yet.`));
+        );
+        grid.append(cards);
+        wrappedFillPhotos(rows, cards, ticket);
+      } else if (!pending) {
+        grid.append(
+          wrappedNote(
+            `No tagged artist ${scope === "discover" ? "outside" : "in"} your library shares this one's ${by === "era" ? "era and genre" : by} tags yet.`,
+          ),
+        );
+      }
+      pendingNote.replaceChildren();
+      if (pending) {
+        const n = wrappedNote(`Tagging ${pending} more neighbour${pending === 1 ? "" : "s"} from Last.fm...`);
+        n.classList.add("small");
+        pendingNote.append(n);
+      }
+    };
+    paint(answer.rows, answer.pending);
+    if (answer.pending) {
+      // More rows arrive as the neighbours get tagged, five at a time
+      const unlisten = await listen("wrapped-similar", (event) => {
+        if (ticket !== wrappedTicket || current !== by || scope !== mine || event.payload.key !== answer.key) {
+          if (ticket !== wrappedTicket) unlisten();
+          return;
+        }
+        paint(event.payload.rows, event.payload.pending);
+        if (!event.payload.pending) unlisten();
+      });
     }
     if (status && status.tagged < status.artists) {
       const note = wrappedNote(
@@ -3200,6 +3285,17 @@ async function wrappedSimilarBlock(holder, subject, roonRows, ticket) {
       show();
     });
     pills.append(pill);
+  }
+  for (const [value, label] of SIMILAR_SCOPES) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.scope = value;
+    pill.textContent = label;
+    pill.addEventListener("click", () => {
+      scope = value;
+      show();
+    });
+    scopes.append(pill);
   }
   await show();
 }
@@ -3389,9 +3485,56 @@ function historyWhen(ms) {
 
 // Opens an album or artist page from a play or a top row: by the Core's
 // ids, which outlive the session (the handles don't)
-function openFromHistory(kind, row) {
+// Roon's photo (and handle) for cards that only have a name, one search
+// at a time in the background; what it finds is kept on the row
+const roonArtistCache = new Map(); // lower-cased name -> ArtistCard or null
+let photoQueue = Promise.resolve();
+function wrappedFillPhotos(rows, cards, ticket) {
+  const tiles = [...cards.querySelectorAll(".wrapped-card")];
+  rows.forEach((row, i) => {
+    if (row.imageKey && row.performerId) return;
+    const tile = tiles[i];
+    photoQueue = photoQueue.then(async () => {
+      if (ticket !== wrappedTicket || !tile.isConnected) return;
+      const key = row.name.toLowerCase();
+      let hit = roonArtistCache.get(key);
+      if (hit === undefined) {
+        try {
+          const hits = await invoke("library_search", { query: row.name });
+          hit = hits.artists.find((a) => a.name.toLowerCase() === key) || null;
+        } catch {
+          hit = null;
+        }
+        roonArtistCache.set(key, hit);
+      }
+      if (!hit) return;
+      row.handle = hit.handle;
+      if (hit.performerId) row.performerId = hit.performerId;
+      if (hit.imageKey && !row.imageKey) {
+        row.imageKey = hit.imageKey;
+        const art = tile.querySelector(".wrapped-art");
+        if (art) art.replaceWith(wrappedArt(hit.imageKey, 400, row.name, true));
+      }
+    });
+  });
+}
+
+async function openFromHistory(kind, row) {
+  if (kind === "artist" && row.handle) return openWrappedPage({ page: "artist", handle: row.handle });
   if (kind === "artist" && row.performerId) return openWrappedPage({ page: "artist", performerId: row.performerId });
   if (row.albumId) return openWrappedPage({ page: kind, albumId: row.albumId });
+  // Nothing of Roon's for it yet (a Discover pick): Roon's search finds it
+  if (kind === "artist" && row.name) {
+    wrappedToast(`Looking up ${row.name} in Roon...`);
+    try {
+      const hits = await invoke("library_search", { query: row.name });
+      const hit = hits.artists.find((a) => a.name.toLowerCase() === row.name.toLowerCase()) || hits.artists[0];
+      if (hit) return openWrappedPage({ page: "artist", handle: hit.handle });
+    } catch (err) {
+      console.warn("discover lookup", err);
+    }
+    return openWrappedPage({ page: "search", query: row.name });
+  }
   wrappedToast("Roon didn't keep an id for that one.");
 }
 
@@ -3442,6 +3585,11 @@ const SIMILAR_BY = [
   ["style", "Style"],
   ["scene", "Scene"],
   ["era", "Era"],
+];
+// Where the tag rows look: in the library, or only outside it
+const SIMILAR_SCOPES = [
+  ["library", "Library"],
+  ["discover", "Discover"],
 ];
 
 WRAPPED_PAGES.settings = async function () {
@@ -3551,6 +3699,24 @@ WRAPPED_PAGES.settings = async function () {
   }
   similar.append(pills);
 
+  const scopeField = field(
+    "Similar looks in",
+    "Library shows artists you already have; Discover only artists you don't. The row has the switch too; this is where it starts.",
+  );
+  const scopePills = document.createElement("div");
+  scopePills.className = "wrapped-tabs small";
+  for (const [value, label] of SIMILAR_SCOPES) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${(wrappedSettings.similarScope || "library") === value ? " selected" : ""}`;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      await save({ similarScope: value });
+      for (const other of scopePills.children) other.classList.toggle("selected", other === pill);
+    });
+    scopePills.append(pill);
+  }
+  scopeField.append(scopePills);
+
   const n = (x) => (x ?? 0).toLocaleString();
   const copied = historyStatus
     ? `${n(historyStatus.plays)} plays copied from Roon's history${historyStatus.syncedAt ? `, read ${historyWhen(historyStatus.syncedAt)}` : ""}`
@@ -3559,9 +3725,47 @@ WRAPPED_PAGES.settings = async function () {
     "Wrapped's records",
     `${copied}. ${n(tagCount)} artist${tagCount === 1 ? "" : "s"} in the tag cache. Both live in the app's data folder.`,
   );
+  const libraryField = field(
+    "Your library's artists",
+    "The main artists in your Roon library, read once so Wrapped can tell what's in it and what isn't (Library and Discover). Read it again after adding a lot of music.",
+  );
+  const libRow = document.createElement("div");
+  libRow.className = "wrapped-setting-row";
+  const libButton = document.createElement("button");
+  libButton.className = "wrapped-button";
+  const libText = document.createElement("span");
+  libText.className = "wrapped-setting-text inline";
+  const showLibrary = (st) => {
+    libButton.textContent = st.syncing ? "Reading..." : st.artists ? "Read again" : "Read the library";
+    libButton.disabled = st.syncing;
+    libText.textContent = st.artists
+      ? `${st.artists.toLocaleString()} artists${st.syncedAt ? `, read ${historyWhen(st.syncedAt)}` : ""}`
+      : "Not read yet";
+  };
+  invoke("wrapped_library_status").then(showLibrary).catch(() => {});
+  libButton.addEventListener("click", async () => {
+    try {
+      showLibrary(await invoke("wrapped_library_sync"));
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  });
+  const unlistenLibrary = await listen("wrapped-library", (event) => {
+    if (ticket !== wrappedTicket) return unlistenLibrary();
+    const p = event.payload;
+    if (p.error) wrappedToast(p.error);
+    if (p.done) {
+      invoke("wrapped_library_status").then(showLibrary).catch(() => {});
+      // The library's artists join the ones to tag
+      invoke("wrapped_tags_status").then(showTagging).catch(() => {});
+    } else libText.textContent = `Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} artists...`;
+  });
+  libRow.append(libButton, libText);
+  libraryField.append(libRow);
+
   const tagging = field(
-    "Tags for the artists you've played",
-    "The Similar by Genre, Style, Scene and Era rows compare tags, so the artists in your history need tagging first: one lookup a second, most played first, in the background. Stop and start it as you like; it carries on where it left off.",
+    "Tags for your artists",
+    "The Similar by Genre, Style, Scene and Era rows compare tags, so the artists in your history and library need tagging first: one lookup a second, most played first, in the background. Stop and start it as you like; it carries on where it left off.",
   );
   const tagRow = document.createElement("div");
   tagRow.className = "wrapped-setting-row";
@@ -3628,6 +3832,46 @@ WRAPPED_PAGES.genre = async function (entry) {
   ].some(Boolean);
   if (!any) holder.append(wrappedNote("Roon has nothing to show for this genre."));
 };
+
+// "Open in Roon": Roon's own search run for the name (wrapper.rs types it
+// into Roon's search box); the page closes so Roon's results show. (The
+// Core's share links were tried first: GetShareLink answers NotFound.)
+const OPEN_IN_ROON_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>';
+function wrappedOpenInRoon(text, pick) {
+  return wrappedIconButton(OPEN_IN_ROON_ICON, "Open in Roon", async () => {
+    // The page stays, with a spinner, while Roon is searched and the exact
+    // result clicked behind it (read off the results page); then it closes
+    // onto Roon's page (or its results, when nothing matched exactly)
+    wrappedBusy(`Opening ${pick} in Roon...`);
+    let picked = false;
+    let failed = null;
+    try {
+      picked = await invoke("wrapper_open_in_roon", { text, pick });
+    } catch (err) {
+      failed = String(err);
+    }
+    wrappedBusy(null);
+    if (failed) return wrappedToast(failed);
+    setWrappedOpen(false);
+    if (!picked) wrapperToast(`Roon's results for ${text}; nothing matched "${pick}" exactly.`);
+  });
+}
+
+// A spinner over the Wrapped page while something takes a moment
+function wrappedBusy(text) {
+  let busy = wrapped.querySelector(".wrapped-busy");
+  if (!text) {
+    busy?.remove();
+    return;
+  }
+  if (!busy) {
+    busy = document.createElement("div");
+    busy.className = "wrapped-busy";
+    busy.innerHTML = '<div class="wrapped-spinner"></div><div class="wrapped-busy-text"></div>';
+    wrapped.append(busy);
+  }
+  busy.querySelector(".wrapped-busy-text").textContent = text;
+}
 
 // The playlists Wrapped makes are named with this, so they're told apart
 const WRAPPED_PREFIX = "Wrapped: ";
@@ -3739,6 +3983,7 @@ function albumHeader(card) {
       return { inLibrary: next.inLibrary, favorite: next.favorite };
     }),
     wrappedRadio("album", { albums: [card.handle] }),
+    wrappedOpenInRoon(`${card.artist} ${card.title}`.trim(), card.title),
     wrappedIconButton(PLAYLIST_ICON, "Save this album as a Wrapped playlist", async () => {
       if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
       const name = `${WRAPPED_PREFIX}${card.title}`;
@@ -3772,7 +4017,7 @@ function artistHeader(card) {
   outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
-  actions.append(wrappedRadio("artist", { artists: [card.handle] }));
+  actions.append(wrappedRadio("artist", { artists: [card.handle] }), wrappedOpenInRoon(card.name, card.name));
   info.append(name, facts, genres, outside, actions);
   head.append(info);
   return head;

@@ -2724,6 +2724,40 @@ body > .wrapped-toast {
   }
 }
 
+/* A spinner over the whole Wrapped page (Open in Roon) */
+.wrapped-busy {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.wrapped-spinner {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  border: 5px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  border-top-color: var(--accent);
+  animation: wrapped-spin 0.9s linear infinite;
+}
+
+.wrapped-busy-text {
+  font-size: 15px;
+  color: var(--text);
+}
+
+@keyframes wrapped-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* The History page's views */
 .wrapped-tabs {
   display: flex;
@@ -2787,6 +2821,14 @@ body > .wrapped-toast {
 
 .wrapped-similar > div:last-child {
   margin-top: 12px;
+}
+
+.wrapped-tabs.scope {
+  margin-left: auto;
+}
+
+.wrapped-tabs.scope[hidden] {
+  display: none;
 }
 
 .wrapped-note.small {

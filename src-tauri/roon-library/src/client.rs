@@ -59,6 +59,12 @@ const SIG_SIMILAR_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarAl
 const SIG_ALBUM_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumRecommendedForYou(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
 const SIG_ALBUM_SIMILAR_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumSimilarPerformers(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
 const SIG_RECOMMENDED_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxRecommendedPerformers(System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_SHARE_PERFORMER: &str = "Sooloos.Broker.Api.Sharing::GetShareLink(System.Sooid, Sooloos.Broker.Api.PerformerBase, Base.ResultCallback<string>)";
+const SIG_SHARE_ALBUM: &str = "Sooloos.Broker.Api.Sharing::GetShareLink(System.Sooid, Sooloos.Broker.Api.AlbumBase, Base.ResultCallback<string>)";
+const SIG_PERFORMER_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualPerformerQuery(System.Sooid, Sooloos.Broker.Api.PerformerQueryCriteria, Sooloos.Broker.Api.VirtualQueryParameters, Base.ResultCallback<Sooloos.Broker.Api.VirtualPerformerLiteQuery>)";
+const SIG_PERFORMER_QUERY_RETAIN: &str = "Sooloos.Broker.Api.VirtualPerformerLiteQuery::RetainPage(int, Base.ResultCallback)";
+const SIG_PERFORMER_QUERY_RELEASE: &str = "Sooloos.Broker.Api.VirtualPerformerLiteQuery::ReleasePage(int, Base.ResultCallback)";
+const SIG_PERFORMER_QUERY_DISPOSE: &str = "Sooloos.Broker.Api.VirtualPerformerLiteQuery::Dispose()";
 const SIG_HISTORY_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualHistoryQuery(System.Sooid, Sooloos.Broker.Api.HistoryQueryCriteria, Sooloos.Broker.Api.VirtualQueryParameters, Base.ResultCallback<Sooloos.Broker.Api.VirtualHistoryPlayQuery>)";
 const SIG_HISTORY_RETAIN: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::RetainPage(int, Base.ResultCallback)";
 const SIG_HISTORY_RELEASE: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::ReleasePage(int, Base.ResultCallback)";
@@ -1147,6 +1153,110 @@ impl LibraryClient {
         })
     }
 
+    /// Every main artist in the library (Roon's Artists browser with its
+    /// default focus): a VirtualPerformerQuery read page by page, like the
+    /// history. `progress` gets (read so far, total) per page.
+    pub async fn library_artists(&self, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<ArtistCard>, LibraryError> {
+        const PAGE: usize = 100;
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let field = |name: &'static str, prop_type: PropertyType, value: Vec<u8>| StructField { name, prop_type, value };
+        let mut lang = Writer::new();
+        lang.string(Some("en"));
+        let mut yes = Writer::new();
+        yes.boolean(true);
+        let criteria = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.PerformerQueryCriteria",
+            &[
+                field("string Sooloos.Broker.Api.PerformerQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes()),
+                field("bool Sooloos.Broker.Api.PerformerQueryCriteria::RequireIsMainPerformer", PropertyType::Bool, yes.into_bytes()),
+            ],
+        )?;
+        let mut page_size = Writer::new();
+        page_size.integer(PAGE as i32);
+        let params = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.VirtualQueryParameters",
+            &[field("int Sooloos.Broker.Api.VirtualQueryParameters::PageSize", PropertyType::Int, page_size.into_bytes())],
+        )?;
+        let mut args = Writer::new();
+        args.sooid(&profile).bytes(&criteria).bytes(&params);
+        let res = self.inner.remoting.call(library, SIG_PERFORMER_QUERY, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "VirtualPerformerQuery".into(), status: res.status }.into());
+        }
+        let query = Reader::new(&res.payload)
+            .flex_long()
+            .ok()
+            .filter(|oid| *oid != 0)
+            .ok_or_else(|| LibraryError::Unconfirmed("the artist query did not open".into()))?;
+        // The page's rows come as fresh VirtualQueryElement objects whose
+        // Data points at the PerformerLite; the ones already in the graph
+        // belong to earlier queries
+        let before: HashSet<u64> = self.inner.graph.lock().unwrap().find_by_type_prefix("VirtualQueryElement<").map(|o| o.oid).collect();
+        let result = self.query_pages(query, PAGE, &before, SIG_PERFORMER_QUERY_RETAIN, SIG_PERFORMER_QUERY_RELEASE, progress).await;
+        let _ = self.inner.remoting.call_no_reply(query, SIG_PERFORMER_QUERY_DISPOSE, &[]);
+        let oids = result?;
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        let mut seen = HashSet::new();
+        Ok(oids
+            .into_iter()
+            .filter_map(|oid| g.get(oid))
+            .filter(|p| p.has_field("Name"))
+            .map(|p| describe_artist_card(&g, p, profile.as_deref()))
+            .filter(|p| seen.insert(p.performer_id.map(|id| id.to_string()).unwrap_or_else(|| p.handle.clone())))
+            .collect())
+    }
+
+    /// Reads every page of a virtual query: the object ids its elements'
+    /// Data point at, in query order.
+    async fn query_pages(
+        &self,
+        query: u64,
+        page_size: usize,
+        before: &HashSet<u64>,
+        retain: &str,
+        release: &str,
+        progress: &(dyn Fn(usize, usize) + Sync),
+    ) -> Result<Vec<u64>, LibraryError> {
+        let count = |g: &ObjectGraph| g.get(query).and_then(|q| q.field("Count")).and_then(Value::as_int);
+        if !self.wait_until(Duration::from_secs(5), |g| count(g).is_some()).await {
+            return Err(LibraryError::Unconfirmed("Roon did not say how many rows the query has".into()));
+        }
+        let total = count(&self.inner.graph.lock().unwrap()).unwrap_or(0).max(0) as usize;
+        let elements = |g: &ObjectGraph| -> Vec<(u64, Option<u64>)> {
+            g.find_by_type_prefix("VirtualQueryElement<")
+                .filter(|o| !before.contains(&o.oid))
+                .map(|o| (o.oid, o.ref_field("Data")))
+                .collect()
+        };
+        for page in 0..total.div_ceil(page_size) {
+            let mut arg = Writer::new();
+            arg.integer(page as i32);
+            let res = self.inner.remoting.call(query, retain, arg.as_bytes()).await?;
+            if !res.success() {
+                return Err(RemotingError::Failed { method: format!("RetainPage({page})"), status: res.status }.into());
+            }
+            let want = total.min((page + 1) * page_size);
+            self.wait_until(Duration::from_secs(5), |g| elements(g).len() >= want).await;
+            self.wait_until(Duration::from_secs(3), |g| {
+                elements(g).iter().all(|(_, data)| data.and_then(|d| g.get(d)).is_some_and(|o| o.has_field("Name") || o.has_field("Title")))
+            })
+            .await;
+            let _ = self.inner.remoting.call_no_reply(query, release, arg.as_bytes());
+            progress(want, total);
+        }
+        let g = self.inner.graph.lock().unwrap();
+        let mut rows = elements(&g);
+        rows.sort_by_key(|(oid, _)| *oid);
+        Ok(rows.into_iter().filter_map(|(_, data)| data).collect())
+    }
+
     /// Roon's play history for the profile, newest first, up to `limit`
     /// plays: the same VirtualHistoryQuery Roon's History page uses (pages of
     /// 100 retained one after the other; the HistoryPlay objects arrive as
@@ -1262,6 +1372,56 @@ impl LibraryClient {
         plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
         plays.truncate(target);
         Ok(History { total: total as u32, plays })
+    }
+
+    /// The performer in the graph whose picture has one of these Core image
+    /// keys (how Roon's artist page, which names no performer in the log,
+    /// is told from the pictures it fetches). The first match, as a card.
+    pub fn artist_by_image(&self, keys: &[String]) -> Option<ArtistCard> {
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        let found = g
+            .find_by_type_prefix("Performer")
+            .filter(|o| o.has_field("Name"))
+            .find(|p| {
+                ["Photo", "Avatar", "Image", "HeroImage", "BannerImage"]
+                    .iter()
+                    .filter_map(|name| image_key(&g, p, name))
+                    .any(|k| keys.contains(&k))
+            })
+            .map(|p| describe_artist_card(&g, p, profile.as_deref()));
+        found
+    }
+
+    /// Roon's share link for an artist or album (what its Share button
+    /// copies), by handle; the Roon app opens such links.
+    pub async fn share_link(&self, handle: &str) -> Result<String, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad handle {handle}")))?;
+        let (sharing, profile, kind) = {
+            let g = self.inner.graph.lock().unwrap();
+            let kind = g.get(oid).map(|o| o.short_type().to_string());
+            (g.first_of_type("Sharing").map(|o| o.oid), self.profile_sooid(&g), kind)
+        };
+        let (Some(sharing), Some(profile)) = (sharing, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Sharing service or Profile in the graph".into()));
+        };
+        let sig = match kind.as_deref() {
+            Some(k) if k.contains("Performer") => SIG_SHARE_PERFORMER,
+            Some(k) if k.contains("Album") => SIG_SHARE_ALBUM,
+            other => return Err(LibraryError::Unconfirmed(format!("not an artist or album: {other:?}"))),
+        };
+        let mut args = Writer::new();
+        args.sooid(&profile).long(oid);
+        let res = self.inner.remoting.call(sharing, sig, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "GetShareLink".into(), status: res.status }.into());
+        }
+        Reader::new(&res.payload)
+            .string()
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| LibraryError::Unconfirmed("the Core gave no share link".into()))
     }
 
     /// Roon's genre page, by the genre's name as Roon spells it: top and

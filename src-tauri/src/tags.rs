@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use crate::wrapped::{read_json, write_json, Wrapped, WrappedSettings};
+use crate::wrapped::{read_json, write_json, HistoryArtist, LibraryCopy, Wrapped, WrappedSettings};
 use tauri::Emitter;
 
 const KEEP_FOR_MS: i64 = 90 * 86_400_000;
@@ -74,6 +74,15 @@ pub struct AlbumTags {
     pub from_lastfm: bool,
 }
 
+/// Last.fm's neighbours of an artist (artist.getSimilar), with its match
+/// score 0..1 each.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarCache {
+    pub names: Vec<(String, f64)>,
+    pub fetched_at: i64,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 struct Store {
@@ -81,6 +90,8 @@ struct Store {
     artists: HashMap<String, ArtistTags>,
     /// Keyed by "artist\u{0}album", lower-cased.
     albums: HashMap<String, AlbumTags>,
+    /// Keyed by the artist's name, lower-cased.
+    similar: HashMap<String, SimilarCache>,
 }
 
 #[derive(Default)]
@@ -186,6 +197,30 @@ impl Tags {
         });
         self.save(app);
         out
+    }
+
+    /// Last.fm's neighbours of an artist, fetched when missing or stale
+    /// (empty without a key).
+    pub async fn lookup_similar(&self, app: &AppHandle, name: &str, lastfm_key: &str) -> Vec<(String, f64)> {
+        if lastfm_key.is_empty() {
+            return Vec::new();
+        }
+        let key = key_of(name);
+        if let Some(have) = self.with_store(app, |s| s.similar.get(&key).cloned()) {
+            if now_ms() - have.fetched_at < KEEP_FOR_MS {
+                return have.names;
+            }
+        }
+        self.turn().await;
+        let names = match client() {
+            Ok(client) => lastfm_similar(&client, name, lastfm_key).await.unwrap_or_default(),
+            Err(_) => Vec::new(),
+        };
+        self.with_store(app, |s| {
+            s.similar.insert(key, SimilarCache { names: names.clone(), fetched_at: now_ms() });
+        });
+        self.save(app);
+        names
     }
 
     /// Everything tagged so far, for the similarity scores.
@@ -312,6 +347,43 @@ async fn lastfm_album_top_tags(client: &reqwest::Client, artist: &str, album: &s
         .filter(|t| t.count >= 5)
         .filter_map(|t| classify(&t.name).map(|(name, kind)| Tag { name, weight: t.count.min(100), kind }))
         .take(12)
+        .collect())
+}
+
+#[derive(Deserialize)]
+struct LastfmSimilar {
+    similarartists: Option<LastfmSimilarList>,
+    error: Option<i32>,
+    message: Option<String>,
+}
+#[derive(Deserialize)]
+struct LastfmSimilarList {
+    artist: Vec<LastfmSimilarArtist>,
+}
+#[derive(Deserialize)]
+struct LastfmSimilarArtist {
+    name: String,
+    #[serde(rename = "match")]
+    score: Option<String>,
+}
+
+async fn lastfm_similar(client: &reqwest::Client, name: &str, key: &str) -> Result<Vec<(String, f64)>, String> {
+    let res = client
+        .get("https://ws.audioscrobbler.com/2.0/")
+        .query(&[("method", "artist.getsimilar"), ("artist", name), ("api_key", key), ("format", "json"), ("autocorrect", "1"), ("limit", "60")])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let body: LastfmSimilar = res.json().await.map_err(|e| e.to_string())?;
+    if let Some(code) = body.error {
+        return Err(body.message.unwrap_or_else(|| format!("error {code}")));
+    }
+    Ok(body
+        .similarartists
+        .map(|l| l.artist)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|a| (a.name, a.score.and_then(|m| m.parse().ok()).unwrap_or(0.0)))
         .collect())
 }
 
@@ -551,13 +623,32 @@ pub struct FillStatus {
     pub tagged: usize,
     pub artists: usize,
     pub filling: bool,
+    /// Whether the library's artists have been read (Library / Discover
+    /// need them).
+    pub library: bool,
+}
+
+/// Every artist Wrapped knows: the history's (most played first), then
+/// the library's that were never played (most albums first).
+fn known_artists(app: &AppHandle) -> Vec<HistoryArtist> {
+    let mut out = app.state::<Wrapped>().artists(app);
+    let mut seen: std::collections::HashSet<String> = out.iter().map(|a| key_of(&a.name)).collect();
+    let mut library = app.state::<LibraryCopy>().artists(app);
+    library.sort_by(|a, b| b.album_count.unwrap_or(0).cmp(&a.album_count.unwrap_or(0)));
+    for a in library {
+        if seen.insert(key_of(&a.name)) {
+            out.push(HistoryArtist { name: a.name, plays: 0, performer_id: a.performer_id, album_id: None, image_key: a.image_key, last_played: 0 });
+        }
+    }
+    out
 }
 
 fn fill_status(app: &AppHandle) -> FillStatus {
     let tags = app.state::<Tags>();
-    let artists = app.state::<Wrapped>().artists(app);
+    let artists = known_artists(app);
     let tagged = tags.with_store(app, |s| artists.iter().filter(|a| s.artists.contains_key(&key_of(&a.name))).count());
-    FillStatus { tagged, artists: artists.len(), filling: tags.filling.load(std::sync::atomic::Ordering::SeqCst) }
+    let library = !app.state::<LibraryCopy>().artists(app).is_empty();
+    FillStatus { tagged, artists: artists.len(), filling: tags.filling.load(std::sync::atomic::Ordering::SeqCst), library }
 }
 
 #[tauri::command]
@@ -584,7 +675,7 @@ pub fn wrapped_tags_fill(app: AppHandle, stop: Option<bool>) -> FillStatus {
     tauri::async_runtime::spawn(async move {
         let tags = app2.state::<Tags>();
         let key = WrappedSettings::load(&app2).lastfm_key;
-        let artists = app2.state::<Wrapped>().artists(&app2);
+        let artists = known_artists(&app2);
         let total = artists.len();
         let mut done = 0;
         for artist in artists {
@@ -620,6 +711,7 @@ pub struct SimilarRow {
     pub album_id: Option<u64>,
     pub image_key: Option<String>,
     pub plays: u32,
+    pub in_library: bool,
 }
 
 fn overlap(a: &[Tag], b: &[Tag], kind: TagKind) -> (f64, Vec<String>) {
@@ -638,12 +730,110 @@ fn overlap(a: &[Tag], b: &[Tag], kind: TagKind) -> (f64, Vec<String>) {
     (shared as f64 / total as f64, why)
 }
 
+/// What `wrapped_similar` answers: the rows so far, and how many Discover
+/// neighbours are still being tagged (more rows follow as "wrapped-similar"
+/// events carrying the same `key`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarAnswer {
+    pub key: String,
+    pub rows: Vec<SimilarRow>,
+    pub pending: usize,
+}
+
+/// Everything a ranking needs, so it can be redone as tags arrive.
+struct SimilarQuery {
+    me: String,
+    subject_tags: Vec<Tag>,
+    subject_year: Option<u32>,
+    kind: Option<TagKind>,
+    discover: bool,
+    matches: HashMap<String, f64>,
+    limit: usize,
+}
+
+fn rank_similar(app: &AppHandle, q: &SimilarQuery) -> Vec<SimilarRow> {
+    let tags = app.state::<Tags>();
+    let history: HashMap<String, HistoryArtist> = known_artists(app).into_iter().map(|a| (key_of(&a.name), a)).collect();
+    let in_library = app.state::<LibraryCopy>().names(app);
+    let mut rows: Vec<SimilarRow> = tags
+        .all_artists(app)
+        .into_iter()
+        .filter(|c| key_of(&c.name) != q.me)
+        .filter(|c| in_library.contains(&key_of(&c.name)) != q.discover)
+        .filter_map(|c| {
+            let (score, why) = match q.kind {
+                Some(TagKind::Scene) => {
+                    let (scene, mut why) = overlap(&q.subject_tags, &c.tags, TagKind::Scene);
+                    if scene == 0.0 {
+                        return None;
+                    }
+                    let (genre, shared) = overlap(&q.subject_tags, &c.tags, TagKind::Genre);
+                    why.extend(shared);
+                    (scene * 0.3 + genre, why)
+                }
+                Some(kind) => {
+                    let (score, why) = overlap(&q.subject_tags, &c.tags, kind);
+                    if score == 0.0 {
+                        return None;
+                    }
+                    (score, why)
+                }
+                None => {
+                    let (year, mine) = (c.begin_year?, q.subject_year?);
+                    let gap = year.abs_diff(mine);
+                    if gap > 6 {
+                        return None;
+                    }
+                    let (genre, mut why) = overlap(&q.subject_tags, &c.tags, TagKind::Genre);
+                    if genre == 0.0 {
+                        return None;
+                    }
+                    why.insert(0, format!("formed {year}"));
+                    (genre + (6 - gap) as f64 / 6.0, why)
+                }
+            };
+            let k = key_of(&c.name);
+            let h = history.get(&k);
+            let mut why = why;
+            let m = q.matches.get(&k).copied();
+            if let Some(m) = m {
+                why.insert(0, format!("{}% match", (m * 100.0).round() as u32));
+            }
+            Some(SimilarRow {
+                name: c.name.clone(),
+                score: score + m.unwrap_or(0.0) * 0.6,
+                why,
+                performer_id: h.and_then(|h| h.performer_id),
+                album_id: h.and_then(|h| h.album_id),
+                image_key: h.and_then(|h| h.image_key.clone()),
+                plays: h.map(|h| h.plays).unwrap_or(0),
+                in_library: in_library.contains(&k),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.plays.cmp(&a.plays)));
+    rows.truncate(q.limit);
+    rows
+}
+
 /// Artists like `artist` by one of the tag kinds ("genre", "style",
-/// "scene") or by "era" (formed within six years, sharing a genre), among
-/// the tagged artists. `album` names an album whose own tags stand in for
-/// the artist's.
+/// "scene") or by "era" (formed within six years, sharing a genre).
+/// Library: among the tagged artists in the library. Discover: Last.fm's
+/// neighbours of the artist that aren't in the library (the best-matched
+/// twenty tagged in the background, the ranking sent again every five as
+/// "wrapped-similar" events), beside anything else tagged and not in the
+/// library. `album` names an album whose own tags stand in for the
+/// artist's.
 #[tauri::command]
-pub async fn wrapped_similar(app: AppHandle, artist: String, album: Option<String>, by: String, limit: Option<usize>) -> Result<Vec<SimilarRow>, String> {
+pub async fn wrapped_similar(
+    app: AppHandle,
+    artist: String,
+    album: Option<String>,
+    by: String,
+    scope: Option<String>,
+    limit: Option<usize>,
+) -> Result<SimilarAnswer, String> {
     let key = WrappedSettings::load(&app).lastfm_key;
     let tags = app.state::<Tags>();
     let subject = tags.lookup(&app, &artist, &key).await;
@@ -663,60 +853,46 @@ pub async fn wrapped_similar(app: AppHandle, artist: String, album: Option<Strin
         "era" => None,
         other => return Err(format!("Unknown similarity: {other}")),
     };
-    let history: HashMap<String, crate::wrapped::HistoryArtist> =
-        app.state::<Wrapped>().artists(&app).into_iter().map(|a| (key_of(&a.name), a)).collect();
+    let discover = scope.as_deref() == Some("discover");
     let me = key_of(&artist);
-    let mut rows: Vec<SimilarRow> = tags
-        .all_artists(&app)
-        .into_iter()
-        .filter(|c| key_of(&c.name) != me)
-        .filter_map(|c| {
-            let (score, why) = match kind {
-                Some(TagKind::Scene) => {
-                    let (scene, mut why) = overlap(&subject_tags, &c.tags, TagKind::Scene);
-                    if scene == 0.0 {
-                        return None;
-                    }
-                    let (genre, shared) = overlap(&subject_tags, &c.tags, TagKind::Genre);
-                    why.extend(shared);
-                    (scene * 0.3 + genre, why)
+    let mut matches: HashMap<String, f64> = HashMap::new();
+    let mut pending: Vec<String> = Vec::new();
+    if discover {
+        let in_library = app.state::<LibraryCopy>().names(&app);
+        for (name, score) in tags.lookup_similar(&app, &artist, &key).await {
+            let k = key_of(&name);
+            if k == me || in_library.contains(&k) {
+                continue;
+            }
+            matches.insert(k, score);
+            let tagged = tags.cached(&app, &name).is_some_and(|t| t.from_lastfm || key.is_empty());
+            if !tagged && pending.len() < 20 {
+                pending.push(name);
+            }
+        }
+    }
+    let query = SimilarQuery { me, subject_tags, subject_year: subject.begin_year, kind, discover, matches, limit: limit.unwrap_or(30) };
+    let answer_key = format!("{}|{}|{}|{}", key_of(&artist), album.as_deref().map(key_of).unwrap_or_default(), by, if discover { "discover" } else { "library" });
+    let rows = rank_similar(&app, &query);
+    let still = pending.len();
+    if still > 0 {
+        // Tag the neighbours in the background; every five, rank again
+        let app2 = app.clone();
+        let answer_key2 = answer_key.clone();
+        tauri::async_runtime::spawn(async move {
+            let tags = app2.state::<Tags>();
+            let total = pending.len();
+            for (i, name) in pending.into_iter().enumerate() {
+                tags.lookup(&app2, &name, &key).await;
+                let left = total - i - 1;
+                if left == 0 || (i + 1) % 5 == 0 {
+                    let rows = rank_similar(&app2, &query);
+                    let _ = app2.emit("wrapped-similar", SimilarAnswer { key: answer_key2.clone(), rows, pending: left });
                 }
-                Some(kind) => {
-                    let (score, why) = overlap(&subject_tags, &c.tags, kind);
-                    if score == 0.0 {
-                        return None;
-                    }
-                    (score, why)
-                }
-                None => {
-                    let (year, mine) = (c.begin_year?, subject.begin_year?);
-                    let gap = year.abs_diff(mine);
-                    if gap > 6 {
-                        return None;
-                    }
-                    let (genre, mut why) = overlap(&subject_tags, &c.tags, TagKind::Genre);
-                    if genre == 0.0 {
-                        return None;
-                    }
-                    why.insert(0, format!("formed {year}"));
-                    (genre + (6 - gap) as f64 / 6.0, why)
-                }
-            };
-            let h = history.get(&key_of(&c.name));
-            Some(SimilarRow {
-                name: c.name.clone(),
-                score,
-                why,
-                performer_id: h.and_then(|h| h.performer_id),
-                album_id: h.and_then(|h| h.album_id),
-                image_key: h.and_then(|h| h.image_key.clone()),
-                plays: h.map(|h| h.plays).unwrap_or(0),
-            })
-        })
-        .collect();
-    rows.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.plays.cmp(&a.plays)));
-    rows.truncate(limit.unwrap_or(30));
-    Ok(rows)
+            }
+        });
+    }
+    Ok(SimilarAnswer { key: answer_key, rows, pending: still })
 }
 
 #[cfg(test)]

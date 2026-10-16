@@ -55,6 +55,10 @@ pub struct RoonNav {
     /// on (a sidebar click on the current page), so the Wrapper can react
     /// to the click itself.
     pub nav_count: u64,
+    /// The Core image keys Roon fetched in the seconds after the last
+    /// navigation (an artist page's own pictures among them; the log names
+    /// no performer, but a library artist can be told by its picture).
+    pub image_keys: Vec<String>,
 }
 
 static NAV: Mutex<RoonNav> = Mutex::new(RoonNav {
@@ -63,7 +67,29 @@ static NAV: Mutex<RoonNav> = Mutex::new(RoonNav {
     last_album_id: None,
     available: false,
     nav_count: 0,
+    image_keys: Vec::new(),
 });
+
+/// How long after a navigation (by the log's own clock) image fetches
+/// still count as that page's. The log's times, not ours: the first read
+/// after a start catches up on old lines all at once.
+const IMAGES_FOR_SECS: u32 = 3;
+
+/// A log line's time of day in seconds ("10/16 03:46:59 Debug: ...").
+fn log_secs(line: &str) -> Option<u32> {
+    let time = line.get(6..14)?;
+    let mut parts = time.split(':').map(|p| p.parse::<u32>().ok());
+    let (h, m, s) = (parts.next()??, parts.next()??, parts.next()??);
+    (h < 24 && m < 60 && s < 60).then_some(h * 3600 + m * 60 + s)
+}
+const IMAGE_KEYS_MAX: usize = 16;
+
+/// The key of a Core image Roon fetched ("GET to http://core:9330/image/<key>.<size>.jpg").
+fn image_key_of(line: &str) -> Option<String> {
+    let rest = line.split("/image/").nth(1)?;
+    let key: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
+    (!key.is_empty() && line.contains("[easyhttp]")).then_some(key)
+}
 
 /// One page in the copy of Roon's history.
 #[derive(Clone, PartialEq, Debug)]
@@ -105,6 +131,13 @@ impl History {
                     }
                 }
                 self.forward.clear();
+                // An artist page reached from an album is that album's
+                // artist (the log names no performer); from anywhere else
+                // the artist stays unknown
+                let album_id = match (page.as_str(), album_id) {
+                    ("artist", None) => self.back.last().filter(|e| e.page == "album").and_then(|e| e.album_id),
+                    (_, id) => id,
+                };
                 let entry = Entry { page, album_id };
                 self.back.push(entry.clone());
                 Some(entry)
@@ -171,6 +204,7 @@ pub fn start(app: &AppHandle) {
         let mut reader = LogReader { path, offset: None, partial: String::new() };
         let mut history = History::default();
         let mut tick = tokio::time::interval(POLL);
+        let mut last_step: Option<u32> = None;
         loop {
             tick.tick().await;
             let (available, lines) = reader.poll();
@@ -182,9 +216,22 @@ pub fn start(app: &AppHandle) {
                     changed = true;
                 }
                 for line in &lines {
+                    if let Some(key) = image_key_of(line) {
+                        let recent = match (log_secs(line), last_step) {
+                            (Some(at), Some(step)) => (at + 86_400 - step) % 86_400 <= IMAGES_FOR_SECS,
+                            _ => false,
+                        };
+                        if recent && nav.image_keys.len() < IMAGE_KEYS_MAX && !nav.image_keys.contains(&key) {
+                            nav.image_keys.push(key);
+                            changed = true;
+                        }
+                        continue;
+                    }
                     let Some(step) = parse(line) else { continue };
                     let Some(entry) = history.apply(step) else { continue };
                     nav.nav_count += 1;
+                    nav.image_keys.clear();
+                    last_step = log_secs(line);
                     changed = true;
                     if entry.album_id.is_some() {
                         nav.last_album_id = entry.album_id;
@@ -301,13 +348,19 @@ impl LogReader {
         } else {
             lines.pop(); // the empty piece after the final newline
         }
-        (true, lines.into_iter().filter(|l| l.contains("UI-NAV: ") || l.contains("UI-BACK: ") || l.contains("UI-FWD: ")).collect())
+        (
+            true,
+            lines
+                .into_iter()
+                .filter(|l| l.contains("UI-NAV: ") || l.contains("UI-BACK: ") || l.contains("UI-FWD: ") || (l.contains("[easyhttp]") && l.contains("/image/")))
+                .collect(),
+        )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse, Entry, History, Step};
+    use super::{log_secs, parse, Entry, History, Step};
 
     #[test]
     fn parses_pages() {
@@ -320,6 +373,8 @@ mod tests {
             Some(Step::New("artist".into(), None))
         );
         assert_eq!(parse("10/15 03:38:00 Debug: UI-NAV: home / bookmarkdata:"), Some(Step::New("home".into(), None)));
+        assert_eq!(log_secs("10/16 03:46:59 Debug: UI-NAV: home"), Some(3 * 3600 + 46 * 60 + 59));
+        assert_eq!(log_secs("garbage"), None);
         assert_eq!(parse("10/15 16:56:16 Debug: UI-BACK: mode: home"), Some(Step::Back("home".into())));
         assert_eq!(parse("10/15 16:56:17 Debug: UI-FWD: mode: albumdetails"), Some(Step::Forward("album".into())));
         assert_eq!(parse("10/15 03:38:00 Debug: GMS: saving nav stack"), None);

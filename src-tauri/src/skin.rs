@@ -836,7 +836,14 @@ mod imp {
             let i = y as usize * stride + x as usize * 4;
             [pixels[i + 2], pixels[i + 1], pixels[i]]
         };
-        let bg = mode(rows.iter().map(|&y| at(4, y)))?;
+        // The sidebar's grey, from several columns: a window next to the
+        // Wrapper on the left casts its shadow over Roon's first few dozen
+        // pixels (the shadow isn't a window, so the hit tests above don't
+        // see it), and the far left alone then reads as "no sidebar". The
+        // shadow's shades and the sidebar's lettering each vary; the plain
+        // grey is what most samples share.
+        let columns = [4, 56, 72, 88, 104, 116].map(|x: i32| x.min(width - 1));
+        let bg = mode(rows.iter().flat_map(|&y| columns.iter().map(move |&x| at(x, y))))?;
         // (Never more than half the width: Roon's player screen is black
         // most of the way across, which isn't a sidebar)
         for x in 120..(width / 2).min(width - 16) {

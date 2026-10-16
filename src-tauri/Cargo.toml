@@ -50,10 +50,11 @@ tauri-plugin-global-shortcut = "~2.3"
 # registering roon-toasted:// links, keeping the taskbar widget in place, and
 # the Wrapper (wrapper.rs: window regions, finding Roon's window; skin.rs:
 # the color filter over Roon's sidebar, via the Magnification API; pictures
-# of Roon's window, to see whether its player screen is open: Storage_Xps)
+# of Roon's window, to see whether its player screen is open: Storage_Xps;
+# ocr.rs: reading a page's title off the screen with Windows' OCR engine)
 # (same version Tauri uses)
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_Shell", "Win32_UI_Accessibility", "Win32_Storage_Xps", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_Shell", "Win32_UI_Accessibility", "Win32_Storage_Xps", "Win32_UI_Input_KeyboardAndMouse", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Security_Cryptography", "Foundation_Collections"] }
 
 
 # Local copies of two Roon libraries with fixes: roon-api in vendor/roon-api
