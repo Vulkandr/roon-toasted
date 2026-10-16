@@ -147,6 +147,9 @@ pub struct WrapperStatus {
     /// over that part of the hole and recolors everything under it, the
     /// button included, so drawn like Roon's sidebar it comes out in ours.
     pub sidebar_color: Option<[u8; 3]>,
+    /// Roon's own background in its content header (RGB), as last seen; the
+    /// page paints it around its content-header button's rounded corners.
+    pub header_color: Option<[u8; 3]>,
 }
 
 /// Whether the Wrapper is switched on in Settings.
@@ -375,8 +378,8 @@ mod windows_wrapper {
     use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
-    use tauri::{AppHandle, Manager};
-    use windows::Win32::Foundation::{HWND, POINT, RECT};
+    use tauri::{AppHandle, Emitter, Manager};
+    use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 
     use super::{WrapperStatus, WRAPPER_WINDOW};
 
@@ -587,6 +590,7 @@ mod windows_wrapper {
             roon_lost: ROON_LOST.load(Ordering::Relaxed),
             sidebar: crate::skin::sidebar().map(|(width, _)| width),
             sidebar_color: crate::skin::sidebar().map(|(_, color)| color),
+            header_color: crate::skin::header_color(),
         }
     }
 
@@ -595,6 +599,7 @@ mod windows_wrapper {
         let _ = APP.set(app.clone());
         remember_host(app);
         watch_foreground();
+        watch_clicks();
         follow_moves();
         watch_player();
         // A Roon of its own while the Wrapper is on gets the title-bar button
@@ -914,6 +919,18 @@ mod windows_wrapper {
                     set_note("Couldn't open Roon. Restart the Roon desktop app, and it will appear here.");
                 }
                 _ => {}
+            }
+        }
+
+        // Roon's own "Enter full screen" (F11, and the item in its sidebar
+        // menu) takes its window out of our hands: it drops the title bar
+        // and spreads over the whole screen, and the page's buttons lose
+        // their place. Undone at once with another F11 (see undo_fullscreen)
+        if let Some(roon) = roon {
+            if is_fullscreen(roon) {
+                undo_fullscreen(app, roon);
+                std::mem::forget(report);
+                return;
             }
         }
 
@@ -1861,6 +1878,92 @@ mod windows_wrapper {
         unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
     }
 
+    /// Whether Roon is in its full screen mode: no title bar any more (we
+    /// only ever take its resize borders, see adopt), or its window spread
+    /// over the whole screen, taskbar included.
+    fn is_fullscreen(roon: HWND) -> bool {
+        use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST};
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowLongPtrW, GWL_STYLE, WS_CAPTION};
+        if !is_visible(roon) || is_minimized(roon) {
+            return false;
+        }
+        // SAFETY: plain window queries on a valid handle.
+        unsafe {
+            let style = GetWindowLongPtrW(roon, GWL_STYLE) as u32;
+            if style & WS_CAPTION.0 != WS_CAPTION.0 {
+                return true;
+            }
+            let Some(rect) = window_rect(roon) else {
+                return false;
+            };
+            let monitor = MonitorFromWindow(roon, MONITOR_DEFAULTTONEAREST);
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+                return false;
+            }
+            let m = info.rcMonitor;
+            rect.0 <= m.left && rect.1 <= m.top && rect.0 + rect.2 >= m.right && rect.1 + rect.3 >= m.bottom
+        }
+    }
+
+    /// When Roon last got an F11 from us, and how many in this stretch of
+    /// full screen (so a wrong guess can't keep toggling it; see
+    /// undo_fullscreen).
+    static FULLSCREEN_UNDO: Mutex<Option<(Instant, u32)>> = Mutex::new(None);
+    const FULLSCREEN_RETRY: Duration = Duration::from_millis(700);
+    const FULLSCREEN_TRIES: u32 = 3;
+    const FULLSCREEN_FORGET: Duration = Duration::from_secs(5);
+
+    /// Presses F11 for Roon, which is how its full screen mode is left:
+    /// typed when Roon is in front (it just took a click on its menu), posted
+    /// to its window otherwise. At most once every 0.7 s and three times per
+    /// stretch, and the page is told once ("roon-fullscreen").
+    fn undo_fullscreen(app: &AppHandle, roon: HWND) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{
+            SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_F11,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, PostMessageW, WM_KEYDOWN, WM_KEYUP};
+        let mut guard = FULLSCREEN_UNDO.lock().unwrap();
+        let tries = match *guard {
+            Some((at, _)) if at.elapsed() >= FULLSCREEN_FORGET => 0,
+            Some((at, _)) if at.elapsed() < FULLSCREEN_RETRY => return,
+            Some((_, tries)) if tries >= FULLSCREEN_TRIES => return,
+            Some((_, tries)) => tries,
+            None => 0,
+        };
+        *guard = Some((Instant::now(), tries + 1));
+        drop(guard);
+        if tries == 0 {
+            let _ = app.emit_to(WRAPPER_WINDOW, "roon-fullscreen", ());
+        }
+        // SAFETY: a plain query, then either keyboard input with the size of
+        // one INPUT, or messages posted to a valid window.
+        unsafe {
+            if GetForegroundWindow() == roon {
+                let key = |up: bool| INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: VK_F11,
+                            dwFlags: if up { KEYEVENTF_KEYUP } else { Default::default() },
+                            ..Default::default()
+                        },
+                    },
+                };
+                let inputs = [key(false), key(true)];
+                SendInput(&inputs, std::mem::size_of::<INPUT>() as i32);
+            } else {
+                // Scan code 0x57, repeat count 1; the key-up has the
+                // previous-state and transition bits set
+                let _ = PostMessageW(Some(roon), WM_KEYDOWN, WPARAM(VK_F11.0 as usize), LPARAM(0x0057_0001));
+                let _ = PostMessageW(Some(roon), WM_KEYUP, WPARAM(VK_F11.0 as usize), LPARAM(0xC057_0001));
+            }
+        }
+    }
+
     /// The size of the work area (the screen minus the taskbar, real
     /// pixels) of the screen a window is mostly on.
     fn screen_room(hwnd: HWND) -> Option<(i32, i32)> {
@@ -2074,6 +2177,43 @@ mod windows_wrapper {
     /// Puts the Wrapper back above Roon the moment Roon becomes the active
     /// window (clicking in the hole). Set up on the main thread, whose
     /// message loop delivers the events.
+    /// A low-level mouse hook, for clicks that land on Roon through the
+    /// hole (its sidebar, say) while the page has something over the rest of
+    /// it: the page gets a "roon-click" event with the screen point and
+    /// closes its Wrapped page, like any Roon page would get out of the way.
+    /// The hook only looks; every click goes on to Roon. Set up on the main
+    /// thread, whose message loop delivers the hook's calls.
+    fn watch_clicks() {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_MOUSE_LL};
+        // SAFETY: a valid callback that lives for the whole program.
+        unsafe {
+            let _ = SetWindowsHookExW(WH_MOUSE_LL, Some(on_mouse), None, 0);
+        }
+    }
+
+    unsafe extern "system" fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, MSLLHOOKSTRUCT, WM_LBUTTONDOWN};
+        if code >= 0 && wparam.0 as u32 == WM_LBUTTONDOWN && STATE.load(Ordering::Relaxed) == OPEN {
+            let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
+            let (x, y) = (info.pt.x, info.pt.y);
+            let on_roon = {
+                let hole = *VISIBLE_HOLE.lock().unwrap();
+                let covers = VISIBLE_COVERS.lock().unwrap().clone();
+                hole.is_some_and(|h| {
+                    subtract(h, &covers)
+                        .iter()
+                        .any(|r| x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3])
+                })
+            };
+            if on_roon {
+                if let Some(app) = APP.get() {
+                    let _ = app.emit_to(WRAPPER_WINDOW, "roon-click", [x, y]);
+                }
+            }
+        }
+        CallNextHookEx(None, code, wparam, lparam)
+    }
+
     fn watch_foreground() {
         use windows::Win32::UI::Accessibility::SetWinEventHook;
         use windows::Win32::UI::WindowsAndMessaging::{EVENT_SYSTEM_FOREGROUND, WINEVENT_OUTOFCONTEXT};

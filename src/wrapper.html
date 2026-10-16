@@ -142,6 +142,25 @@
           <div class="piece piece-quality" data-piece="quality"><div class="piece-content"></div></div>
           <div class="piece piece-zone" data-piece="zone"><div class="piece-content"></div></div>
           <div class="piece piece-volume" data-piece="volume"><div class="piece-content"></div></div>
+          <!-- Wrapped: a title and icon buttons (each closes Now Playing and
+               opens the Wrapped page); its contents are its own control, so
+               the layout's font and edges apply like the others' -->
+          <div class="piece piece-wrapped" data-piece="wrapped">
+            <div class="piece-content">
+              <div id="wrapped-piece" class="wrapped-piece">
+                <div class="wrapped-piece-title">Wrapped</div>
+                <div class="wrapped-piece-buttons">
+                  <button class="wrapped-piece-btn" data-action="open" data-tip="Open Wrapped"><svg class="wrapped-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M0 0h16l-8 8v17l-8 7z" fill="#fff"/><path d="M16 0h16v32H8V8z" fill="currentColor"/><path d="M32 21v11H21z" fill="#d29922"/><path d="M15.5 13.5 29 1M15.5 24 29 11.5" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/><path d="M0.8 0.8h30.4v30.4H8.5L0.8 31.2zM16 0.8 8 8.5v16.7" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
+                  <button class="wrapped-piece-btn" data-action="artist" data-tip="Open the artist in Wrapped">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+                  </button>
+                  <button class="wrapped-piece-btn" data-action="playlist" data-tip="Create a playlist from this song">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
           <div id="guide-v" class="guide guide-v"></div>
           <div id="guide-h" class="guide guide-h"></div>
         </div>
@@ -188,6 +207,7 @@
                 <button class="chip" data-show="zone">Zone</button>
                 <button class="chip" data-show="quality">Quality</button>
                 <button class="chip" data-show="volume">Volume</button>
+                <button class="chip" data-show="wrapped">Wrapped</button>
               </div>
             </div>
             <div class="editor-row editor-global">
@@ -368,19 +388,23 @@
            covers (wrapper.js tells wrapper.rs to keep them part of the
            window); wrapper.js places them by Roon's sidebar. -->
       <div id="wrapped-btn" class="wrapped-btn" hidden>
-        <button id="wrapped-open" class="wrapped-open" title="Open Wrapped">Wrapped</button>
-        <button id="wrapped-arrow" class="wrapped-arrow" title="Wrapped menu">
-          <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
+        <div class="wrapped-face">
+          <button id="wrapped-open" class="wrapped-open" title="Open Wrapped">Wrapped</button>
+          <button id="wrapped-arrow" class="wrapped-arrow" title="Wrapped menu">
+            <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
       </div>
       <!-- The same, in Roon's content header: opens Roon's current album or
            artist in Wrapped, and stands in for the sidebar button while the
            sidebar is collapsed -->
       <div id="wrapped-page-btn" class="wrapped-page-btn" hidden>
-        <button id="wrapped-page-open" class="wrapped-page-open">Wrapped</button>
-        <button id="wrapped-page-arrow" class="wrapped-page-arrow" title="Wrapped menu">
-          <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
-        </button>
+        <div class="wrapped-face">
+          <button id="wrapped-page-open" class="wrapped-page-open">Wrapped</button>
+          <button id="wrapped-page-arrow" class="wrapped-page-arrow" title="Wrapped menu">
+            <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </button>
+        </div>
       </div>
       <div id="wrapped-menu" class="wrapped-menu" hidden></div>
       <section id="wrapped" class="wrapped" hidden>

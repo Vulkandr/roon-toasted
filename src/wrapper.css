@@ -1754,8 +1754,87 @@ html.invert-colors {
 .transport svg,
 .zone-button svg,
 .volume-row svg,
-.library svg {
+.library svg,
+.wrapped-piece svg {
   filter: var(--icon-edge, none);
+}
+
+/* ----- Now Playing's Wrapped piece: a title and icon buttons ----- */
+
+.wrapped-piece {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+  color: #fff;
+}
+
+.wrapped-piece-title {
+  font-size: 1.05em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.wrapped-piece-buttons {
+  display: flex;
+  gap: 0.35em;
+}
+
+.wrapped-piece-btn {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 2.2em;
+  height: 2.2em;
+  border-radius: 50%;
+  color: #fff;
+  transition: background 0.15s;
+}
+
+.wrapped-piece-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.wrapped-piece-btn svg {
+  width: 1.3em;
+  height: 1.3em;
+}
+
+/* The Wrapped mark, its purple in the current accent (album colors or the
+   app's); inverted colors swap it like the other controls */
+.wrapped-piece-btn .wrapped-mark {
+  width: 1.35em;
+  height: 1.35em;
+  color: var(--swap-accent, var(--accent));
+}
+
+/* The hover text */
+.wrapped-piece-btn::after {
+  content: attr(data-tip);
+  position: absolute;
+  top: calc(100% + 0.3em);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.3em 0.6em;
+  border-radius: 0.4em;
+  background: rgba(0, 0, 0, 0.85);
+  color: #fff;
+  font-size: 0.75em;
+  font-weight: 400;
+  letter-spacing: 0;
+  text-shadow: none;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+  z-index: 5;
+}
+
+.wrapped-piece-btn:hover::after {
+  opacity: 1;
+}
+
+.stage-editing .wrapped-piece-btn::after {
+  display: none;
 }
 
 #mute .icon-muted,
@@ -1970,29 +2049,38 @@ html.invert-colors {
 /* ----- Wrapped ----- */
 
 /* The button over Roon's logo (wrapper.js places it): a split button, the
-   name opens the page, the arrow the menu. Its rounded corners are cut
-   from the window too (see reportHole), so Roon shows around them. Under
-   the sidebar filter (see wrapper.js) it's drawn in Roon's colors (the
-   --roon-* variables) and comes out in ours; with Roon's sidebar collapsed
-   there's no filter and it's in ours to begin with. */
-.wrapped-btn {
+   name opens the page, the arrow the menu. The window's cut-out for it is
+   square with hard edges, so the outer box is square and painted in the
+   color Roon has behind it, and the rounded face inside blends into that.
+   Under the sidebar filter (see wrapper.js) both are drawn in Roon's colors
+   (the --roon-* variables) and come out in ours. */
+.wrapped-btn,
+.wrapped-page-btn {
   position: absolute;
   z-index: 6;
   display: flex;
+  white-space: nowrap;
+}
+
+.wrapped-btn[hidden],
+.wrapped-page-btn[hidden] {
+  display: none;
+}
+
+.wrapped-face {
+  display: flex;
   align-items: stretch;
+  flex: 1;
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg);
   color: var(--text);
-  white-space: nowrap;
-}
-
-.wrapped-btn[hidden] {
-  display: none;
 }
 
 .wrapped-open,
-.wrapped-arrow {
+.wrapped-arrow,
+.wrapped-page-open,
+.wrapped-page-arrow {
   display: flex;
   align-items: center;
 }
@@ -2017,6 +2105,10 @@ html.invert-colors {
 
 .wrapped-btn.through-filter {
   background: var(--roon-bg);
+}
+
+.wrapped-btn.through-filter .wrapped-face {
+  background: var(--roon-bg);
   color: var(--roon-bright);
 }
 
@@ -2036,35 +2128,21 @@ html.invert-colors {
   transition: transform 0.15s;
 }
 
-.wrapped-btn.on .wrapped-chevron {
+.wrapped-btn.on .wrapped-chevron,
+.wrapped-page-btn.on .wrapped-chevron {
   transform: rotate(180deg);
 }
 
-/* The content-header button: outlined in the accent, on Roon's own
-   background (no filter there), rounded corners cut from the window too */
+/* The content-header button: outlined, on Roon's own header background
+   (--surround, sampled from the screen by skin.rs) */
 .wrapped-page-btn {
-  position: absolute;
-  z-index: 6;
-  display: flex;
-  align-items: stretch;
+  padding: 1px;
+  background: var(--surround, transparent);
+}
+
+.wrapped-page-btn .wrapped-face {
   border: 1px solid var(--border);
-  /* Square: the window's cut-out for it has hard edges, and a rounded one
-     left a fringe around the corners (see reportHole) */
-  border-radius: 0;
-  overflow: hidden;
-  background: var(--bg);
   color: var(--accent);
-  white-space: nowrap;
-}
-
-.wrapped-page-btn[hidden] {
-  display: none;
-}
-
-.wrapped-page-open,
-.wrapped-page-arrow {
-  display: flex;
-  align-items: center;
 }
 
 .wrapped-page-open {
@@ -2082,10 +2160,6 @@ html.invert-colors {
 .wrapped-page-arrow:hover,
 .wrapped-page-btn.on .wrapped-page-arrow {
   background: var(--hover);
-}
-
-.wrapped-page-btn.on .wrapped-chevron {
-  transform: rotate(180deg);
 }
 
 /* The menu: like the zone picker, opening under the button or beside the
@@ -2461,13 +2535,61 @@ html.invert-colors {
   border-color: var(--accent);
 }
 
-/* The Wrapped radio mark (greyed until the radio step) */
+/* The Wrapped radio mark */
 .wrapped-radio {
   color: var(--muted);
 }
 
-.wrapped-radio:disabled {
-  opacity: 0.3;
+.wrapped-radio:hover:not(:disabled) {
+  color: var(--accent);
+}
+
+.wrapped-radio.busy {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.wrapped-save,
+.wrapped-delete {
+  color: var(--muted);
+}
+
+.wrapped-save:hover,
+.wrapped-delete:hover {
+  color: var(--accent);
+}
+
+.wrapped-delete.armed {
+  color: #e05252;
+}
+
+/* A line at the bottom of the page for a moment (wrappedToast) */
+.wrapped-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 18px;
+  transform: translate(-50%, 8px);
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  font-size: 12.5px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s, transform 0.2s;
+}
+
+.wrapped-toast.show {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+/* The same toast on the window itself, over the player's bar */
+body > .wrapped-toast {
+  position: fixed;
+  bottom: 24px;
+  z-index: 60;
 }
 
 /* Track rows: play, radio, number, title, heart, length */

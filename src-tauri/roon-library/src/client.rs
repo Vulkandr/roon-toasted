@@ -45,6 +45,10 @@ const SIG_TIDAL_MAIN_ALBUMS: &str = "Sooloos.Broker.Api.Tidal::GetPerformerMainA
 const SIG_GROUP_LOAD: &str = "Sooloos.Broker.Api.PerformerAlbumsGroup::Load(int, int, Base.ResultCallback)";
 const SIG_PLAY_TRACK: &str = "Sooloos.Broker.Api.Transport::PlayTrack(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, Sooloos.Broker.Api.TrackBase, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
 const SIG_PLAY_ALBUM: &str = "Sooloos.Broker.Api.Transport::PlayAlbum(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, Sooloos.Broker.Api.AlbumBase, bool, bool, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
+const SIG_PLAY_SWIM: &str = "Sooloos.Broker.Api.Transport::PlaySwim(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.SwimParameters, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
+const SIG_CREATE_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::CreatePlaylistFromMediaIds(Sooloos.Broker.Api.Profile, string, string, bool, System.Collections.Generic.IEnumerable<long>, Base.ResultCallback<Sooloos.Broker.Api.Playlist>)";
+const SIG_DELETE_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::Delete(Sooloos.Broker.Api.Playlist, Base.ResultCallback)";
+const SIG_PLAY_PLAYLIST: &str = "Sooloos.Broker.Api.Transport::PlayPlaylist(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, Sooloos.Broker.Api.Playlist, Sooloos.Broker.Api.PlaylistItem, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
 const SIG_GET_ALBUM_LITE: &str = "Sooloos.Broker.Api.Library::GetAlbumLite(long, Base.ResultCallback<Sooloos.Broker.Api.AlbumLite>)";
 const SIG_GET_PERFORMER_LITE: &str = "Sooloos.Broker.Api.Library::GetPerformerLite(long, Base.ResultCallback<Sooloos.Broker.Api.PerformerLite>)";
 const SIG_UNIFIED_SEARCH: &str = "Sooloos.Broker.Api.Library::UnifiedSearch(Sooloos.Broker.Api.SearchParameters, Base.ResultCallback<Sooloos.Broker.Api.UnifiedSearchResults>)";
@@ -257,6 +261,36 @@ pub struct TrackHit {
     pub length_seconds: Option<i32>,
     pub in_library: bool,
     pub favorite: bool,
+}
+
+/// What to start Roon Radio from (session handles from the pages), and
+/// whether to stay inside the library (see `play_radio`).
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct RadioSeeds {
+    pub tracks: Vec<String>,
+    pub albums: Vec<String>,
+    pub artists: Vec<String>,
+    /// Genre names, as Roon spells them.
+    pub genres: Vec<String>,
+    pub library_only: bool,
+}
+
+/// One of Roon's playlists (see `playlists`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistCard {
+    /// Names this playlist to `play_playlist` and `delete_playlist`; valid for this session only.
+    pub handle: String,
+    /// Roon's durable id for it (hex).
+    pub playlist_id: Option<String>,
+    pub name: String,
+    /// "roon", "roon-readonly", "qobuz", "tidal", "itunes", "file", "editorial", "smart" or "other".
+    pub kind: String,
+    pub tracks: Option<i32>,
+    pub length_seconds: Option<i32>,
+    pub image_key: Option<String>,
+    pub read_only: bool,
 }
 
 /// What `search` found: Roon's top hits first in each list.
@@ -1047,6 +1081,272 @@ impl LibraryClient {
         })
     }
 
+    /// The album of the track the zone is playing, as a card (its artist's
+    /// handle included).
+    pub fn playing_album(&self, zone_id: &str) -> Result<AlbumCard, LibraryError> {
+        let g = self.inner.graph.lock().unwrap();
+        let track = self.require_track(&g, zone_id)?;
+        let album = g
+            .deref(track.field("Album"))
+            .ok_or_else(|| LibraryError::Unconfirmed("the track has no album object".into()))?;
+        Ok(describe_album_card(&g, album, self.profile_sooid(&g).as_deref()))
+    }
+
+    /// A new playlist "Wrapped: <title>" holding the track the zone is playing.
+    pub async fn playlist_from_playing(&self, zone_id: &str) -> Result<PlaylistCard, LibraryError> {
+        let (oid, title) = {
+            let g = self.inner.graph.lock().unwrap();
+            let track = self.require_track(&g, zone_id)?;
+            (track.oid, track.str_field("Title").unwrap_or_default().to_string())
+        };
+        self.create_playlist(&format!("Wrapped: {title}"), &[oid.to_string()]).await
+    }
+
+    // --- playlists ---
+
+    /// Roon's playlists, as its Playlists page lists them.
+    pub fn playlists(&self) -> Result<Vec<PlaylistCard>, LibraryError> {
+        let g = self.inner.graph.lock().unwrap();
+        let service = g
+            .first_of_type("Playlists")
+            .ok_or_else(|| LibraryError::UnsupportedCore("no Playlists service in the graph".into()))?;
+        let list = g.deref(service.field("AllPlaylists")).and_then(|l| l.items.clone()).unwrap_or_default();
+        Ok(list.iter().filter_map(|oid| g.get(*oid)).filter(|p| p.has_field("Name")).map(|p| describe_playlist(&g, p)).collect())
+    }
+
+    /// One playlist's current state by its handle.
+    pub fn playlist_card(&self, handle: &str) -> Option<PlaylistCard> {
+        let oid: u64 = handle.parse().ok()?;
+        let g = self.inner.graph.lock().unwrap();
+        let p = g.get(oid)?;
+        Some(describe_playlist(&g, p))
+    }
+
+    /// A new playlist of the given tracks (handles), in that order, named
+    /// `name` (Roon allows duplicate names; this doesn't overwrite). Waits
+    /// for the Core to list it.
+    pub async fn create_playlist(&self, name: &str, track_handles: &[String]) -> Result<PlaylistCard, LibraryError> {
+        let (service, profile, media_ids) = {
+            let g = self.inner.graph.lock().unwrap();
+            let service = g.first_of_type("Playlists").map(|o| o.oid);
+            let profile = self.profile_object(&g).map(|o| o.oid);
+            let mut ids = Vec::new();
+            for handle in track_handles {
+                let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad track handle".into()))?;
+                let track = g.get(oid).ok_or_else(|| LibraryError::Unconfirmed("unknown track handle".into()))?;
+                let id = track
+                    .long_field("TrackId")
+                    .ok_or_else(|| LibraryError::Unconfirmed(format!("\"{}\" has no track id", track.str_field("Title").unwrap_or_default())))?;
+                ids.push(id);
+            }
+            (service, profile, ids)
+        };
+        let (Some(service), Some(profile)) = (service, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Playlists service or Profile in the graph".into()));
+        };
+        if media_ids.is_empty() {
+            return Err(LibraryError::Unconfirmed("no tracks for the playlist".into()));
+        }
+        let before: Vec<u64> = self.playlists()?.iter().filter_map(|p| p.handle.parse().ok()).collect();
+        // Profile, name, description, overwrite on a duplicate name, the
+        // media ids (a length-prefixed collection of longs)
+        let mut ids = Writer::new();
+        ids.flex_int(media_ids.len() as u32);
+        for id in &media_ids {
+            ids.long(*id);
+        }
+        let mut args = Writer::new();
+        args.long(profile).string(Some(name)).string(Some("")).boolean(false).flex_int(ids.len() as u32).bytes(ids.as_bytes());
+        let res = self.inner.remoting.call(service, SIG_CREATE_PLAYLIST, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "CreatePlaylistFromMediaIds".into(), status: res.status }.into());
+        }
+        // The answer names the playlist object; it's listed (with its count)
+        // a moment later
+        let created = Reader::new(&res.payload).flex_long().ok().filter(|oid| *oid != 0);
+        let listed = |g: &ObjectGraph| -> Option<u64> {
+            let service = g.first_of_type("Playlists")?;
+            let list = g.deref(service.field("AllPlaylists"))?.items.clone()?;
+            list.iter()
+                .copied()
+                .find(|oid| {
+                    created == Some(*oid)
+                        || (!before.contains(oid) && g.get(*oid).is_some_and(|p| p.str_field("Name") == Some(name)))
+                })
+                .filter(|oid| g.get(*oid).is_some_and(|p| p.has_field("Name")))
+        };
+        self.wait_until(Duration::from_secs(5), |g| listed(g).is_some()).await;
+        let g = self.inner.graph.lock().unwrap();
+        let oid = listed(&g).ok_or_else(|| LibraryError::Unconfirmed(format!("Roon said ok, but \"{name}\" isn't listed")))?;
+        Ok(describe_playlist(&g, g.get(oid).unwrap()))
+    }
+
+    /// Deletes a playlist (by handle). Waits for it to leave the list.
+    pub async fn delete_playlist(&self, handle: &str) -> Result<(), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
+        let service = {
+            let g = self.inner.graph.lock().unwrap();
+            if g.get(oid).is_none() {
+                return Err(LibraryError::Unconfirmed("unknown playlist handle".into()));
+            }
+            g.first_of_type("Playlists").map(|o| o.oid)
+        };
+        let service = service.ok_or_else(|| LibraryError::UnsupportedCore("no Playlists service in the graph".into()))?;
+        let mut args = Writer::new();
+        args.long(oid);
+        let res = self.inner.remoting.call(service, SIG_DELETE_PLAYLIST, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "Playlists.Delete".into(), status: res.status }.into());
+        }
+        self.wait_until(Duration::from_secs(5), |g| {
+            g.first_of_type("Playlists")
+                .and_then(|s| g.deref(s.field("AllPlaylists")))
+                .and_then(|l| l.items.as_ref())
+                .is_some_and(|items| !items.contains(&oid))
+        })
+        .await;
+        Ok(())
+    }
+
+    /// Plays a playlist (by handle) on the zone from its start, right now.
+    pub async fn play_playlist(&self, zone_id: &str, handle: &str) -> Result<(), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
+        let (transport, zone, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            let zone = self.zone_object(&g, zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into()))?;
+            if g.get(oid).is_none() {
+                return Err(LibraryError::Unconfirmed("unknown playlist handle".into()));
+            }
+            (g.first_of_type("Transport").map(|o| o.oid), zone.oid, self.profile_sooid(&g))
+        };
+        let (Some(transport), Some(profile)) = (transport, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
+        };
+        // Zone, profile, default PlayParameters, the playlist, from no particular item
+        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        let mut args = Writer::new();
+        args.long(zone).sooid(&profile).bytes(&params).long(oid).long(0);
+        let res = self.inner.remoting.call(transport, SIG_PLAY_PLAYLIST, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "PlayPlaylist".into(), status: res.status }.into());
+        }
+        Ok(())
+    }
+
+    /// Starts Roon Radio on the zone from the seeds (Roon's own "Start
+    /// Radio", which the app offers on one song, album or artist; this takes
+    /// any mix of them, and genres), optionally staying inside the library.
+    pub async fn play_radio(&self, zone_id: &str, seeds: &RadioSeeds) -> Result<(), LibraryError> {
+        let handles = |list: &[String], what: &str| -> Result<Vec<u64>, LibraryError> {
+            list.iter()
+                .map(|h| h.parse::<u64>().map_err(|_| LibraryError::Unconfirmed(format!("bad {what} handle"))))
+                .collect()
+        };
+        let tracks = handles(&seeds.tracks, "track")?;
+        let albums = handles(&seeds.albums, "album")?;
+        let artists = handles(&seeds.artists, "artist")?;
+        if tracks.is_empty() && albums.is_empty() && artists.is_empty() && seeds.genres.is_empty() {
+            return Err(LibraryError::Unconfirmed("nothing to start the radio from".into()));
+        }
+        let (transport, zone, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            let zone = self.zone_object(&g, zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into()))?;
+            if tracks.iter().chain(&albums).chain(&artists).any(|oid| g.get(*oid).is_none()) {
+                return Err(LibraryError::Unconfirmed("unknown seed handle".into()));
+            }
+            (g.first_of_type("Transport").map(|o| o.oid), zone.oid, self.profile_sooid(&g))
+        };
+        let (Some(transport), Some(profile)) = (transport, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
+        };
+
+        // List members of a struct: a length prefix around the count and the
+        // items (object references as longs, strings as strings)
+        let ref_list = |oids: &[u64]| -> Vec<u8> {
+            let mut items = Writer::new();
+            items.flex_int(oids.len() as u32);
+            for oid in oids {
+                items.long(*oid);
+            }
+            let mut out = Writer::new();
+            out.integer(items.len() as i32).bytes(items.as_bytes());
+            out.into_bytes()
+        };
+        let text_list = |texts: &[String]| -> Vec<u8> {
+            let mut items = Writer::new();
+            items.flex_int(texts.len() as u32);
+            for text in texts {
+                items.string(Some(text));
+            }
+            let mut out = Writer::new();
+            out.integer(items.len() as i32).bytes(items.as_bytes());
+            out.into_bytes()
+        };
+        let mut priority = Writer::new();
+        priority.flex_int(0); // SwimPriority::Now
+        let mut yes = Writer::new();
+        yes.boolean(true);
+        let mut fields = vec![StructField {
+            name: "Sooloos.Broker.Api.SwimPriority Sooloos.Broker.Api.SwimParameters::Priority",
+            prop_type: PropertyType::Enum,
+            value: priority.into_bytes(),
+        }];
+        // The Core's own broker id (the Core id in .NET GUID byte order), as
+        // the Roon app sends it
+        if let Some(broker_id) = broker_id_from_core_id(&self.inner.opts.core_id) {
+            let mut broker = Writer::new();
+            broker.guid(&broker_id);
+            fields.push(StructField {
+                name: "System.Guid Sooloos.Broker.Api.SwimParameters::BrokerId",
+                prop_type: PropertyType::Guid,
+                value: broker.into_bytes(),
+            });
+        }
+        if !tracks.is_empty() {
+            fields.push(StructField {
+                name: "System.Collections.Generic.IList<Sooloos.Broker.Api.TrackBase> Sooloos.Broker.Api.SwimParameters::Tracks",
+                prop_type: PropertyType::Object,
+                value: ref_list(&tracks),
+            });
+        }
+        if !albums.is_empty() {
+            fields.push(StructField {
+                name: "System.Collections.Generic.IList<Sooloos.Broker.Api.AlbumBase> Sooloos.Broker.Api.SwimParameters::Albums",
+                prop_type: PropertyType::Object,
+                value: ref_list(&albums),
+            });
+        }
+        if !artists.is_empty() {
+            fields.push(StructField {
+                name: "System.Collections.Generic.IList<Sooloos.Broker.Api.PerformerBase> Sooloos.Broker.Api.SwimParameters::Performers",
+                prop_type: PropertyType::Object,
+                value: ref_list(&artists),
+            });
+        }
+        if !seeds.genres.is_empty() {
+            fields.push(StructField {
+                name: "System.Collections.Generic.IList<string> Sooloos.Broker.Api.SwimParameters::Genres",
+                prop_type: PropertyType::Object,
+                value: text_list(&seeds.genres),
+            });
+        }
+        if seeds.library_only {
+            fields.push(StructField {
+                name: "bool Sooloos.Broker.Api.SwimParameters::LimitToLibrary",
+                prop_type: PropertyType::Bool,
+                value: yes.into_bytes(),
+            });
+        }
+        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.SwimParameters", &fields)?;
+        let mut args = Writer::new();
+        args.long(zone).sooid(&profile).bytes(&params);
+        let res = self.inner.remoting.call(transport, SIG_PLAY_SWIM, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "PlaySwim".into(), status: res.status }.into());
+        }
+        Ok(())
+    }
+
     /// Plays an album (by its handle) on the zone, right now, the way the Roon
     /// app's Play Now does.
     pub async fn play_album(&self, zone_id: &str, handle: &str) -> Result<(), LibraryError> {
@@ -1738,6 +2038,40 @@ fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) 
         in_library: album_in_library(a),
         favorite: read_state(a.field("IsFavorite"), profile),
         source: source_name(a.field("Source").and_then(Value::as_int)),
+    }
+}
+
+fn describe_playlist(g: &ObjectGraph, p: &RoonObject) -> PlaylistCard {
+    let kind = match p.field("Type").and_then(Value::as_int) {
+        Some(1) => "itunes",
+        Some(5) => "roon",
+        Some(6) => "roon-readonly",
+        Some(10) => "tidal",
+        Some(11) => "file",
+        Some(12) => "qobuz",
+        Some(13) => "editorial",
+        Some(15) => "smart",
+        _ => "other",
+    };
+    // The first of the playlist's cover images
+    let image_key = g
+        .deref(p.field("Images"))
+        .and_then(|list| list.items.as_ref()?.first().copied())
+        .and_then(|oid| g.get(oid))
+        .and_then(|image| image.str_field("Url"))
+        .and_then(|url| url.strip_prefix("broker:///image/"))
+        .and_then(|rest| rest.split('.').next())
+        .filter(|key| !key.is_empty())
+        .map(str::to_string);
+    PlaylistCard {
+        handle: p.oid.to_string(),
+        playlist_id: p.field("PlaylistId").and_then(Value::as_bytes).map(|b| b.iter().map(|x| format!("{x:02x}")).collect()),
+        name: p.str_field("Name").unwrap_or_default().to_string(),
+        kind: kind.to_string(),
+        tracks: p.field("TrackCount").and_then(Value::as_int).or_else(|| p.field("ItemCount").and_then(Value::as_int)),
+        length_seconds: p.field("LengthSeconds").and_then(Value::as_int),
+        image_key,
+        read_only: p.field("IsReadOnly").and_then(Value::as_bool) == Some(true),
     }
 }
 

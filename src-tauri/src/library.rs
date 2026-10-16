@@ -49,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumCard, AlbumTrack, ArtistAlbum, ArtistCard, ClientOptions, LibraryClient, LibraryError, LibraryEvent, SearchHits, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumTrack, ArtistAlbum, ArtistCard, ClientOptions, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -522,6 +522,62 @@ pub async fn library_search(app: AppHandle, query: String) -> Result<SearchHits,
         return Ok(SearchHits { query, ..Default::default() });
     }
     client.search(&query, 60).await.map_err(describe)
+}
+
+/// The playing track's album as a card (for Now Playing's Wrapped buttons).
+#[tauri::command]
+pub fn library_playing_album(library: State<'_, Library>, zone_id: String) -> Result<AlbumCard, String> {
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.playing_album(&zone_id).map_err(describe)
+}
+
+/// A new playlist "Wrapped: <title>" with the playing track.
+#[tauri::command]
+pub async fn library_playlist_from_playing(app: AppHandle, zone_id: String) -> Result<PlaylistCard, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.playlist_from_playing(&zone_id).await.map_err(describe)
+}
+
+/// Roon's playlists.
+#[tauri::command]
+pub fn library_playlists(library: State<'_, Library>) -> Result<Vec<PlaylistCard>, String> {
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.playlists().map_err(describe)
+}
+
+/// A new Roon playlist of the given tracks (handles), named `name`.
+#[tauri::command]
+pub async fn library_create_playlist(app: AppHandle, name: String, tracks: Vec<String>) -> Result<PlaylistCard, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.create_playlist(name.trim(), &tracks).await.map_err(describe)
+}
+
+/// Deletes a playlist (by handle).
+#[tauri::command]
+pub async fn library_delete_playlist(app: AppHandle, handle: String) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.delete_playlist(&handle).await.map_err(describe)
+}
+
+/// Plays a playlist (by handle) on the zone from its start.
+#[tauri::command]
+pub async fn library_play_playlist(app: AppHandle, zone_id: String, handle: String) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.play_playlist(&zone_id, &handle).await.map_err(describe)
+}
+
+/// Starts Roon Radio on the zone from songs, albums, artists and genres
+/// (`seeds: { tracks, albums, artists, genres, libraryOnly }`, handles from
+/// the pages).
+#[tauri::command]
+pub async fn library_play_radio(app: AppHandle, zone_id: String, seeds: RadioSeeds) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.play_radio(&zone_id, &seeds).await.map_err(describe)
 }
 
 /// Plays an album (by handle) on the zone right now.

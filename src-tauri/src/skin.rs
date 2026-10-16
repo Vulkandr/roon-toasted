@@ -113,6 +113,18 @@ pub fn sidebar() -> Option<(i32, [u8; 3])> {
     None
 }
 
+/// Roon's own background color in its content header (RGB), as last seen
+/// on screen, or None until Roon has been seen there. The Wrapper page
+/// paints it around its content-header button's rounded corners, so they
+/// look rounded although the window's cut-out for the button is square.
+#[cfg_attr(not(windows), allow(dead_code))]
+pub fn header_color() -> Option<[u8; 3]> {
+    #[cfg(windows)]
+    return imp::header_color();
+    #[cfg(not(windows))]
+    None
+}
+
 #[cfg(windows)]
 mod imp {
     use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, AtomicU32, Ordering};
@@ -214,6 +226,42 @@ mod imp {
 
     pub fn sidebar() -> Option<(i32, [u8; 3])> {
         *SIDEBAR.lock().unwrap()
+    }
+
+    /// Roon's content header background, as last sampled (see `sample_header`).
+    static HEADER: Mutex<Option<[u8; 3]>> = Mutex::new(None);
+
+    pub fn header_color() -> Option<[u8; 3]> {
+        *HEADER.lock().unwrap()
+    }
+
+    /// One pixel of Roon's content header on screen (a few pixels below the
+    /// hole's top, in the middle of the content area, where the header is
+    /// empty), when Roon is what's on screen there.
+    fn sample_header(hole: [i32; 4], roon: HWND, sidebar_width: i32) -> Option<[u8; 3]> {
+        use windows::Win32::Foundation::POINT;
+        use windows::Win32::Graphics::Gdi::GetPixel;
+        use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT};
+        let content = hole[2] - sidebar_width;
+        if content < 200 || hole[3] < 60 {
+            return None;
+        }
+        let x = hole[0] + sidebar_width + content / 2;
+        let y = hole[1] + 6;
+        // SAFETY: a hit test and one pixel read off the screen.
+        unsafe {
+            let w = WindowFromPoint(POINT { x, y });
+            if w.is_invalid() || GetAncestor(w, GA_ROOT) != roon {
+                return None;
+            }
+            let screen = GetDC(None);
+            let color = GetPixel(screen, x, y).0;
+            ReleaseDC(None, screen);
+            if color == 0xFFFF_FFFF {
+                return None; // CLR_INVALID
+            }
+            Some([(color & 0xff) as u8, ((color >> 8) & 0xff) as u8, ((color >> 16) & 0xff) as u8])
+        }
     }
 
     pub fn prime(pixels: &[u8], width: i32, height: i32) {
@@ -577,6 +625,13 @@ mod imp {
         } else {
             known
         };
+        // Roon's own header background (behind the page's content-header
+        // button), now and then, while Roon shows there
+        if !standby && (entering || ticks.is_multiple_of(DETECT_EVERY)) {
+            if let Some(color) = sample_header(hole, roon, sidebar.map(|(w, _)| w).unwrap_or(0)) {
+                *HEADER.lock().unwrap() = Some(color);
+            }
+        }
         let Some((width, roon_bg)) = sidebar else {
             hide();
             return false;

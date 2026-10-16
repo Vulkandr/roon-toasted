@@ -89,8 +89,9 @@ let queue = { zoneId: null, items: [] };
 // Roon), its grey, which page Roon is on (roonnav.rs), and our page stack
 let sidebarPx;
 let sidebarColor = null;
+let headerColor = null; // Roon's own header background, behind the content-header button
 let sidebarSeen = false; // whether skin.rs has reported a sidebar at least once
-let roonNav = { page: "", albumId: null, lastAlbumId: null, available: false };
+let roonNav = { page: "", albumId: null, lastAlbumId: null, available: false, navCount: 0 };
 let wrappedStack = [];
 
 // ===== Helpers =============================================================
@@ -141,15 +142,11 @@ function reportHole() {
   for (const element of [zoneMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedMenu, wrapped]) {
     if (element.hidden) continue;
     const r = element.getBoundingClientRect();
+    // The cut-out has hard edges, so the buttons keep theirs square and paint
+    // the surroundings of their rounded faces in Roon's own colors instead
     const radius = parseFloat(getComputedStyle(element).borderTopLeftRadius) || 0;
-    // The window's cut-out has hard (aliased) edges; a rounded one is made a
-    // pixel larger than the element, so the element's own soft corners and
-    // border stay intact and only a sliver of page background shows outside
-    // them (the sidebar button is the exception: under the color filter
-    // that sliver would be recolored, so it's cut exactly)
-    const pad = radius > 0 && element !== wrappedBtn ? 1 : 0;
-    covers.push([r.left - pad, r.top - pad, r.width + pad * 2, r.height + pad * 2]);
-    radii.push(radius > 0 ? radius + pad : 0);
+    covers.push([r.left, r.top, r.width, r.height]);
+    radii.push(radius);
   }
   invoke("wrapper_hole", {
     x: rect.left,
@@ -191,7 +188,7 @@ async function refreshStatus() {
     } else if (!s.roonLost) {
       lostHandled = false;
     }
-    setSidebar(fine ? s.sidebar : undefined, s.sidebarColor, fine);
+    setSidebar(fine ? s.sidebar : undefined, s.sidebarColor, fine, s.headerColor);
   } catch {
     status.hidden = true;
   }
@@ -503,6 +500,8 @@ const PIECES = {
   quality: { kind: "auto", node: "#quality", text: true },
   zone: { kind: "auto", node: "#zone-row", text: true, icons: true },
   volume: { kind: "bar", node: ".volume-row", text: true, icons: true, bar: true },
+  // Wrapped's title and buttons (its own control, inside the piece)
+  wrapped: { kind: "auto", node: "#wrapped-piece", text: true, icons: true },
 };
 const DEFAULT_ICONS = "lucide";
 // The app's own accent (wrapper.css), for bars set to the app's color
@@ -531,6 +530,7 @@ const DEFAULT_LAYOUT = {
     quality: { visible: true, anchor: "transport", x: 0.87, y: 0.925, size: 0.016, format: false, formatSide: "right", font: DEFAULT_FONT, ...NO_TEXT_EDGE },
     zone: { visible: true, x: 0.985, y: 0.975, size: 0.024, font: DEFAULT_FONT, icons: DEFAULT_ICONS, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
     volume: { visible: true, x: 0.99, y: 0.45, len: 0.78, size: 0.0173, vertical: true, font: DEFAULT_FONT, icons: DEFAULT_ICONS, bar: "line", mirror: true, side: "top", labelScale: 1, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
+    wrapped: { visible: true, x: 0.015, y: 0.03, size: 0.0173, font: DEFAULT_FONT, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
   },
 };
 const MIN_ART = 48; // px
@@ -756,6 +756,8 @@ function setStageOpen(open) {
   send("wrapper_roon_player", { open });
   layoutStage();
   applyIcons();
+  // The Wrapped buttons over Roon have no place over Now Playing
+  layoutWrapped();
   reportHole();
 }
 
@@ -2365,10 +2367,10 @@ document.addEventListener("keydown", (event) => {
 // Roon's logo spot and its collapsed-sidebar hamburger, in Roon's own
 // pixels (CSS px at 100%) from the top-left of its window's contents
 const ROON_LOGO = { x: 14, y: 16, width: 100, height: 36 };
-// Roon's content header (the row with the back arrow): where a button fits
-// after the back arrow, and, with the sidebar collapsed, after the hamburger
-// (Home has no back arrow then) or after both
-const ROON_HEADER = { y: 17, height: 38, afterBack: 76, afterHamburger: 56, afterBoth: 126 };
+// Roon's content header (the row with the back and forward arrows): where a
+// button fits after the forward arrow, and, with the sidebar collapsed,
+// after the hamburger (Home has no arrows then) or after all of them
+const ROON_HEADER = { y: 12, height: 38, afterBack: 124, afterHamburger: 56, afterBoth: 172 };
 // Roon's sidebar width while skin.rs hasn't measured it yet (Roon collapses
 // it by itself in windows narrower than about 1400)
 const ROON_SIDEBAR = 248;
@@ -2392,9 +2394,13 @@ let roonHere = false;
 window.addEventListener("resize", () => {
   lastResizeAt = Date.now();
 });
-function setSidebar(px, color, here) {
+function setSidebar(px, color, here, header) {
   if (here !== roonHere) {
     roonHere = here;
+    layoutWrapped();
+  }
+  if (String(header) !== String(headerColor)) {
+    headerColor = header ?? null;
     layoutWrapped();
   }
   if (px === null && typeof sidebarPx === "number") {
@@ -2445,8 +2451,10 @@ function layoutWrapped() {
   const here = wrappedHere();
 
   // The sidebar button: over the logo while the sidebar is there (it goes
-  // with the sidebar when Roon collapses it)
-  wrappedBtn.hidden = !roonHere || collapsed;
+  // with the sidebar when Roon collapses it); neither button while Now
+  // Playing covers Roon
+  const overRoon = roonHere && stage.hidden;
+  wrappedBtn.hidden = !overRoon || collapsed;
   wrappedBtn.style.left = `${h.left + ROON_LOGO.x}px`;
   wrappedBtn.style.top = `${h.top + ROON_LOGO.y}px`;
   wrappedBtn.style.height = `${ROON_LOGO.height}px`;
@@ -2469,13 +2477,17 @@ function layoutWrapped() {
   const contentLeft = h.left + (collapsed ? 0 : width);
   // Not while the Wrapped page is open (it would sit over the page's own
   // header, and "open this album" is moot then)
-  const showPage = roonHere && wrapped.hidden && (collapsed || here !== null);
+  const showPage = overRoon && wrapped.hidden && (collapsed || here !== null);
   wrappedPageBtn.hidden = !showPage;
   wrappedPageOpen.textContent = here ? `Open ${here.page} in Wrapped` : "Wrapped";
   const offset = !collapsed ? ROON_HEADER.afterBack : roonNav.page === "home" || !roonNav.page ? ROON_HEADER.afterHamburger : ROON_HEADER.afterBoth;
   wrappedPageBtn.style.left = `${contentLeft + offset}px`;
   wrappedPageBtn.style.top = `${h.top + ROON_HEADER.y}px`;
   wrappedPageBtn.style.height = `${ROON_HEADER.height}px`;
+  // Roon's own background around the rounded corners (the window's cut-out
+  // for the button is square; painted in Roon's color, the corners outside
+  // the rounded face can't be told from Roon)
+  wrappedPageBtn.style.setProperty("--surround", headerColor ? `rgb(${headerColor.join(", ")})` : "transparent");
 
   wrapped.style.left = `${contentLeft}px`;
   if (!wrappedMenu.hidden) placeWrappedMenu();
@@ -2574,8 +2586,7 @@ function closeWrappedMenu() {
 // the arrow opens the menu; a right-click anywhere on it opens the menu too
 wrappedOpen.addEventListener("click", () => {
   closeWrappedMenu();
-  if (wrapped.hidden) openWrappedPage({ page: "home" });
-  else setWrappedOpen(false);
+  setWrappedOpen(wrapped.hidden);
 });
 wrappedArrow.addEventListener("click", () => {
   if (wrappedMenu.hidden) openWrappedMenu();
@@ -2591,8 +2602,7 @@ wrappedPageOpen.addEventListener("click", () => {
   closeWrappedMenu();
   const here = wrappedHere();
   if (here) openWrappedPage(here);
-  else if (wrapped.hidden) openWrappedPage({ page: "home" });
-  else setWrappedOpen(false);
+  else setWrappedOpen(wrapped.hidden);
 });
 wrappedPageArrow.addEventListener("click", () => {
   if (wrappedMenu.hidden) openWrappedMenu(wrappedPageBtn);
@@ -2613,9 +2623,11 @@ window.addEventListener("blur", closeWrappedMenu);
 
 // ----- The page -----
 
+// Closing keeps the page stack: "Wrapped" opens it where it was
 function setWrappedOpen(open) {
-  if (!open) wrappedStack = [];
+  if (open && !wrappedStack.length) wrappedStack = [{ page: "home" }];
   wrapped.hidden = !open;
+  if (open) renderWrapped();
   layoutWrapped();
   reportHole();
 }
@@ -2631,8 +2643,10 @@ function openWrappedPage(entry) {
   // Home and Search are single: going there again goes back to them
   if (entry.page === "home") wrappedStack = [];
   wrappedStack.push({ page: entry.page, albumId: entry.albumId, handle: entry.handle, query: entry.query });
-  if (wrapped.hidden) setWrappedOpen(true);
+  wrapped.hidden = false;
   renderWrapped();
+  layoutWrapped();
+  reportHole();
 }
 
 function wrappedBackPage() {
@@ -2646,6 +2660,7 @@ function renderWrapped() {
   if (!entry) return;
   wrappedBack.hidden = wrappedStack.length <= 1;
   wrappedTrackRows = [];
+  wrappedAlbumTracks = [];
   wrappedBody.replaceChildren();
   wrappedBody.scrollTop = 0;
   wrappedTicket++;
@@ -2763,9 +2778,38 @@ function wrappedIconButton(icon, title, onClick, className = "") {
   return btn;
 }
 
-// The radio button: comes alive in the radio step
-function wrappedRadio(what) {
-  return wrappedIconButton(RADIO_ICON, `Wrapped radio from this ${what} (coming soon)`, null, "wrapped-radio");
+// The radio button: Roon Radio on the zone, started from this song, album
+// or artist (`seeds`: { tracks, albums, artists, genres, libraryOnly }, handles)
+function wrappedRadio(what, seeds) {
+  const btn = wrappedIconButton(RADIO_ICON, `Wrapped radio from this ${what}`, async () => {
+    if (!zone) return wrappedToast("Pick a zone first.");
+    btn.classList.add("busy");
+    try {
+      await invoke("library_play_radio", { zoneId: zone.zoneId, seeds });
+      wrappedToast(`Radio from this ${what} on ${zone.name}`);
+    } catch (err) {
+      console.error("library_play_radio", err);
+      wrappedToast(typeof err === "string" ? err : "Roon didn't start the radio.");
+    } finally {
+      btn.classList.remove("busy");
+    }
+  }, "wrapped-radio");
+  return btn;
+}
+
+// A line at the bottom of the page for a few seconds
+let wrappedToastTimer = null;
+function wrappedToast(text) {
+  let toast = wrapped.querySelector(".wrapped-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "wrapped-toast";
+    wrapped.append(toast);
+  }
+  toast.textContent = text;
+  toast.classList.add("show");
+  clearTimeout(wrappedToastTimer);
+  wrappedToastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
 }
 
 function wrappedSection(title) {
@@ -2822,6 +2866,7 @@ let wrappedTicket = 0;
 // The album page's track rows, with their ids, so the playing mark follows
 // the zone (renderLibrary calls markWrappedPlaying on every track change)
 let wrappedTrackRows = [];
+let wrappedAlbumTracks = []; // the album page's tracks, for "save as playlist"
 function markWrappedPlaying() {
   if (!wrappedTrackRows.length) return;
   // (The zone's track carries its ids as strings, the album's rows as numbers)
@@ -2889,6 +2934,7 @@ const WRAPPED_PAGES = {
       return;
     }
     if (ticket !== wrappedTicket) return;
+    wrappedAlbumTracks = tracks;
     list.replaceChildren(...trackRows(tracks));
     wrappedTrackRows = [...list.querySelectorAll(".wrapped-track")].map((row, i) => ({
       row,
@@ -2999,11 +3045,97 @@ const WRAPPED_PAGES = {
     setTimeout(() => input.focus(), 50);
   },
 
-  playlists() {
-    wrappedHeading("Playlists", "Kept up to date by Wrapped");
-    wrappedBody.append(wrappedNote("Nothing here yet. Discover Weekly and Library Discover arrive with the playlist step."));
+  async playlists() {
+    wrappedHeading("Playlists", "Roon's playlists; the ones Wrapped made first");
+    if (wrappedNeedsLibrary()) return;
+    const ticket = ++wrappedTicket;
+    wrappedBody.append(wrappedNote("Loading..."));
+    let list;
+    try {
+      list = await invoke("library_playlists");
+    } catch (err) {
+      if (ticket === wrappedTicket) wrappedFailed(err);
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    wrappedBody.replaceChildren();
+    const mine = list.filter((p) => p.name.startsWith(WRAPPED_PREFIX));
+    const others = list.filter((p) => !p.name.startsWith(WRAPPED_PREFIX));
+    if (mine.length) {
+      wrappedBody.append(wrappedSection("Made by Wrapped"), playlistRows(mine, true));
+    } else {
+      wrappedBody.append(wrappedNote("Wrapped hasn't made any playlists yet. On an album page, the list button saves the album as one."));
+    }
+    if (others.length) wrappedBody.append(wrappedSection("Your other playlists"), playlistRows(others, false));
   },
 };
+
+// The playlists Wrapped makes are named with this, so they're told apart
+const WRAPPED_PREFIX = "Wrapped: ";
+const PLAYLIST_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>';
+const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
+
+function playlistRows(list, mine) {
+  const rows = document.createElement("div");
+  rows.className = "wrapped-tracks";
+  for (const p of list) {
+    const row = document.createElement("div");
+    row.className = "wrapped-track";
+    row.append(
+      wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
+        if (!zone) return wrappedToast("Pick a zone first.");
+        invoke("library_play_playlist", { zoneId: zone.zoneId, handle: p.handle })
+          .then(() => wrappedToast(`Playing ${p.name} on ${zone.name}`))
+          .catch((err) => wrappedToast(String(err)));
+      }, "wrapped-track-play"),
+    );
+    const art = wrappedArt(p.imageKey, 88, p.name);
+    art.classList.add("small");
+    const text = document.createElement("span");
+    text.className = "wrapped-track-text";
+    const title = document.createElement("span");
+    title.className = "wrapped-track-title";
+    title.textContent = mine ? p.name.slice(WRAPPED_PREFIX.length) : p.name;
+    const sub = document.createElement("span");
+    sub.className = "wrapped-track-sub";
+    sub.textContent = [
+      p.tracks != null ? `${p.tracks} track${p.tracks === 1 ? "" : "s"}` : null,
+      p.lengthSeconds ? formatLongTime(p.lengthSeconds) : null,
+      p.kind === "roon" ? null : p.kind,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    text.append(title, sub);
+    row.append(art, text);
+    if (mine && !p.readOnly) {
+      const del = wrappedIconButton(TRASH_ICON, "Delete this playlist", async () => {
+        if (del.dataset.armed !== "1") {
+          // Click twice: the first arms it
+          del.dataset.armed = "1";
+          del.classList.add("armed");
+          wrappedToast(`Click the bin again to delete "${title.textContent}"`);
+          setTimeout(() => {
+            delete del.dataset.armed;
+            del.classList.remove("armed");
+          }, 4000);
+          return;
+        }
+        del.classList.add("busy");
+        try {
+          await invoke("library_delete_playlist", { handle: p.handle });
+          row.remove();
+          wrappedToast(`Deleted "${title.textContent}"`);
+        } catch (err) {
+          wrappedToast(String(err));
+          del.classList.remove("busy");
+        }
+      }, "wrapped-delete");
+      row.append(del);
+    }
+    rows.append(row);
+  }
+  return rows;
+}
 
 // The album page's top: art, title, artist (a link), facts, Play now, heart, radio
 function albumHeader(card) {
@@ -3043,7 +3175,17 @@ function albumHeader(card) {
         : await invoke("library_album_add_for", { handle: card.handle });
       return { inLibrary: next.inLibrary, favorite: next.favorite };
     }),
-    wrappedRadio("album"),
+    wrappedRadio("album", { albums: [card.handle] }),
+    wrappedIconButton(PLAYLIST_ICON, "Save this album as a Wrapped playlist", async () => {
+      if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
+      const name = `${WRAPPED_PREFIX}${card.title}`;
+      try {
+        const made = await invoke("library_create_playlist", { name, tracks: wrappedAlbumTracks.map((t) => t.handle) });
+        wrappedToast(`Saved "${made.name}" (${made.tracks ?? wrappedAlbumTracks.length} tracks)`);
+      } catch (err) {
+        wrappedToast(String(err));
+      }
+    }, "wrapped-save"),
   );
   info.append(title, artist, facts, actions);
   head.append(info);
@@ -3061,7 +3203,7 @@ function artistHeader(card) {
   name.textContent = card.name;
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
-  actions.append(wrappedRadio("artist"));
+  actions.append(wrappedRadio("artist", { artists: [card.handle] }));
   info.append(name, actions);
   head.append(info);
   return head;
@@ -3084,7 +3226,7 @@ function trackRows(tracks) {
       wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
         if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: track.handle });
       }, "wrapped-track-play"),
-      wrappedRadio("song"),
+      wrappedRadio("song", { tracks: [track.handle] }),
     );
     const number = document.createElement("span");
     number.className = "wrapped-track-number";
@@ -3141,7 +3283,7 @@ function searchResults(hits) {
         wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
           if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: t.handle });
         }, "wrapped-track-play"),
-        wrappedRadio("song"),
+        wrappedRadio("song", { tracks: [t.handle] }),
       );
       const art = wrappedArt(t.imageKey, 88, t.album);
       art.classList.add("small");
@@ -3182,16 +3324,109 @@ function searchResults(hits) {
 $("#wrapped-close").addEventListener("click", () => setWrappedOpen(false));
 wrappedBack.addEventListener("click", wrappedBackPage);
 
+// Now Playing's Wrapped piece: each button closes Now Playing and opens
+// the Wrapped page (the playing track's artist comes from the library link)
+for (const btn of document.querySelectorAll(".wrapped-piece-btn")) {
+  btn.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    if (editing) return;
+    const action = btn.dataset.action;
+    const track = zone ? libraryTracks[zone.zoneId] : null;
+    if (action === "open") {
+      await closeStage();
+      if (stage.hidden) openWrappedPage(wrappedStack.at(-1) ?? { page: "home" });
+      return;
+    }
+    if (!libraryReady || !track) {
+      wrappedToastStage("Wrapped needs the Hearts & Library link for this.");
+      return;
+    }
+    if (action === "artist") {
+      let card;
+      try {
+        card = await invoke("library_playing_album", { zoneId: zone.zoneId });
+      } catch (err) {
+        return wrappedToastStage(String(err));
+      }
+      if (!card.performerHandle) return wrappedToastStage("Roon didn't say who the artist is.");
+      await closeStage();
+      if (stage.hidden) openWrappedPage({ page: "artist", handle: card.performerHandle });
+    } else if (action === "playlist") {
+      let made;
+      try {
+        made = await invoke("library_playlist_from_playing", { zoneId: zone.zoneId });
+      } catch (err) {
+        return wrappedToastStage(String(err));
+      }
+      await closeStage();
+      if (stage.hidden) {
+        openWrappedPage({ page: "playlists" });
+        wrappedToast(`Saved "${made.name}"`);
+      }
+    }
+  });
+}
+
+// A line at the bottom of Now Playing for a moment
+let stageToastTimer = null;
+function wrappedToastStage(text) {
+  let toast = stage.querySelector(".wrapped-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "wrapped-toast";
+    stage.append(toast);
+  }
+  toast.textContent = text;
+  toast.classList.add("show");
+  clearTimeout(stageToastTimer);
+  stageToastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
+}
+
 // Which page Roon is on (roonnav.rs reads Roon's log): the menu's "This
 // album" / "This artist" and the home page follow it
 function setRoonNav(nav) {
+  // Every navigation Roon logged counts, also to the page it's already on
+  const moved = roonNav.navCount !== nav.navCount && roonNav.navCount !== 0;
   roonNav = nav;
+  // Roon went somewhere (the sidebar, a link): the page gets out of the
+  // way like any Roon page would; it remembers where it was for next time
+  if (moved && !wrapped.hidden) setWrappedOpen(false);
   layoutWrapped();
   if (!wrappedMenu.hidden) fillWrappedMenu();
   if (!wrapped.hidden && wrappedStack.at(-1)?.page === "home") renderWrapped();
 }
 invoke("wrapper_nav").then(setRoonNav).catch(() => {});
 listen("roon-nav", (event) => setRoonNav(event.payload));
+// A click that reached Roon through the hole (its sidebar, beside the
+// Wrapped page): the page gets out of the way, whatever Roon does with it
+listen("roon-click", () => {
+  if (!wrapped.hidden) setWrappedOpen(false);
+  closeWrappedMenu();
+});
+
+// Roon's own full screen mode breaks the page's layout, so wrapper.rs
+// undoes it the moment Roon enters it (another F11); the page says so,
+// wherever it is showing
+listen("roon-fullscreen", () => {
+  const text = "Roon's full screen is off while the Wrapper holds it. Maximize the Wrapper instead.";
+  if (!wrapped.hidden) wrappedToast(text);
+  else if (!stage.hidden) wrappedToastStage(text);
+  else wrapperToast(text);
+});
+
+let wrapperToastTimer;
+function wrapperToast(text) {
+  let toast = document.querySelector("body > .wrapped-toast");
+  if (!toast) {
+    toast = document.createElement("div");
+    toast.className = "wrapped-toast";
+    document.body.append(toast);
+  }
+  toast.textContent = text;
+  toast.classList.add("show");
+  clearTimeout(wrapperToastTimer);
+  wrapperToastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
+}
 
 // ===== Window buttons ======================================================
 
