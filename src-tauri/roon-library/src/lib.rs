@@ -11,7 +11,7 @@
 //!
 //! ```no_run
 //! # async fn demo() -> Result<(), roon_library::LibraryError> {
-//! use roon_library::{ClientOptions, LibraryClient, AddMode};
+//! use roon_library::{ClientOptions, Facts, GenrePage, LibraryClient, AddMode};
 //! let roon = LibraryClient::connect(ClientOptions::new("192.168.0.68", "fafb763c-9ad0-4f07-887d-44e19b8374e0")).await?;
 //! let zone = "160135c1c87491c726d7a10a9e088d25718a";
 //! let track = roon.set_favorite(zone, true, Some(AddMode::Track)).await?; // adds first if needed
@@ -27,5 +27,5 @@ pub mod graph;
 pub mod remoting;
 pub mod wire;
 
-pub use client::{read_state, AddMode, AlbumCard, AlbumInfo, ArtistCard, AudioQuality, AlbumTrack, ArtistAlbum, ClientOptions, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackHit, TrackInfo};
+pub use client::{read_state, AddMode, AlbumCard, AlbumExtras, AlbumInfo, ArtistCard, ArtistExtras, AudioQuality, AlbumTrack, ArtistAlbum, ClientOptions, Facts, GenrePage, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackHit, TrackInfo};
 pub use connection::{broker_id_from_core_id, DEFAULT_PORT};

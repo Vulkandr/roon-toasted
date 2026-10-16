@@ -576,7 +576,26 @@ pub fn image_request(app: &AppHandle, request: Request<Vec<u8>>, responder: UriS
             opts.scale.get_or_insert_with(|| "fit".into());
         }
 
-        match core.image().get_image(&key, &opts).await {
+        // Two kinds of key: the official API's (what the zone's now-playing
+        // carries; /api/image/<key>) and Roon's own internal ones (what the
+        // Library link's albums and artists carry; /image/<key>.<px>.jpg).
+        // The page says which with src=broker; the other is tried if the
+        // first comes back empty.
+        let broker_first = query.split('&').any(|pair| pair == "src=broker");
+        let size = opts.width.map(|w| w.max(opts.height.unwrap_or(0)));
+        let image = core.image();
+        let fetched = if broker_first {
+            match image.get_broker_image(&key, size).await {
+                Ok(bytes) => Ok(bytes),
+                Err(_) => image.get_image(&key, &opts).await,
+            }
+        } else {
+            match image.get_image(&key, &opts).await {
+                Ok(bytes) => Ok(bytes),
+                Err(_) => image.get_broker_image(&key, size).await,
+            }
+        };
+        match fetched {
             Ok(bytes) => responder.respond(reply(200, "image/jpeg", bytes)),
             Err(e) => responder.respond(reply(502, "text/plain", e.to_string().into_bytes())),
         }

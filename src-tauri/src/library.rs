@@ -49,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumCard, AlbumTrack, ArtistAlbum, ArtistCard, ClientOptions, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -510,6 +510,55 @@ pub async fn library_artist_albums_for(app: AppHandle, handle: String, zone_id: 
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.artist_albums_for(&handle, zone_id.as_deref()).await.map_err(describe)
+}
+
+/// Roon's picks around an artist: similar artists, recommended, latest and
+/// appears-on albums.
+#[tauri::command]
+pub async fn library_artist_extras(app: AppHandle, handle: String) -> Result<ArtistExtras, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.artist_extras(&handle).await.map_err(describe)
+}
+
+/// Roon's picks around an album: similar albums, recommended albums, similar artists.
+#[tauri::command]
+pub async fn library_album_extras(app: AppHandle, handle: String) -> Result<AlbumExtras, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.album_extras(&handle).await.map_err(describe)
+}
+
+/// The artists Roon recommends to the profile (Home's "Recommended for you").
+#[tauri::command]
+pub async fn library_recommended_artists(app: AppHandle) -> Result<Vec<ArtistCard>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.recommended_artists().await.map_err(describe)
+}
+
+/// Roon's metadata on an artist: genres, country, birthplace, active since.
+#[tauri::command]
+pub async fn library_artist_facts(app: AppHandle, handle: String) -> Result<Facts, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.artist_facts(&handle).await.map_err(describe)
+}
+
+/// Roon's metadata on an album: its genres.
+#[tauri::command]
+pub async fn library_album_facts(app: AppHandle, handle: String) -> Result<Facts, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.album_facts(&handle).await.map_err(describe)
+}
+
+/// Roon's genre page by name: top and recommended artists and albums, new releases.
+#[tauri::command]
+pub async fn library_genre_page(app: AppHandle, name: String) -> Result<GenrePage, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.genre_page(&name).await.map_err(describe)
 }
 
 /// Roon's own search: artists, albums and tracks, with handles.

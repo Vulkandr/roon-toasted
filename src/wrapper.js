@@ -2635,14 +2635,15 @@ function setWrappedOpen(open) {
 // Opens a page on top of the stack (back goes to the one before)
 function openWrappedPage(entry) {
   const top = wrappedStack.at(-1);
-  const same = top && top.page === entry.page && top.albumId === entry.albumId && top.handle === entry.handle;
+  const same =
+    top && top.page === entry.page && top.albumId === entry.albumId && top.handle === entry.handle && top.name === entry.name;
   if (same) {
     if (wrapped.hidden) setWrappedOpen(true);
     return;
   }
   // Home and Search are single: going there again goes back to them
   if (entry.page === "home") wrappedStack = [];
-  wrappedStack.push({ page: entry.page, albumId: entry.albumId, handle: entry.handle, query: entry.query });
+  wrappedStack.push({ page: entry.page, albumId: entry.albumId, handle: entry.handle, query: entry.query, name: entry.name });
   wrapped.hidden = false;
   renderWrapped();
   layoutWrapped();
@@ -2714,7 +2715,8 @@ function wrappedArt(imageKey, size, name, round) {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
-    img.src = `${convertFileSrc(imageKey, "roonimg")}?width=${size}&height=${size}`;
+    // (A broker key: the Library link's, not the official API's; zones.rs)
+    img.src = `${convertFileSrc(imageKey, "roonimg")}?width=${size}&height=${size}&src=broker`;
     img.addEventListener("error", () => img.replaceWith(wrappedInitials(name)));
     box.append(img);
   } else {
@@ -2901,6 +2903,12 @@ const WRAPPED_PAGES = {
     } else if (!roonNav.available) {
       wrappedBody.append(wrappedNote("Roon's log wasn't found, so Wrapped can't tell which page Roon is on."));
     }
+    if (libraryReady) {
+      const extras = document.createElement("div");
+      extras.className = "wrapped-extras";
+      wrappedBody.append(extras);
+      wrappedHomeExtras(extras, ++wrappedTicket);
+    }
   },
 
   // An album: by the Core's id (from Roon's log) or by a session handle
@@ -2922,6 +2930,7 @@ const WRAPPED_PAGES = {
     entry.handle = card.handle;
     wrappedHeading(card.title, card.artist);
     wrappedBody.replaceChildren(albumHeader(card));
+    wrappedFacts("album", card, ticket);
     const list = document.createElement("div");
     list.className = "wrapped-tracks";
     list.append(wrappedNote("Loading tracks..."));
@@ -2946,6 +2955,10 @@ const WRAPPED_PAGES = {
       .filter(Boolean)
       .join(" · ");
     wrappedBody.querySelector(".wrapped-facts").textContent = facts;
+    const extras = document.createElement("div");
+    extras.className = "wrapped-extras";
+    wrappedBody.append(extras);
+    await wrappedAlbumExtras(extras, card, ticket);
   },
 
   // An artist: by a handle, or by the album Roon showed last (its main artist)
@@ -2969,6 +2982,7 @@ const WRAPPED_PAGES = {
     if (ticket !== wrappedTicket) return;
     wrappedHeading(card.name, card.albumCount ? `${card.albumCount} album${card.albumCount === 1 ? "" : "s"}` : "");
     wrappedBody.replaceChildren(artistHeader(card));
+    wrappedFacts("artist", card, ticket);
     const holder = document.createElement("div");
     holder.append(wrappedNote("Loading albums..."));
     wrappedBody.append(holder);
@@ -2998,6 +3012,10 @@ const WRAPPED_PAGES = {
       );
     }
     if (!albums.length) holder.append(wrappedNote("Roon lists no albums for this artist."));
+    const extras = document.createElement("div");
+    extras.className = "wrapped-extras";
+    wrappedBody.append(extras);
+    await wrappedArtistExtras(extras, card, ticket);
   },
 
   search(entry) {
@@ -3068,6 +3086,102 @@ const WRAPPED_PAGES = {
     }
     if (others.length) wrappedBody.append(wrappedSection("Your other playlists"), playlistRows(others, false));
   },
+};
+
+// ----- Roon's picks (the "one box" calls its own pages are built from) -----
+
+const albumItem = (a) => ({
+  handle: a.handle,
+  title: a.title,
+  sub: [a.artist, a.year, a.inLibrary ? "In library" : null].filter(Boolean).join(" · "),
+  imageKey: a.imageKey,
+});
+const artistItem = (p) => ({ handle: p.handle, title: p.name, sub: "", imageKey: p.imageKey, round: true });
+const openAlbum = (item) => openWrappedPage({ page: "album", handle: item.handle });
+const openArtist = (item) => openWrappedPage({ page: "artist", handle: item.handle });
+
+// A titled row of cards, or nothing when the list is empty
+function wrappedPicks(holder, title, items, onClick) {
+  if (!items.length) return false;
+  holder.append(wrappedSection(title), wrappedGrid(items, onClick));
+  return true;
+}
+
+async function wrappedAlbumExtras(holder, card, ticket) {
+  holder.append(wrappedNote("Looking for similar albums..."));
+  let x;
+  try {
+    x = await invoke("library_album_extras", { handle: card.handle });
+  } catch (err) {
+    if (ticket === wrappedTicket) holder.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  holder.replaceChildren();
+  const similarTitle = x.similarity ? `Similar albums (${x.similarity.toLowerCase()})` : "Similar albums";
+  const any = [
+    wrappedPicks(holder, similarTitle, x.similar.map(albumItem), openAlbum),
+    wrappedPicks(holder, "Recommended from this album", x.recommended.map(albumItem), openAlbum),
+    wrappedPicks(holder, "Similar artists", x.similarArtists.map(artistItem), openArtist),
+  ].some(Boolean);
+  if (!any) holder.append(wrappedNote("Roon has no similar albums or artists for this one."));
+}
+
+async function wrappedArtistExtras(holder, card, ticket) {
+  holder.append(wrappedNote("Looking for similar artists..."));
+  let x;
+  try {
+    x = await invoke("library_artist_extras", { handle: card.handle });
+  } catch (err) {
+    if (ticket === wrappedTicket) holder.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  holder.replaceChildren();
+  const any = [
+    wrappedPicks(holder, "Similar artists", x.similar.map(artistItem), openArtist),
+    wrappedPicks(holder, "Recommended albums", x.recommended.map(albumItem), openAlbum),
+    wrappedPicks(holder, "Latest releases", x.latest.map(albumItem), openAlbum),
+  ].some(Boolean);
+  if (!any) holder.append(wrappedNote("Roon has no similar artists or recommendations for this one."));
+}
+
+async function wrappedHomeExtras(holder, ticket) {
+  let artists;
+  try {
+    artists = await invoke("library_recommended_artists");
+  } catch (err) {
+    console.warn("recommended artists", err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedPicks(holder, "Artists Roon recommends for you", artists.map(artistItem), openArtist);
+}
+
+WRAPPED_PAGES.genre = async function (entry) {
+  wrappedHeading(entry.name, "Genre");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  wrappedBody.append(wrappedNote("Loading..."));
+  let page;
+  try {
+    page = await invoke("library_genre_page", { name: entry.name });
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedBody.replaceChildren();
+  const holder = document.createElement("div");
+  wrappedBody.append(holder);
+  const any = [
+    wrappedPicks(holder, "Top artists", page.topArtists.map(artistItem), openArtist),
+    wrappedPicks(holder, "Artists Roon recommends", page.recommendedArtists.map(artistItem), openArtist),
+    wrappedPicks(holder, "Top albums", page.topAlbums.map(albumItem), openAlbum),
+    wrappedPicks(holder, "Albums Roon recommends", page.recommendedAlbums.map(albumItem), openAlbum),
+    wrappedPicks(holder, "New releases", page.newReleases.map(albumItem), openAlbum),
+  ].some(Boolean);
+  if (!any) holder.append(wrappedNote("Roon has nothing to show for this genre."));
 };
 
 // The playlists Wrapped makes are named with this, so they're told apart
@@ -3158,6 +3272,8 @@ function albumHeader(card) {
   const facts = document.createElement("div");
   facts.className = "wrapped-facts";
   facts.textContent = card.year ? String(card.year) : "";
+  const genres = document.createElement("div");
+  genres.className = "wrapped-genres";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
   const play = document.createElement("button");
@@ -3187,7 +3303,7 @@ function albumHeader(card) {
       }
     }, "wrapped-save"),
   );
-  info.append(title, artist, facts, actions);
+  info.append(title, artist, facts, genres, actions);
   head.append(info);
   return head;
 }
@@ -3201,12 +3317,50 @@ function artistHeader(card) {
   const name = document.createElement("h2");
   name.className = "wrapped-album-title";
   name.textContent = card.name;
+  const facts = document.createElement("div");
+  facts.className = "wrapped-facts";
+  const genres = document.createElement("div");
+  genres.className = "wrapped-genres";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
   actions.append(wrappedRadio("artist", { artists: [card.handle] }));
-  info.append(name, actions);
+  info.append(name, facts, genres, actions);
   head.append(info);
   return head;
+}
+
+// Roon's genre list and where an artist is from, under the name
+function wrappedGenreChips(holder, genres) {
+  holder.replaceChildren();
+  for (const genre of genres) {
+    const chip = document.createElement("button");
+    chip.className = "wrapped-genre";
+    chip.textContent = genre;
+    chip.addEventListener("click", () => openWrappedPage({ page: "genre", name: genre }));
+    holder.append(chip);
+  }
+}
+
+async function wrappedFacts(kind, card, ticket) {
+  let facts;
+  try {
+    facts = await invoke(kind === "artist" ? "library_artist_facts" : "library_album_facts", { handle: card.handle });
+  } catch (err) {
+    console.warn("facts", err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  const genres = wrappedBody.querySelector(".wrapped-genres");
+  if (genres) wrappedGenreChips(genres, facts.genres);
+  if (kind === "artist") {
+    // (The birthplace usually ends with the country already)
+    const where = [facts.from, facts.country].filter(Boolean).filter((v, i, all) => i === 0 || !all[0].endsWith(v));
+    const line = [where.length ? where.join(", ") : null, facts.activeSince ? `since ${facts.activeSince}` : null]
+      .filter(Boolean)
+      .join(" · ");
+    const el = wrappedBody.querySelector(".wrapped-facts");
+    if (el) el.textContent = line;
+  }
 }
 
 // Track rows like Roon's: play, the Wrapped radio mark, number and title,

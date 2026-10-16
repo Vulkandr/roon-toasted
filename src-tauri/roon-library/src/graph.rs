@@ -169,6 +169,9 @@ pub struct InlineStruct {
     pub type_name: String,
     /// Keyed by the full member name the Core uses.
     pub fields: HashMap<String, Value>,
+    /// A `DataList<T>` sent by value (an AlbumLite's Genres or Labels):
+    /// its elements, in order; empty for a struct.
+    pub items: Vec<Value>,
 }
 
 impl InlineStruct {
@@ -192,6 +195,8 @@ pub struct RoonObject {
     pub structs: Option<Vec<InlineStruct>>,
     /// `DataList<int>` only: the numbers (e.g. a zone's WaveformData).
     pub ints: Option<Vec<u32>>,
+    /// `DataList<string>` only: the strings (a Performer's Genres).
+    pub strings: Option<Vec<String>>,
 }
 
 impl RoonObject {
@@ -227,9 +232,36 @@ fn field_by_suffix<'a>(fields: &'a HashMap<String, Value>, suffix: &str) -> Opti
     fields.iter().find(|(k, _)| k.ends_with(&wanted)).map(|(_, v)| v)
 }
 
-fn is_data_list(type_name: &str) -> bool {
-    type_name.starts_with("Sooloos.Broker.Api.DataList<") || type_name.contains(".DataList<")
+/// The element type of a `DataList<T>` type name, when it is one.
+fn data_list_element(type_name: &str) -> Option<&str> {
+    let start = type_name.find(".DataList<")? + ".DataList<".len();
+    type_name[start..].strip_suffix('>')
 }
+
+/// How a DataList's elements are encoded: strings and numbers as
+/// themselves, everything else with the Object encoding (a reference, or a
+/// struct by value). A few enum lists are plain integers too.
+fn element_codec(element: &str) -> PropertyType {
+    match element {
+        "string" => PropertyType::String,
+        "int" => PropertyType::Int,
+        "long" => PropertyType::Long,
+        "double" => PropertyType::Double,
+        "float" => PropertyType::Float,
+        "System.DateTime" => PropertyType::DateTime,
+        e if e.ends_with("DsdStrategy")
+            || e.ends_with("MediaSource")
+            || e.ends_with("TidalStreamFormat")
+            || e.ends_with("QobuzStreamFormat")
+            || e.ends_with("KKBoxStreamFormat")
+            || e.ends_with("NugsStreamFormat") =>
+        {
+            PropertyType::Int
+        }
+        _ => PropertyType::Object,
+    }
+}
+
 
 #[derive(Default)]
 pub struct ObjectGraph {
@@ -283,6 +315,7 @@ impl ObjectGraph {
         let mut items = None;
         let mut structs = None;
         let mut ints = None;
+        let mut strings = None;
 
         if populate {
             if let Some(def) = &def {
@@ -297,23 +330,31 @@ impl ObjectGraph {
                         list.push(r.flex_int()?);
                     }
                     ints = Some(list);
-                } else if is_data_list(&type_name) {
-                    // Each item is an Object: a reference, or a struct by value.
+                } else if let Some(element) = data_list_element(&type_name) {
+                    // Each item is an Object (a reference, or a struct by
+                    // value), or a string or number for a list of those
+                    let codec = element_codec(element);
                     let count = r.flex_int()?;
                     let mut list = Vec::with_capacity(count as usize);
                     let mut values = Vec::new();
+                    let mut texts = Vec::new();
                     for _ in 0..count {
                         if r.remaining() == 0 {
                             break;
                         }
-                        match self.read_value(r, PropertyType::Object)? {
+                        match self.read_value(r, codec)? {
                             Value::Ref(oid) => list.push(oid),
                             Value::Inline(s) => values.push(s),
+                            Value::Str(t) => texts.push(t),
                             _ => {}
                         }
                     }
-                    items = Some(list);
-                    structs = Some(values);
+                    if codec == PropertyType::String {
+                        strings = Some(texts);
+                    } else {
+                        items = Some(list);
+                        structs = Some(values);
+                    }
                 } else {
                     // A field we can't finish reading ends the object; keep what we have.
                     let _ = self.read_sparse_fields(r, def, &mut fields);
@@ -334,6 +375,9 @@ impl ObjectGraph {
                     if ints.is_some() {
                         existing.ints = ints;
                     }
+                    if strings.is_some() {
+                        existing.strings = strings;
+                    }
                 }
             }
             None => {
@@ -347,6 +391,7 @@ impl ObjectGraph {
                         items,
                         structs,
                         ints,
+                        strings,
                     },
                 );
             }
@@ -407,6 +452,23 @@ impl ObjectGraph {
                         let mut sub = Reader::new(body);
                         let mut s = InlineStruct::default();
                         match self.types.get(&type_id) {
+                            // A DataList by value (an AlbumLite's Genres):
+                            // no members, a count and then the elements
+                            Some(def) if data_list_element(&def.name).is_some() => {
+                                s.type_name = def.name.clone();
+                                let codec = element_codec(data_list_element(&def.name).unwrap_or_default());
+                                if let Ok(count) = sub.flex_int() {
+                                    for _ in 0..count {
+                                        if sub.remaining() == 0 {
+                                            break;
+                                        }
+                                        match self.read_value(&mut sub, codec) {
+                                            Ok(v) => s.items.push(v),
+                                            Err(_) => break,
+                                        }
+                                    }
+                                }
+                            }
                             Some(def) => {
                                 s.type_name = def.name.clone();
                                 let _ = self.read_sparse_fields(&mut sub, def, &mut s.fields);

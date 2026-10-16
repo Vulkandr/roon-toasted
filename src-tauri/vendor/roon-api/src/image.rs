@@ -71,6 +71,27 @@ impl ImageService {
         Ok(bytes.to_vec())
     }
 
+    /// A picture Roon's own apps show: an internal ("broker") image key, as
+    /// the Library link hands them out. The Core serves those at
+    /// /image/<key>.jpg, or scaled to a square at /image/<key>.<px>.jpg.
+    pub async fn get_broker_image(&self, image_key: &str, size: Option<u32>) -> Result<Vec<u8>, ApiError> {
+        let url = match size {
+            Some(px) => format!("{}/image/{}.{}.jpg", self.base_url, image_key, px),
+            None => format!("{}/image/{}.jpg", self.base_url, image_key),
+        };
+        let response = reqwest::get(&url)
+            .await
+            .map_err(|e| ApiError::Io(format!("image fetch failed: {}", e)))?;
+        if !response.status().is_success() {
+            return Err(ApiError::Io(format!("image fetch returned status {}", response.status())));
+        }
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ApiError::Io(format!("image read failed: {}", e)))?;
+        Ok(bytes.to_vec())
+    }
+
     /// Build an image URL without fetching (for embedding in UIs).
     pub fn image_url(&self, image_key: &str, opts: &ImageOptions) -> String {
         let mut url = format!("{}/api/image/{}", self.base_url, image_key);

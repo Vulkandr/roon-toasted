@@ -52,6 +52,18 @@ const SIG_PLAY_PLAYLIST: &str = "Sooloos.Broker.Api.Transport::PlayPlaylist(Sool
 const SIG_GET_ALBUM_LITE: &str = "Sooloos.Broker.Api.Library::GetAlbumLite(long, Base.ResultCallback<Sooloos.Broker.Api.AlbumLite>)";
 const SIG_GET_PERFORMER_LITE: &str = "Sooloos.Broker.Api.Library::GetPerformerLite(long, Base.ResultCallback<Sooloos.Broker.Api.PerformerLite>)";
 const SIG_UNIFIED_SEARCH: &str = "Sooloos.Broker.Api.Library::UnifiedSearch(Sooloos.Broker.Api.SearchParameters, Base.ResultCallback<Sooloos.Broker.Api.UnifiedSearchResults>)";
+const SIG_GET_PERFORMER: &str = "Sooloos.Broker.Api.Library::GetPerformer(Sooloos.Broker.Api.PerformerBase, Base.ResultCallback<Sooloos.Broker.Api.Performer>)";
+const SIG_SIMILAR_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarPerformers(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_PERFORMER_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxPerformerRecommendedAlbums(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.PerformerRecommendedAlbums>)";
+const SIG_SIMILAR_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarAlbums(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.OneBox_SimilarAlbums>)";
+const SIG_ALBUM_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumRecommendedForYou(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
+const SIG_ALBUM_SIMILAR_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumSimilarPerformers(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_RECOMMENDED_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxRecommendedPerformers(System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_GENRE_TOP_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreTopPerformers(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerLite>>)";
+const SIG_GENRE_RECOMMENDED_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreRecommendedPerformers(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_GENRE_TOP_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreTopAlbums(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
+const SIG_GENRE_RECOMMENDED_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreRecommendedAlbums(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumWithExtras>>)";
+const SIG_GENRE_NEW_RELEASES: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreNewReleases(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumWithExtras>>)";
 
 const FAVORITE: u32 = 1;
 const NOT_FAVORITE: u32 = 0;
@@ -245,6 +257,66 @@ pub struct ArtistCard {
     pub favorite: bool,
     /// How many albums the artist is the main performer of, as Roon counts them.
     pub album_count: Option<i32>,
+}
+
+/// What Roon's artist page shows besides the discography: similar artists
+/// (Roon's "Similar to"), and the albums it recommends, the latest ones and
+/// the ones the artist appears on (see `artist_extras`).
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistExtras {
+    pub similar: Vec<ArtistCard>,
+    pub recommended: Vec<AlbumCard>,
+    pub latest: Vec<AlbumCard>,
+    pub appears_on: Vec<AlbumCard>,
+}
+
+/// What Roon's album page shows besides the tracks: similar albums (with
+/// Roon's word for the likeness), albums recommended from this one, and
+/// similar artists (see `album_extras`).
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumExtras {
+    pub similar: Vec<AlbumCard>,
+    pub similarity: Option<String>,
+    pub recommended: Vec<AlbumCard>,
+    pub similar_artists: Vec<ArtistCard>,
+}
+
+/// What Roon's metadata says about an artist or album beyond the card:
+/// its genres (Roon's own list, as deep as its provider goes), and for an
+/// artist where it is from (see `artist_facts`, `album_facts`).
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Facts {
+    pub genres: Vec<String>,
+    pub country: Option<String>,
+    pub from: Option<String>,
+    pub active_since: Option<u32>,
+}
+
+/// What Roon's genre page shows: its top and recommended artists, its top
+/// and recommended albums, and new releases (see `genre_page`).
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GenrePage {
+    pub name: String,
+    pub top_artists: Vec<ArtistCard>,
+    pub recommended_artists: Vec<ArtistCard>,
+    pub top_albums: Vec<AlbumCard>,
+    pub recommended_albums: Vec<AlbumCard>,
+    pub new_releases: Vec<AlbumCard>,
+}
+
+/// What a "one box" call is about (see `LibraryClient::one_box`).
+#[derive(Debug, Clone, Copy)]
+enum Subject<'a> {
+    /// The profile alone
+    None,
+    /// An object in the graph (an album or performer handle)
+    Oid(u64),
+    /// A name (a genre)
+    Name(&'a str),
 }
 
 /// A track found by `search`.
@@ -985,6 +1057,224 @@ impl LibraryClient {
         let p = g.get(oid)?;
         let profile = self.profile_sooid(&g);
         Some(describe_artist_card(&g, p, profile.as_deref()))
+    }
+
+    /// Roon's metadata on an artist: the full Performer object (GetPerformer
+    /// on the lite one): genres, country, birthplace, years active.
+    pub async fn artist_facts(&self, handle: &str) -> Result<Facts, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad artist handle {handle}")))?;
+        let library = self.inner.graph.lock().unwrap().first_of_type("Library").map(|o| o.oid);
+        let library = library.ok_or_else(|| LibraryError::UnsupportedCore("no Library service in the graph".into()))?;
+        let mut args = Writer::new();
+        args.long(oid);
+        let res = self.inner.remoting.call(library, SIG_GET_PERFORMER, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "GetPerformer".into(), status: res.status }.into());
+        }
+        let full = Reader::new(&res.payload).flex_long().ok().filter(|oid| *oid != 0);
+        let Some(full) = full else {
+            return Ok(Facts::default());
+        };
+        self.wait_until(Duration::from_secs(3), |g| g.get(full).is_some_and(|o| o.has_field("Name"))).await;
+        let g = self.inner.graph.lock().unwrap();
+        let Some(p) = g.get(full) else {
+            return Ok(Facts::default());
+        };
+        Ok(Facts {
+            genres: strings_of(&g, p.field("Genres")),
+            country: p.str_field("Country").map(str::to_string),
+            from: p.str_field("BirthPlace").map(str::to_string),
+            active_since: year_of(p.field("YearsActive")),
+        })
+    }
+
+    /// Roon's metadata on an album: its genres, from the AlbumLite when it
+    /// carries them, the full Album otherwise.
+    pub async fn album_facts(&self, handle: &str) -> Result<Facts, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad album handle {handle}")))?;
+        let (library, genres) = {
+            let g = self.inner.graph.lock().unwrap();
+            (
+                g.first_of_type("Library").map(|o| o.oid),
+                g.get(oid).map(|a| strings_of(&g, a.field("Genres"))).unwrap_or_default(),
+            )
+        };
+        if !genres.is_empty() {
+            return Ok(Facts { genres, ..Facts::default() });
+        }
+        let library = library.ok_or_else(|| LibraryError::UnsupportedCore("no Library service in the graph".into()))?;
+        let Some(full) = self.get_album(library, oid).await? else {
+            return Ok(Facts::default());
+        };
+        self.wait_until(Duration::from_secs(3), |g| g.get(full).is_some_and(|o| o.has_field("Title"))).await;
+        let g = self.inner.graph.lock().unwrap();
+        Ok(Facts {
+            genres: g.get(full).map(|a| strings_of(&g, a.field("Genres"))).unwrap_or_default(),
+            ..Facts::default()
+        })
+    }
+
+    /// Roon's genre page, by the genre's name as Roon spells it: top and
+    /// recommended artists, top and recommended albums, new releases.
+    pub async fn genre_page(&self, name: &str) -> Result<GenrePage, LibraryError> {
+        let subject = Subject::Name(name);
+        let top_artists = self.one_box(SIG_GENRE_TOP_PERFORMERS, "GetOneBoxGenreTopPerformers", subject).await?;
+        let rec_artists = self.one_box(SIG_GENRE_RECOMMENDED_PERFORMERS, "GetOneBoxGenreRecommendedPerformers", subject).await?;
+        let top_albums = self.one_box(SIG_GENRE_TOP_ALBUMS, "GetOneBoxGenreTopAlbums", subject).await?;
+        let rec_albums = self.one_box(SIG_GENRE_RECOMMENDED_ALBUMS, "GetOneBoxGenreRecommendedAlbums", subject).await?;
+        let new_releases = self.one_box(SIG_GENRE_NEW_RELEASES, "GetOneBoxGenreNewReleases", subject).await?;
+        self.wait_for_lists(&[top_artists.clone(), rec_artists.clone()], Some("Performer")).await;
+        self.wait_for_lists(&[top_albums.clone(), rec_albums.clone(), new_releases.clone()], Some("Album")).await;
+        let g = self.inner.graph.lock().unwrap();
+        Ok(GenrePage {
+            name: name.to_string(),
+            top_artists: self.artist_cards(&g, Some(&top_artists), None),
+            recommended_artists: self.artist_cards(&g, Some(&rec_artists), None),
+            top_albums: self.album_cards(&g, Some(&top_albums), None),
+            recommended_albums: self.album_cards(&g, Some(&rec_albums), None),
+            new_releases: self.album_cards(&g, Some(&new_releases), None),
+        })
+    }
+
+    /// One of the Library's "one box" calls (what Roon's own pages are built
+    /// from): `subject` (an album or performer handle) and the profile, and
+    /// the decoded return value: a reference to a list, or an inline struct
+    /// whose members reference lists. The lists and their items arrive as
+    /// pushes afterwards; see `wait_for_lists`.
+    async fn one_box(&self, sig: &str, method: &str, subject: Subject<'_>) -> Result<Value, LibraryError> {
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        match subject {
+            Subject::None => {}
+            Subject::Oid(oid) => {
+                args.long(oid);
+            }
+            Subject::Name(name) => {
+                args.string(Some(name));
+            }
+        }
+        args.sooid(&profile);
+        let res = self.inner.remoting.call(library, sig, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: method.into(), status: res.status }.into());
+        }
+        if res.payload.is_empty() {
+            return Ok(Value::Null);
+        }
+        let value = self
+            .inner
+            .graph
+            .lock()
+            .unwrap()
+            .decode_return_value(&res.payload)
+            .map_err(|_| LibraryError::Unconfirmed(format!("could not read what {method} returned")))?;
+        Ok(value)
+    }
+
+    /// Waits (up to 3 s) until every list in `lists` is in the graph and each
+    /// of its members has its name; `via` names the member of an inline item
+    /// (PerformerWithExtras::Performer) that points at the real object.
+    async fn wait_for_lists(&self, lists: &[Value], via: Option<&str>) {
+        let settled = |g: &ObjectGraph| {
+            lists.iter().all(|list| {
+                list_members(g, Some(list), via)
+                    .is_some_and(|members| members.iter().all(|oid| g.get(*oid).is_some_and(|o| o.has_field("Title") || o.has_field("Name"))))
+            })
+        };
+        self.wait_until(Duration::from_secs(3), settled).await;
+    }
+
+    fn album_cards(&self, g: &ObjectGraph, list: Option<&Value>, skip: Option<u64>) -> Vec<AlbumCard> {
+        let profile = self.profile_sooid(g);
+        let mut seen = HashSet::new();
+        list_members(g, list, Some("Album"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|oid| Some(*oid) != skip)
+            .filter_map(|oid| g.get(oid))
+            .filter(|a| a.has_field("Title"))
+            .map(|a| describe_album_card(g, a, profile.as_deref()))
+            .filter(|a| seen.insert(a.album_id.map(|id| id.to_string()).unwrap_or_else(|| a.handle.clone())))
+            .collect()
+    }
+
+    fn artist_cards(&self, g: &ObjectGraph, list: Option<&Value>, skip: Option<u64>) -> Vec<ArtistCard> {
+        let profile = self.profile_sooid(g);
+        let mut seen = HashSet::new();
+        list_members(g, list, Some("Performer"))
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|oid| Some(*oid) != skip)
+            .filter_map(|oid| g.get(oid))
+            .filter(|p| p.has_field("Name"))
+            .map(|p| describe_artist_card(g, p, profile.as_deref()))
+            .filter(|p| seen.insert(p.performer_id.map(|id| id.to_string()).unwrap_or_else(|| p.handle.clone())))
+            .collect()
+    }
+
+    /// Roon's picks around an artist: similar artists, and the albums it
+    /// recommends, the latest ones and the ones the artist appears on. Lists
+    /// Roon has nothing for come back empty.
+    pub async fn artist_extras(&self, handle: &str) -> Result<ArtistExtras, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad artist handle {handle}")))?;
+        let similar = self.one_box(SIG_SIMILAR_PERFORMERS, "GetOneBoxSimilarPerformers", Subject::Oid(oid)).await?;
+        let recommended = self.one_box(SIG_PERFORMER_RECOMMENDED, "GetOneBoxPerformerRecommendedAlbums", Subject::Oid(oid)).await?;
+        let album_list = |name: &str| -> Value {
+            match &recommended {
+                Value::Inline(s) => s.field(name).cloned().unwrap_or(Value::Null),
+                _ => Value::Null,
+            }
+        };
+        let (rec, latest, appears) = (album_list("RecommendedAlbums"), album_list("LatestAlbums"), album_list("AppearsOnAlbums"));
+        self.wait_for_lists(std::slice::from_ref(&similar), Some("Performer")).await;
+        self.wait_for_lists(&[rec.clone(), latest.clone(), appears.clone()], Some("Album")).await;
+        let g = self.inner.graph.lock().unwrap();
+        Ok(ArtistExtras {
+            similar: self.artist_cards(&g, Some(&similar), Some(oid)),
+            recommended: self.album_cards(&g, Some(&rec), None),
+            latest: self.album_cards(&g, Some(&latest), None),
+            appears_on: self.album_cards(&g, Some(&appears), None),
+        })
+    }
+
+    /// Roon's picks around an album: similar albums (and Roon's word for the
+    /// likeness), albums recommended from this one, and similar artists.
+    pub async fn album_extras(&self, handle: &str) -> Result<AlbumExtras, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad album handle {handle}")))?;
+        let similar = self.one_box(SIG_SIMILAR_ALBUMS, "GetOneBoxSimilarAlbums", Subject::Oid(oid)).await?;
+        let recommended = self.one_box(SIG_ALBUM_RECOMMENDED, "GetOneBoxAlbumRecommendedForYou", Subject::Oid(oid)).await?;
+        let artists = self.one_box(SIG_ALBUM_SIMILAR_PERFORMERS, "GetOneBoxAlbumSimilarPerformers", Subject::Oid(oid)).await?;
+        let (similar_list, similarity) = match &similar {
+            Value::Inline(s) => (
+                s.field("Albums").cloned().unwrap_or(Value::Null),
+                s.field("SimilarityType").and_then(Value::as_str).map(str::to_string),
+            ),
+            other => (other.clone(), None),
+        };
+        self.wait_for_lists(&[similar_list.clone(), recommended.clone()], Some("Album")).await;
+        self.wait_for_lists(std::slice::from_ref(&artists), Some("Performer")).await;
+        let g = self.inner.graph.lock().unwrap();
+        Ok(AlbumExtras {
+            similar: self.album_cards(&g, Some(&similar_list), Some(oid)),
+            similarity,
+            recommended: self.album_cards(&g, Some(&recommended), Some(oid)),
+            similar_artists: self.artist_cards(&g, Some(&artists), None),
+        })
+    }
+
+    /// The artists Roon recommends to this profile (its Home page's
+    /// "Recommended for you").
+    pub async fn recommended_artists(&self) -> Result<Vec<ArtistCard>, LibraryError> {
+        let list = self.one_box(SIG_RECOMMENDED_PERFORMERS, "GetOneBoxRecommendedPerformers", Subject::None).await?;
+        self.wait_for_lists(std::slice::from_ref(&list), Some("Performer")).await;
+        let g = self.inner.graph.lock().unwrap();
+        Ok(self.artist_cards(&g, Some(&list), None))
     }
 
     /// Roon's own search (what its search box uses): artists, albums and
@@ -2022,6 +2312,42 @@ fn describe_album(g: &ObjectGraph, a: &RoonObject, group: &str, profile: Option<
         year: year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate"))),
         image_key: image_key(g, a, "Image"),
     }
+}
+
+/// The strings of a `DataList<string>` member (Genres): the list came by
+/// reference (a pushed object with `strings`) or by value (an inline list).
+fn strings_of(g: &ObjectGraph, list: Option<&Value>) -> Vec<String> {
+    match list {
+        Some(Value::Ref(oid)) => g.get(*oid).and_then(|l| l.strings.clone()).unwrap_or_default(),
+        Some(Value::Inline(l)) => l.items.iter().filter_map(|v| v.as_str().map(str::to_string)).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The object ids a DataList holds: its items when they came by reference,
+/// or, for items that came by value (PerformerWithExtras), the object their
+/// `via` member points at. None while the list itself hasn't arrived.
+fn list_members(g: &ObjectGraph, list: Option<&Value>, via: Option<&str>) -> Option<Vec<u64>> {
+    let list = match list? {
+        Value::Null => return Some(Vec::new()),
+        Value::Ref(oid) => g.get(*oid)?,
+        _ => return Some(Vec::new()),
+    };
+    // The list's contents haven't been pushed yet
+    if list.items.is_none() && list.structs.is_none() {
+        return None;
+    }
+    // (A list of inline items has an empty `items` beside its `structs`)
+    if let Some(items) = list.items.as_ref().filter(|items| !items.is_empty()) {
+        return Some(items.clone());
+    }
+    Some(
+        list.structs
+            .iter()
+            .flatten()
+            .filter_map(|s| via.and_then(|name| s.field(name)).and_then(Value::as_ref_id))
+            .collect(),
+    )
 }
 
 fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) -> AlbumCard {
