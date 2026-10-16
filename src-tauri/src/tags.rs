@@ -20,7 +20,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use crate::wrapped::{read_json, write_json, WrappedSettings};
+use crate::wrapped::{read_json, write_json, Wrapped, WrappedSettings};
+use tauri::Emitter;
 
 const KEEP_FOR_MS: i64 = 90 * 86_400_000;
 const USER_AGENT: &str = concat!("RoonToasted/", env!("CARGO_PKG_VERSION"), " (https://github.com/Vulkandr/roon-toasted)");
@@ -61,10 +62,25 @@ pub struct ArtistTags {
     pub note: Option<String>,
 }
 
+/// What Last.fm's listeners call one album (its artist's tags are the
+/// fallback when they are few).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AlbumTags {
+    pub artist: String,
+    pub album: String,
+    pub tags: Vec<Tag>,
+    pub fetched_at: i64,
+    pub from_lastfm: bool,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
 struct Store {
     /// Keyed by the artist's name, lower-cased.
     artists: HashMap<String, ArtistTags>,
+    /// Keyed by "artist\u{0}album", lower-cased.
+    albums: HashMap<String, AlbumTags>,
 }
 
 #[derive(Default)]
@@ -72,6 +88,9 @@ pub struct Tags {
     store: Mutex<Option<Store>>,
     /// Serializes the lookups (MusicBrainz wants at most one a second).
     gate: tokio::sync::Mutex<Option<Instant>>,
+    /// The "tag my artists" job (see `wrapped_tags_fill`).
+    filling: std::sync::atomic::AtomicBool,
+    stop_filling: std::sync::atomic::AtomicBool,
 }
 
 fn path(app: &AppHandle) -> Option<PathBuf> {
@@ -119,16 +138,8 @@ impl Tags {
                 return have;
             }
         }
-        let mut gate = self.gate.lock().await;
-        if let Some(last) = *gate {
-            let since = last.elapsed();
-            if since < Duration::from_millis(1100) {
-                tokio::time::sleep(Duration::from_millis(1100) - since).await;
-            }
-        }
+        self.turn().await;
         let fetched = fetch(name, lastfm_key).await;
-        *gate = Some(Instant::now());
-        drop(gate);
         self.with_store(app, |s| {
             s.artists.insert(key_of(name), fetched.clone());
         });
@@ -138,6 +149,48 @@ impl Tags {
 
     pub fn count(&self, app: &AppHandle) -> usize {
         self.with_store(app, |s| s.artists.len())
+    }
+
+    /// Waits for the lookup gate (one outside request a second).
+    async fn turn(&self) {
+        let mut gate = self.gate.lock().await;
+        if let Some(last) = *gate {
+            let since = last.elapsed();
+            if since < Duration::from_millis(1100) {
+                tokio::time::sleep(Duration::from_millis(1100) - since).await;
+            }
+        }
+        *gate = Some(Instant::now());
+    }
+
+    /// An album's own tags, fetched when missing or stale.
+    pub async fn lookup_album(&self, app: &AppHandle, artist: &str, album: &str, lastfm_key: &str) -> AlbumTags {
+        let key = format!("{}\u{0}{}", key_of(artist), key_of(album));
+        if let Some(have) = self.with_store(app, |s| s.albums.get(&key).cloned()) {
+            if now_ms() - have.fetched_at < KEEP_FOR_MS && (have.from_lastfm || lastfm_key.is_empty()) {
+                return have;
+            }
+        }
+        let mut out = AlbumTags { artist: artist.to_string(), album: album.to_string(), fetched_at: now_ms(), ..Default::default() };
+        if !lastfm_key.is_empty() {
+            self.turn().await;
+            if let Ok(client) = client() {
+                if let Ok(tags) = lastfm_album_top_tags(&client, artist, album, lastfm_key).await {
+                    out.from_lastfm = true;
+                    out.tags = tags;
+                }
+            }
+        }
+        self.with_store(app, |s| {
+            s.albums.insert(key, out.clone());
+        });
+        self.save(app);
+        out
+    }
+
+    /// Everything tagged so far, for the similarity scores.
+    fn all_artists(&self, app: &AppHandle) -> Vec<ArtistTags> {
+        self.with_store(app, |s| s.artists.values().cloned().collect())
     }
 }
 
@@ -219,6 +272,33 @@ async fn lastfm_top_tags(client: &reqwest::Client, name: &str, key: &str) -> Res
     let res = client
         .get("https://ws.audioscrobbler.com/2.0/")
         .query(&[("method", "artist.gettoptags"), ("artist", name), ("api_key", key), ("format", "json"), ("autocorrect", "1")])
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    let body: LastfmTopTags = res.json().await.map_err(|e| e.to_string())?;
+    if let Some(code) = body.error {
+        return Err(body.message.unwrap_or_else(|| format!("error {code}")));
+    }
+    let tags = body.toptags.map(|t| t.tag).unwrap_or_default();
+    Ok(tags
+        .into_iter()
+        .filter(|t| t.count >= 5)
+        .filter_map(|t| classify(&t.name).map(|(name, kind)| Tag { name, weight: t.count.min(100), kind }))
+        .take(12)
+        .collect())
+}
+
+async fn lastfm_album_top_tags(client: &reqwest::Client, artist: &str, album: &str, key: &str) -> Result<Vec<Tag>, String> {
+    let res = client
+        .get("https://ws.audioscrobbler.com/2.0/")
+        .query(&[
+            ("method", "album.gettoptags"),
+            ("artist", artist),
+            ("album", album),
+            ("api_key", key),
+            ("format", "json"),
+            ("autocorrect", "1"),
+        ])
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -437,10 +517,206 @@ pub async fn wrapped_artist_tags(app: AppHandle, name: String) -> Result<ArtistT
     Ok(tags.lookup(&app, &name, &key).await)
 }
 
+/// An album's tags (its artist's when Last.fm has fewer than three for it).
+#[tauri::command]
+pub async fn wrapped_album_tags(app: AppHandle, artist: String, album: String) -> Result<AlbumTags, String> {
+    if artist.trim().is_empty() || album.trim().is_empty() {
+        return Err("No album.".into());
+    }
+    let key = WrappedSettings::load(&app).lastfm_key;
+    let tags = app.state::<Tags>();
+    let mut own = tags.lookup_album(&app, &artist, &album, &key).await;
+    if own.tags.len() < 3 {
+        let of_artist = tags.lookup(&app, &artist, &key).await;
+        for tag in of_artist.tags {
+            if !own.tags.iter().any(|t| t.name == tag.name) {
+                own.tags.push(tag);
+            }
+        }
+    }
+    Ok(own)
+}
+
 /// How many artists are in the tag cache.
 #[tauri::command]
 pub fn wrapped_tags_count(app: AppHandle) -> usize {
     app.state::<Tags>().count(&app)
+}
+
+/// The tag cache against the history: how many of the artists you have
+/// played are tagged, and whether the job is running.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FillStatus {
+    pub tagged: usize,
+    pub artists: usize,
+    pub filling: bool,
+}
+
+fn fill_status(app: &AppHandle) -> FillStatus {
+    let tags = app.state::<Tags>();
+    let artists = app.state::<Wrapped>().artists(app);
+    let tagged = tags.with_store(app, |s| artists.iter().filter(|a| s.artists.contains_key(&key_of(&a.name))).count());
+    FillStatus { tagged, artists: artists.len(), filling: tags.filling.load(std::sync::atomic::Ordering::SeqCst) }
+}
+
+#[tauri::command]
+pub fn wrapped_tags_status(app: AppHandle) -> FillStatus {
+    fill_status(&app)
+}
+
+/// Tags every artist in the history copy, most played first, one lookup a
+/// second in the background; "wrapped-tags" events carry the progress.
+/// `stop` ends a running job.
+#[tauri::command]
+pub fn wrapped_tags_fill(app: AppHandle, stop: Option<bool>) -> FillStatus {
+    use std::sync::atomic::Ordering;
+    let tags = app.state::<Tags>();
+    if stop.unwrap_or(false) {
+        tags.stop_filling.store(true, Ordering::SeqCst);
+        return fill_status(&app);
+    }
+    if tags.filling.swap(true, Ordering::SeqCst) {
+        return fill_status(&app);
+    }
+    tags.stop_filling.store(false, Ordering::SeqCst);
+    let app2 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let tags = app2.state::<Tags>();
+        let key = WrappedSettings::load(&app2).lastfm_key;
+        let artists = app2.state::<Wrapped>().artists(&app2);
+        let total = artists.len();
+        let mut done = 0;
+        for artist in artists {
+            if tags.stop_filling.load(Ordering::SeqCst) {
+                break;
+            }
+            let have = tags.cached(&app2, &artist.name).is_some_and(|t| t.from_lastfm || key.is_empty());
+            if !have {
+                tags.lookup(&app2, &artist.name, &key).await;
+            }
+            done += 1;
+            if done % 5 == 0 || !have {
+                let _ = app2.emit("wrapped-tags", serde_json::json!({ "done": done, "total": total, "finished": false }));
+            }
+        }
+        tags.filling.store(false, Ordering::SeqCst);
+        let _ = app2.emit("wrapped-tags", serde_json::json!({ "done": done, "total": total, "finished": true }));
+    });
+    fill_status(&app)
+}
+
+// ----- Similar artists by the tags -----
+
+/// One artist like another (see `wrapped_similar`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SimilarRow {
+    pub name: String,
+    pub score: f64,
+    /// The tags they share (or the year, for Era).
+    pub why: Vec<String>,
+    pub performer_id: Option<u64>,
+    pub album_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub plays: u32,
+}
+
+fn overlap(a: &[Tag], b: &[Tag], kind: TagKind) -> (f64, Vec<String>) {
+    let total: u32 = a.iter().filter(|t| t.kind == kind).map(|t| t.weight).sum();
+    if total == 0 {
+        return (0.0, Vec::new());
+    }
+    let mut shared = 0u32;
+    let mut why = Vec::new();
+    for t in a.iter().filter(|t| t.kind == kind) {
+        if let Some(o) = b.iter().find(|o| o.kind == kind && o.name == t.name) {
+            shared += t.weight.min(o.weight);
+            why.push(t.name.clone());
+        }
+    }
+    (shared as f64 / total as f64, why)
+}
+
+/// Artists like `artist` by one of the tag kinds ("genre", "style",
+/// "scene") or by "era" (formed within six years, sharing a genre), among
+/// the tagged artists. `album` names an album whose own tags stand in for
+/// the artist's.
+#[tauri::command]
+pub async fn wrapped_similar(app: AppHandle, artist: String, album: Option<String>, by: String, limit: Option<usize>) -> Result<Vec<SimilarRow>, String> {
+    let key = WrappedSettings::load(&app).lastfm_key;
+    let tags = app.state::<Tags>();
+    let subject = tags.lookup(&app, &artist, &key).await;
+    let mut subject_tags = subject.tags.clone();
+    if let Some(album) = album.as_deref().filter(|a| !a.trim().is_empty()) {
+        let own = tags.lookup_album(&app, &artist, album, &key).await;
+        if own.tags.len() >= 3 {
+            // The album's sound, with the artist's scene and year behind it
+            subject_tags = own.tags;
+            subject_tags.extend(subject.tags.iter().filter(|t| t.kind == TagKind::Scene).cloned());
+        }
+    }
+    let kind = match by.as_str() {
+        "genre" => Some(TagKind::Genre),
+        "style" => Some(TagKind::Style),
+        "scene" => Some(TagKind::Scene),
+        "era" => None,
+        other => return Err(format!("Unknown similarity: {other}")),
+    };
+    let history: HashMap<String, crate::wrapped::HistoryArtist> =
+        app.state::<Wrapped>().artists(&app).into_iter().map(|a| (key_of(&a.name), a)).collect();
+    let me = key_of(&artist);
+    let mut rows: Vec<SimilarRow> = tags
+        .all_artists(&app)
+        .into_iter()
+        .filter(|c| key_of(&c.name) != me)
+        .filter_map(|c| {
+            let (score, why) = match kind {
+                Some(TagKind::Scene) => {
+                    let (scene, mut why) = overlap(&subject_tags, &c.tags, TagKind::Scene);
+                    if scene == 0.0 {
+                        return None;
+                    }
+                    let (genre, shared) = overlap(&subject_tags, &c.tags, TagKind::Genre);
+                    why.extend(shared);
+                    (scene * 0.3 + genre, why)
+                }
+                Some(kind) => {
+                    let (score, why) = overlap(&subject_tags, &c.tags, kind);
+                    if score == 0.0 {
+                        return None;
+                    }
+                    (score, why)
+                }
+                None => {
+                    let (year, mine) = (c.begin_year?, subject.begin_year?);
+                    let gap = year.abs_diff(mine);
+                    if gap > 6 {
+                        return None;
+                    }
+                    let (genre, mut why) = overlap(&subject_tags, &c.tags, TagKind::Genre);
+                    if genre == 0.0 {
+                        return None;
+                    }
+                    why.insert(0, format!("formed {year}"));
+                    (genre + (6 - gap) as f64 / 6.0, why)
+                }
+            };
+            let h = history.get(&key_of(&c.name));
+            Some(SimilarRow {
+                name: c.name.clone(),
+                score,
+                why,
+                performer_id: h.and_then(|h| h.performer_id),
+                album_id: h.and_then(|h| h.album_id),
+                image_key: h.and_then(|h| h.image_key.clone()),
+                plays: h.map(|h| h.plays).unwrap_or(0),
+            })
+        })
+        .collect();
+    rows.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then(b.plays.cmp(&a.plays)));
+    rows.truncate(limit.unwrap_or(30));
+    Ok(rows)
 }
 
 #[cfg(test)]

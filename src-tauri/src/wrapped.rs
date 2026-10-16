@@ -371,6 +371,53 @@ pub fn wrapped_history_top(app: AppHandle, what: String, days: Option<u32>, limi
     rows
 }
 
+/// An artist as the history copy knows it: plays, the Core's id, and an
+/// album cover to stand in for a photo (see `Wrapped::artists`).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryArtist {
+    pub name: String,
+    pub plays: u32,
+    pub performer_id: Option<u64>,
+    pub album_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub last_played: i64,
+}
+
+impl Wrapped {
+    /// Every artist in the copy, most played first (listens of at least
+    /// half a track).
+    pub fn artists(&self, app: &AppHandle) -> Vec<HistoryArtist> {
+        self.ensure_loaded(app);
+        let store = self.store.lock().unwrap();
+        let mut rows: HashMap<String, HistoryArtist> = HashMap::new();
+        for p in &store.plays {
+            if p.artist.is_empty() || !counts(p) {
+                continue;
+            }
+            let row = rows.entry(p.artist.to_lowercase()).or_insert_with(|| HistoryArtist {
+                name: p.artist.clone(),
+                plays: 0,
+                performer_id: p.performer_id,
+                album_id: p.album_id,
+                image_key: p.image_key.clone(),
+                last_played: p.played_at,
+            });
+            row.plays += 1;
+            if row.performer_id.is_none() {
+                row.performer_id = p.performer_id;
+            }
+            if row.image_key.is_none() {
+                row.image_key = p.image_key.clone();
+                row.album_id = p.album_id;
+            }
+        }
+        let mut rows: Vec<HistoryArtist> = rows.into_values().collect();
+        rows.sort_by(|a, b| b.plays.cmp(&a.plays).then(b.last_played.cmp(&a.last_played)));
+        rows
+    }
+}
+
 /// Whether a play counts as a listen: at least half the track.
 pub fn counts(p: &Play) -> bool {
     match (p.seconds_played, p.length_seconds) {

@@ -2500,7 +2500,8 @@ html.invert-colors {
   margin-top: 6px;
 }
 
-.wrapped-genres:empty {
+.wrapped-genres:empty,
+.wrapped-genres[hidden] {
   display: none;
 }
 
@@ -2666,6 +2667,63 @@ body > .wrapped-toast {
   font-size: 13px;
 }
 
+.wrapped-link-text {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.wrapped-link-text:hover {
+  text-decoration: underline;
+}
+
+/* A setting that still needs filling in (no Last.fm key): the slow glow
+   Toasted's Core card has while no Core is paired, on the block and on
+   its label */
+.wrapped-setting.attention {
+  padding: 12px 14px;
+  margin-left: -14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  animation: wrapped-attention 2.6s ease-in-out infinite;
+}
+
+.wrapped-setting.attention .wrapped-setting-label {
+  animation: wrapped-attention-text 2.6s ease-in-out infinite;
+}
+
+@keyframes wrapped-attention {
+  0%,
+  100% {
+    border-color: var(--border);
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    border-color: var(--accent);
+    box-shadow:
+      0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent),
+      0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
+  }
+}
+
+@keyframes wrapped-attention-text {
+  0%,
+  100% {
+    text-shadow: 0 0 0 transparent;
+  }
+  50% {
+    color: var(--accent);
+    text-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wrapped-setting.attention,
+  .wrapped-setting.attention .wrapped-setting-label {
+    animation: none;
+    border-color: var(--accent);
+  }
+}
+
 /* The History page's views */
 .wrapped-tabs {
   display: flex;
@@ -2709,6 +2767,35 @@ body > .wrapped-toast {
 
 .wrapped-track-length {
   white-space: nowrap;
+}
+
+/* The "Similar by" block: its heading and pills on one line */
+.wrapped-similar-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.wrapped-similar-head .wrapped-section {
+  margin: 22px 0 0;
+}
+
+.wrapped-similar-head .wrapped-tabs {
+  margin: 18px 0 0;
+}
+
+.wrapped-similar > div:last-child {
+  margin-top: 12px;
+}
+
+.wrapped-note.small {
+  font-size: 11.5px;
+  margin-top: 10px;
+}
+
+.wrapped-setting-text.inline {
+  margin-bottom: 0;
 }
 
 /* Roon's picks under an album's tracks or an artist's albums */

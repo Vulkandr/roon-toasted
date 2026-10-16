@@ -2948,6 +2948,9 @@ const WRAPPED_PAGES = {
     wrappedHeading(card.title, card.artist);
     wrappedBody.replaceChildren(albumHeader(card));
     wrappedFacts("album", card, ticket);
+    // (The first of several credited artists)
+    const mainArtist = (card.artist || "").split(/ \/ |, /)[0];
+    if (mainArtist) wrappedOutsideTags(wrappedBody.querySelector(".wrapped-genres.outside"), mainArtist, ticket, card.title);
     const list = document.createElement("div");
     list.className = "wrapped-tracks";
     list.append(wrappedNote("Loading tracks..."));
@@ -3003,6 +3006,7 @@ const WRAPPED_PAGES = {
     wrappedHeading(card.name, card.albumCount ? `${card.albumCount} album${card.albumCount === 1 ? "" : "s"}` : "");
     wrappedBody.replaceChildren(artistHeader(card));
     wrappedFacts("artist", card, ticket);
+    wrappedOutsideTags(wrappedBody.querySelector(".wrapped-genres.outside"), card.name, ticket);
     const holder = document.createElement("div");
     holder.append(wrappedNote("Loading albums..."));
     wrappedBody.append(holder);
@@ -3127,6 +3131,79 @@ function wrappedPicks(holder, title, items, onClick) {
   return true;
 }
 
+// The "Similar by" row: Roon's own picks, or artists that share this one's
+// genre, style or scene tags, or its era, among the artists you've played
+// (tags.rs). The default pill is a Wrapped setting.
+async function wrappedSimilarBlock(holder, subject, roonRows, ticket) {
+  wrappedSettings ||= await invoke("wrapped_settings_get").catch(() => ({ similarBy: "roon" }));
+  if (ticket !== wrappedTicket) return;
+  const block = document.createElement("div");
+  block.className = "wrapped-similar";
+  const head = document.createElement("div");
+  head.className = "wrapped-similar-head";
+  const title = wrappedSection("Similar artists");
+  const pills = document.createElement("div");
+  pills.className = "wrapped-tabs small";
+  const body = document.createElement("div");
+  head.append(title, pills);
+  block.append(head, body);
+  holder.append(block);
+  let current = wrappedSettings.similarBy || "roon";
+  const show = async () => {
+    for (const pill of pills.children) pill.classList.toggle("selected", pill.dataset.by === current);
+    body.replaceChildren();
+    if (current === "roon") {
+      if (roonRows.length) body.append(wrappedGrid(roonRows.map(artistItem), openArtist));
+      else body.append(wrappedNote("Roon has no similar artists for this one."));
+      return;
+    }
+    const by = current;
+    body.append(wrappedNote("Comparing tags..."));
+    let rows;
+    let status;
+    try {
+      [rows, status] = await Promise.all([
+        invoke("wrapped_similar", { artist: subject.artist, album: subject.album || null, by, limit: 30 }),
+        invoke("wrapped_tags_status").catch(() => null),
+      ]);
+    } catch (err) {
+      if (ticket === wrappedTicket) body.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+      return;
+    }
+    if (ticket !== wrappedTicket || current !== by) return;
+    body.replaceChildren();
+    if (rows.length) {
+      body.append(
+        wrappedGrid(
+          rows.map((r) => ({ row: r, title: r.name, sub: r.why.slice(0, 3).join(" · "), imageKey: r.imageKey, round: true })),
+          (item) => openFromHistory("artist", item.row),
+        ),
+      );
+    } else {
+      body.append(wrappedNote(`No tagged artist shares this one's ${by === "era" ? "era and genre" : by} tags yet.`));
+    }
+    if (status && status.tagged < status.artists) {
+      const note = wrappedNote(
+        `${status.tagged.toLocaleString()} of the ${status.artists.toLocaleString()} artists you've played are tagged${status.filling ? " (tagging now)" : "; tag the rest in Wrapped's settings"}.`,
+      );
+      note.classList.add("small");
+      body.append(note);
+    }
+  };
+  for (const [by, label] of SIMILAR_BY) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.by = by;
+    pill.textContent = label;
+    pill.addEventListener("click", () => {
+      current = by;
+      show();
+    });
+    pills.append(pill);
+  }
+  await show();
+}
+
 async function wrappedAlbumExtras(holder, card, ticket) {
   holder.append(wrappedNote("Looking for similar albums..."));
   let x;
@@ -3138,13 +3215,11 @@ async function wrappedAlbumExtras(holder, card, ticket) {
   }
   if (ticket !== wrappedTicket) return;
   holder.replaceChildren();
-  const similarTitle = x.similarity ? `Similar albums (${x.similarity.toLowerCase()})` : "Similar albums";
-  const any = [
-    wrappedPicks(holder, similarTitle, x.similar.map(albumItem), openAlbum),
-    wrappedPicks(holder, "Recommended from this album", x.recommended.map(albumItem), openAlbum),
-    wrappedPicks(holder, "Similar artists", x.similarArtists.map(artistItem), openArtist),
-  ].some(Boolean);
-  if (!any) holder.append(wrappedNote("Roon has no similar albums or artists for this one."));
+  const mainArtist = (card.artist || "").split(/ \/ |, /)[0];
+  await wrappedSimilarBlock(holder, { artist: mainArtist, album: card.title }, x.similarArtists, ticket);
+  if (ticket !== wrappedTicket) return;
+  wrappedPicks(holder, "Similar albums", x.similar.map(albumItem), openAlbum);
+  wrappedPicks(holder, "Recommended from this album", x.recommended.map(albumItem), openAlbum);
 }
 
 async function wrappedArtistExtras(holder, card, ticket) {
@@ -3158,12 +3233,10 @@ async function wrappedArtistExtras(holder, card, ticket) {
   }
   if (ticket !== wrappedTicket) return;
   holder.replaceChildren();
-  const any = [
-    wrappedPicks(holder, "Similar artists", x.similar.map(artistItem), openArtist),
-    wrappedPicks(holder, "Recommended albums", x.recommended.map(albumItem), openAlbum),
-    wrappedPicks(holder, "Latest releases", x.latest.map(albumItem), openAlbum),
-  ].some(Boolean);
-  if (!any) holder.append(wrappedNote("Roon has no similar artists or recommendations for this one."));
+  await wrappedSimilarBlock(holder, { artist: card.name }, x.similar, ticket);
+  if (ticket !== wrappedTicket) return;
+  wrappedPicks(holder, "Recommended albums", x.recommended.map(albumItem), openAlbum);
+  wrappedPicks(holder, "Latest releases", x.latest.map(albumItem), openAlbum);
 }
 
 async function wrappedHomeExtras(holder, ticket) {
@@ -3403,16 +3476,35 @@ WRAPPED_PAGES.settings = async function () {
     h.textContent = label;
     const p = document.createElement("div");
     p.className = "wrapped-setting-text";
-    p.textContent = text;
+    if (typeof text === "string") p.textContent = text;
+    else p.append(...text);
     block.append(h, p);
     wrappedBody.append(block);
     return block;
   };
+  // A link that opens in the browser, not in this window
+  const link = (href, label) => {
+    const a = document.createElement("a");
+    a.href = href;
+    a.className = "wrapped-link-text";
+    a.textContent = label;
+    a.addEventListener("click", (event) => {
+      event.preventDefault();
+      invoke("plugin:opener|open_url", { url: href });
+    });
+    return a;
+  };
 
-  const key = field(
-    "Last.fm API key",
-    'Tags like "melodic death metal" and "viking metal" come from Last.fm\'s listeners; Roon\'s own genres stop at "Death Metal". A key is free: last.fm/api/account/create (any name and description will do). Without one, only MusicBrainz is asked.',
-  );
+  const key = field("Last.fm API key", [
+    'Tags like "melodic death metal" and "viking metal" come from Last.fm\'s listeners; Roon\'s own genres stop at "Death Metal". A key is free: ',
+    link("https://www.last.fm/api/account/create", "create one here"),
+    " (any name and description will do, ignore the rest; ",
+    link("https://www.last.fm/api/accounts", "your existing keys"),
+    "). Without one, only MusicBrainz is asked.",
+  ]);
+  // No key yet: the same slow glow as Toasted's Core card without a Core
+  const attention = () => key.classList.toggle("attention", !wrappedSettings.lastfmKey);
+  attention();
   const row = document.createElement("div");
   row.className = "wrapped-setting-row";
   const input = document.createElement("input");
@@ -3431,7 +3523,10 @@ WRAPPED_PAGES.settings = async function () {
   const saveKey = document.createElement("button");
   saveKey.className = "wrapped-button";
   saveKey.textContent = "Save";
-  saveKey.addEventListener("click", () => save({ lastfmKey: input.value.trim() }));
+  saveKey.addEventListener("click", async () => {
+    await save({ lastfmKey: input.value.trim() });
+    attention();
+  });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") saveKey.click();
   });
@@ -3464,6 +3559,33 @@ WRAPPED_PAGES.settings = async function () {
     "Wrapped's records",
     `${copied}. ${n(tagCount)} artist${tagCount === 1 ? "" : "s"} in the tag cache. Both live in the app's data folder.`,
   );
+  const tagging = field(
+    "Tags for the artists you've played",
+    "The Similar by Genre, Style, Scene and Era rows compare tags, so the artists in your history need tagging first: one lookup a second, most played first, in the background. Stop and start it as you like; it carries on where it left off.",
+  );
+  const tagRow = document.createElement("div");
+  tagRow.className = "wrapped-setting-row";
+  const tagButton = document.createElement("button");
+  tagButton.className = "wrapped-button";
+  const tagText = document.createElement("span");
+  tagText.className = "wrapped-setting-text inline";
+  const showTagging = (st) => {
+    tagButton.textContent = st.filling ? "Stop" : st.tagged >= st.artists ? "All tagged" : "Tag my artists";
+    tagButton.disabled = !st.filling && st.tagged >= st.artists;
+    tagText.textContent = `${st.tagged.toLocaleString()} of ${st.artists.toLocaleString()} tagged`;
+  };
+  invoke("wrapped_tags_status").then(showTagging).catch(() => {});
+  tagButton.addEventListener("click", async () => {
+    const st = await invoke("wrapped_tags_status");
+    showTagging(await invoke("wrapped_tags_fill", { stop: st.filling }));
+  });
+  const unlistenTags = await listen("wrapped-tags", (event) => {
+    if (ticket !== wrappedTicket) return unlistenTags();
+    invoke("wrapped_tags_status").then(showTagging).catch(() => {});
+  });
+  tagRow.append(tagButton, tagText);
+  tagging.append(tagRow);
+
   const actions = document.createElement("div");
   actions.className = "wrapped-setting-row";
   const reread = document.createElement("button");
@@ -3596,7 +3718,9 @@ function albumHeader(card) {
   facts.className = "wrapped-facts";
   facts.textContent = card.year ? String(card.year) : "";
   const genres = document.createElement("div");
-  genres.className = "wrapped-genres";
+  genres.className = "wrapped-genres roon";
+  const outside = document.createElement("div");
+  outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
   const play = document.createElement("button");
@@ -3626,7 +3750,7 @@ function albumHeader(card) {
       }
     }, "wrapped-save"),
   );
-  info.append(title, artist, facts, genres, actions);
+  info.append(title, artist, facts, genres, outside, actions);
   head.append(info);
   return head;
 }
@@ -3643,7 +3767,7 @@ function artistHeader(card) {
   const facts = document.createElement("div");
   facts.className = "wrapped-facts";
   const genres = document.createElement("div");
-  genres.className = "wrapped-genres";
+  genres.className = "wrapped-genres roon";
   const outside = document.createElement("div");
   outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
@@ -3668,16 +3792,20 @@ function wrappedGenreChips(holder, genres) {
 
 // The outside world's tags for an artist (Last.fm, MusicBrainz; tags.rs),
 // under Roon's: genre, style and scene, each its own color
-async function wrappedOutsideTags(holder, name, ticket) {
+async function wrappedOutsideTags(holder, name, ticket, album) {
   let tags;
   try {
-    tags = await invoke("wrapped_artist_tags", { name });
+    tags = album ? await invoke("wrapped_album_tags", { artist: name, album }) : await invoke("wrapped_artist_tags", { name });
   } catch (err) {
     console.warn("tags", err);
     return;
   }
   if (ticket !== wrappedTicket) return;
   holder.replaceChildren();
+  // Roon's own genres ("Pop/Rock, Heavy Metal") only when the outside has
+  // nothing better
+  const roon = wrappedBody.querySelector(".wrapped-genres.roon");
+  if (roon) roon.hidden = tags.tags.length > 0;
   if (!tags.tags.length) {
     const note = document.createElement("span");
     note.className = "wrapped-genre-note";
@@ -3711,13 +3839,11 @@ async function wrappedFacts(kind, card, ticket) {
     return;
   }
   if (ticket !== wrappedTicket) return;
-  const genres = wrappedBody.querySelector(".wrapped-genres");
+  const genres = wrappedBody.querySelector(".wrapped-genres.roon");
   if (genres) wrappedGenreChips(genres, facts.genres);
   if (kind === "artist") {
-    const outside = wrappedBody.querySelector(".wrapped-genres.outside");
-    if (outside) wrappedOutsideTags(outside, card.name, ticket);
-    // (The birthplace usually ends with the country already)
-    const where = [facts.from, facts.country].filter(Boolean).filter((v, i, all) => i === 0 || !all[0].endsWith(v));
+    // (The birthplace names the country already, in its own way)
+    const where = [facts.from || facts.country].filter(Boolean);
     const line = [where.length ? where.join(", ") : null, facts.activeSince ? `since ${facts.activeSince}` : null]
       .filter(Boolean)
       .join(" · ");
