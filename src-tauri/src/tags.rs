@@ -518,6 +518,10 @@ fn classify(raw: &str) -> Option<(String, TagKind)> {
     if STYLE_TAGS.contains(&name.as_str()) {
         return Some((name, TagKind::Style));
     }
+    // "viking lyrics", "war themes": about the words, not the sound
+    if name.ends_with(" lyrics") || name.ends_with(" themes") {
+        return Some((name, TagKind::Style));
+    }
     for suffix in [" metal", " rock", " punk"] {
         if let Some(theme) = name.strip_suffix(suffix) {
             if STYLE_THEMES.contains(&theme) {
@@ -526,6 +530,59 @@ fn classify(raw: &str) -> Option<(String, TagKind)> {
         }
     }
     Some((name, TagKind::Genre))
+}
+
+/// Words in a genre tag that say how it sounds or feels rather than which
+/// family it belongs to: "atmospheric black metal" is atmospheric, "melodic
+/// death metal" melodic. Style compares these too, since few artists carry
+/// theme tags of their own (about one in six in a big library).
+const QUALIFIERS: &[&str] = &[
+    "atmospheric", "melodic", "depressive", "gothic", "symphonic", "progressive", "epic", "folk", "pagan", "viking",
+    "dark", "melancholic", "technical", "brutal", "blackened", "funeral", "psychedelic", "ambient", "industrial",
+    "avant-garde", "experimental", "raw", "post", "cinematic", "orchestral", "acoustic", "instrumental", "occult",
+    "dreamy", "shoegaze", "space", "cosmic", "medieval", "celtic", "nordic", "oriental", "tribal", "suicidal", "sludgy",
+    "groovy", "chaotic", "dissonant", "mathy", "neoclassical", "operatic", "theatrical", "horror",
+];
+
+/// The theme word of a style tag ("viking metal", "viking lyrics" and
+/// "viking" are all "viking"), so they match each other.
+fn theme_word(name: &str) -> &str {
+    for suffix in [" metal", " rock", " punk", " lyrics", " themes"] {
+        if let Some(theme) = name.strip_suffix(suffix) {
+            if STYLE_THEMES.contains(&theme) || name.ends_with(" lyrics") || name.ends_with(" themes") {
+                return theme;
+            }
+        }
+    }
+    name
+}
+
+/// What Style compares for an artist or album: its style tags by theme word,
+/// any tag about lyrics or themes, and the qualifying words of its genre
+/// tags at a little over half their weight. One entry per word, the
+/// strongest kept.
+fn style_features(tags: &[Tag]) -> Vec<Tag> {
+    let mut out: Vec<Tag> = Vec::new();
+    let mut add = |name: &str, weight: u32| {
+        if let Some(have) = out.iter_mut().find(|t| t.name == name) {
+            have.weight = have.weight.max(weight);
+        } else {
+            out.push(Tag { name: name.to_string(), weight, kind: TagKind::Style });
+        }
+    };
+    for t in tags {
+        let lyrics = t.name.ends_with(" lyrics") || t.name.ends_with(" themes");
+        if t.kind == TagKind::Style || lyrics {
+            add(theme_word(&t.name), t.weight);
+        } else if t.kind == TagKind::Genre {
+            for word in t.name.split([' ', '-']) {
+                if QUALIFIERS.contains(&word) {
+                    add(word, t.weight * 6 / 10);
+                }
+            }
+        }
+    }
+    out
 }
 
 /// A country's name for its ISO code, for the scene tag.
@@ -739,12 +796,21 @@ pub struct SimilarAnswer {
     pub key: String,
     pub rows: Vec<SimilarRow>,
     pub pending: usize,
+    /// The subject itself has nothing to compare by (no style words, no
+    /// scene, no known start year).
+    pub subject_empty: bool,
 }
 
 /// Everything a ranking needs, so it can be redone as tags arrive.
 struct SimilarQuery {
     me: String,
+    /// Genre and Style together (the radio's seeds): artists that share
+    /// both, by the two scores added; genre alone for a subject without
+    /// style words.
+    blend: bool,
     subject_tags: Vec<Tag>,
+    /// The subject's style words (see `style_features`).
+    subject_style: Vec<Tag>,
     subject_year: Option<u32>,
     kind: Option<TagKind>,
     discover: bool,
@@ -763,6 +829,23 @@ fn rank_similar(app: &AppHandle, q: &SimilarQuery) -> Vec<SimilarRow> {
         .filter(|c| in_library.contains(&key_of(&c.name)) != q.discover)
         .filter_map(|c| {
             let (score, why) = match q.kind {
+                _ if q.blend => {
+                    let (genre, mut why) = overlap(&q.subject_tags, &c.tags, TagKind::Genre);
+                    if genre == 0.0 {
+                        return None;
+                    }
+                    if q.subject_style.is_empty() {
+                        (genre, why)
+                    } else {
+                        let (style, words) = overlap(&q.subject_style, &style_features(&c.tags), TagKind::Style);
+                        if style == 0.0 {
+                            return None;
+                        }
+                        let mut both = words;
+                        both.append(&mut why);
+                        (genre + style, both)
+                    }
+                }
                 Some(TagKind::Scene) => {
                     let (scene, mut why) = overlap(&q.subject_tags, &c.tags, TagKind::Scene);
                     if scene == 0.0 {
@@ -771,6 +854,17 @@ fn rank_similar(app: &AppHandle, q: &SimilarQuery) -> Vec<SimilarRow> {
                     let (genre, shared) = overlap(&q.subject_tags, &c.tags, TagKind::Genre);
                     why.extend(shared);
                     (scene * 0.3 + genre, why)
+                }
+                Some(TagKind::Style) => {
+                    // Shared style words first; how much of the genre they
+                    // share orders the many that share one word ("melodic")
+                    let (style, mut why) = overlap(&q.subject_style, &style_features(&c.tags), TagKind::Style);
+                    if style == 0.0 {
+                        return None;
+                    }
+                    let (genre, shared) = overlap(&q.subject_tags, &c.tags, TagKind::Genre);
+                    why.extend(shared);
+                    (style + genre * 0.5, why)
                 }
                 Some(kind) => {
                     let (score, why) = overlap(&q.subject_tags, &c.tags, kind);
@@ -841,13 +935,23 @@ pub async fn wrapped_similar(
     if let Some(album) = album.as_deref().filter(|a| !a.trim().is_empty()) {
         let own = tags.lookup_album(&app, &artist, album, &key).await;
         if own.tags.len() >= 3 {
-            // The album's sound, with the artist's scene and year behind it
+            // The album's sound; for each kind of tag the album has none of
+            // (Last.fm's album tags are mostly genres), the artist's
             subject_tags = own.tags;
-            subject_tags.extend(subject.tags.iter().filter(|t| t.kind == TagKind::Scene).cloned());
+            for kind in [TagKind::Genre, TagKind::Style, TagKind::Scene] {
+                if !subject_tags.iter().any(|t| t.kind == kind) {
+                    subject_tags.extend(subject.tags.iter().filter(|t| t.kind == kind).cloned());
+                }
+            }
+            // The artist's themes go with every album
+            let artist_style: Vec<Tag> = subject.tags.iter().filter(|t| t.kind == TagKind::Style && !subject_tags.iter().any(|o| o.name == t.name)).cloned().collect();
+            subject_tags.extend(artist_style);
         }
     }
+    let subject_style = style_features(&subject_tags);
+    let blend = by == "blend";
     let kind = match by.as_str() {
-        "genre" => Some(TagKind::Genre),
+        "genre" | "blend" => Some(TagKind::Genre),
         "style" => Some(TagKind::Style),
         "scene" => Some(TagKind::Scene),
         "era" => None,
@@ -871,7 +975,23 @@ pub async fn wrapped_similar(
             }
         }
     }
-    let query = SimilarQuery { me, subject_tags, subject_year: subject.begin_year, kind, discover, matches, limit: limit.unwrap_or(30) };
+    // Whether the subject has anything to compare by this measure at all
+    let subject_empty = match kind {
+        Some(TagKind::Style) => subject_style.is_empty(),
+        Some(k) => !subject_tags.iter().any(|t| t.kind == k),
+        None => subject.begin_year.is_none(),
+    };
+    let query = SimilarQuery {
+        me,
+        blend,
+        subject_tags,
+        subject_style,
+        subject_year: subject.begin_year,
+        kind,
+        discover,
+        matches,
+        limit: limit.unwrap_or(30),
+    };
     let answer_key = format!("{}|{}|{}|{}", key_of(&artist), album.as_deref().map(key_of).unwrap_or_default(), by, if discover { "discover" } else { "library" });
     let rows = rank_similar(&app, &query);
     let still = pending.len();
@@ -887,17 +1007,35 @@ pub async fn wrapped_similar(
                 let left = total - i - 1;
                 if left == 0 || (i + 1) % 5 == 0 {
                     let rows = rank_similar(&app2, &query);
-                    let _ = app2.emit("wrapped-similar", SimilarAnswer { key: answer_key2.clone(), rows, pending: left });
+                    let _ = app2.emit("wrapped-similar", SimilarAnswer { key: answer_key2.clone(), rows, pending: left, subject_empty });
                 }
             }
         });
     }
-    Ok(SimilarAnswer { key: answer_key, rows, pending: still })
+    Ok(SimilarAnswer { key: answer_key, rows, pending: still, subject_empty })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn style_words() {
+        let t = |name: &str, weight: u32, kind: TagKind| Tag { name: name.into(), weight, kind };
+        let amon = [
+            t("melodic death metal", 100, TagKind::Genre),
+            t("viking metal", 70, TagKind::Style),
+            t("viking lyrics", 50, TagKind::Genre),
+            t("viking", 50, TagKind::Style),
+        ];
+        let f = style_features(&amon);
+        assert!(f.iter().any(|x| x.name == "viking" && x.weight == 70));
+        assert!(f.iter().any(|x| x.name == "melodic" && x.weight == 60));
+        let ash = [t("atmospheric black metal", 98, TagKind::Genre), t("post-black metal", 20, TagKind::Genre)];
+        let f = style_features(&ash);
+        assert!(f.iter().any(|x| x.name == "atmospheric"));
+        assert!(f.iter().any(|x| x.name == "post"));
+    }
 
     #[test]
     fn sorts_tags() {
@@ -908,6 +1046,7 @@ mod tests {
         assert_eq!(classify("epic"), Some(("epic".into(), TagKind::Style)));
         assert_eq!(classify("atmospheric black metal"), Some(("atmospheric black metal".into(), TagKind::Genre)));
         assert_eq!(classify("war metal"), Some(("war metal".into(), TagKind::Style)));
+        assert_eq!(classify("viking lyrics"), Some(("viking lyrics".into(), TagKind::Style)));
         assert_eq!(classify("seen live"), None);
         assert_eq!(classify("2008"), None);
     }

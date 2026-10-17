@@ -126,6 +126,8 @@ pub enum SimilarBy {
     Roon,
     Genre,
     Style,
+    /// Genre and Style together.
+    Blend,
     Scene,
     Era,
 }

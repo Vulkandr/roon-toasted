@@ -55,9 +55,10 @@ pub struct RoonNav {
     /// on (a sidebar click on the current page), so the Wrapper can react
     /// to the click itself.
     pub nav_count: u64,
-    /// The Core image keys Roon fetched in the seconds after the last
-    /// navigation (an artist page's own pictures among them; the log names
-    /// no performer, but a library artist can be told by its picture).
+    /// The artist banners Roon fetched in the seconds after the last
+    /// navigation (see `image_key_of`; the log names no performer, but an
+    /// artist can be told by its banner). Empty when Roon had the banner
+    /// cached and fetched nothing.
     pub image_keys: Vec<String>,
 }
 
@@ -84,11 +85,21 @@ fn log_secs(line: &str) -> Option<u32> {
 }
 const IMAGE_KEYS_MAX: usize = 16;
 
-/// The key of a Core image Roon fetched ("GET to http://core:9330/image/<key>.<size>.jpg").
+/// The key of an artist page's banner, the wide picture at its top ("GET to
+/// http://core:9330/image/<key>.16by7_1024.jpg"). Of the pictures Roon
+/// fetches for an artist page only the banner is always that artist's own:
+/// similar artists come as 1by1_128, covers as plain sizes, and fetching one
+/// of those first had Wrapped open a similar artist (October Noir's page
+/// gave The Vision Bleak). The banner's key is the artist's image key, the
+/// one the library copy keeps.
 fn image_key_of(line: &str) -> Option<String> {
+    if !line.contains("[easyhttp]") {
+        return None;
+    }
     let rest = line.split("/image/").nth(1)?;
     let key: String = rest.chars().take_while(|c| c.is_ascii_alphanumeric()).collect();
-    (!key.is_empty() && line.contains("[easyhttp]")).then_some(key)
+    let banner = rest.get(key.len()..).is_some_and(|size| size.starts_with(".16by7_"));
+    (!key.is_empty() && banner).then_some(key)
 }
 
 /// One page in the copy of Roon's history.
@@ -360,7 +371,17 @@ impl LogReader {
 
 #[cfg(test)]
 mod tests {
-    use super::{log_secs, parse, Entry, History, Step};
+    use super::{image_key_of, log_secs, parse, Entry, History, Step};
+
+    #[test]
+    fn banners_only() {
+        let line = |file: &str| format!("10/16 20:19:34 Debug: [easyhttp] [230] GET to http://192.168.0.68:9330/image/{file} returned after 96 ms, status code: 404");
+        assert_eq!(image_key_of(&line("kvdfaaaa.16by7_1024.jpg")), Some("kvdfaaaa".into()));
+        assert_eq!(image_key_of(&line("rhraaaaa.1by1_128.jpg")), None);
+        assert_eq!(image_key_of(&line("jvdfaaaa.1by1_256.jpg")), None);
+        assert_eq!(image_key_of(&line("ecoiaaaa.256.jpg")), None);
+        assert_eq!(image_key_of("10/16 20:19:34 Trace: [broo/images] caching http://x:9330/image/kvdfaaaa.16by7_1024.jpg"), None);
+    }
 
     #[test]
     fn parses_pages() {

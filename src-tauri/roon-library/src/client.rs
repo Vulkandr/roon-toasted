@@ -229,6 +229,11 @@ pub struct ArtistAlbum {
     pub album_id: Option<u64>,
     /// The release year, when Roon knows it.
     pub year: Option<u32>,
+    /// The release date as "YYYY-MM-DD" (month and day 00 when Roon only
+    /// knows the year), for sorting and the cards.
+    pub released: Option<String>,
+    /// Roon's popularity score for the album, when the Core sends one.
+    pub popularity: Option<f64>,
     /// The cover's image key for the Core's image service, when there is one.
     pub image_key: Option<String>,
 }
@@ -374,8 +379,10 @@ pub struct TrackHit {
     pub favorite: bool,
 }
 
-/// What to start Roon Radio from (session handles from the pages), and
-/// whether to stay inside the library (see `play_radio`).
+/// What to start Roon Radio from (session handles from the pages), whether
+/// to stay inside the library, and whether to play only the seeds' own music
+/// (`limit_to_seed`: with artists as seeds, only those artists) (see
+/// `play_radio`).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RadioSeeds {
@@ -385,6 +392,7 @@ pub struct RadioSeeds {
     /// Genre names, as Roon spells them.
     pub genres: Vec<String>,
     pub library_only: bool,
+    pub limit_to_seed: bool,
 }
 
 /// One of Roon's playlists (see `playlists`).
@@ -1557,9 +1565,35 @@ impl LibraryClient {
     /// likeness), albums recommended from this one, and similar artists.
     pub async fn album_extras(&self, handle: &str) -> Result<AlbumExtras, LibraryError> {
         let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad album handle {handle}")))?;
-        let similar = self.one_box(SIG_SIMILAR_ALBUMS, "GetOneBoxSimilarAlbums", Subject::Oid(oid)).await?;
-        let recommended = self.one_box(SIG_ALBUM_RECOMMENDED, "GetOneBoxAlbumRecommendedForYou", Subject::Oid(oid)).await?;
-        let artists = self.one_box(SIG_ALBUM_SIMILAR_PERFORMERS, "GetOneBoxAlbumSimilarPerformers", Subject::Oid(oid)).await?;
+        let first = self.album_extras_of(oid).await;
+        if !first.similar.is_empty() || !first.recommended.is_empty() || !first.similar_artists.is_empty() {
+            return Ok(first);
+        }
+        // Nothing for this one: a library album that holds part of a
+        // release (a single track added, say) has no picks of its own, but
+        // its full streaming version does
+        let Some(version) = self.full_version_of(oid).await else {
+            return Ok(first);
+        };
+        Ok(self.album_extras_of(version).await)
+    }
+
+    /// The picks for one album object; a call the Core turns down
+    /// (NotFound for an album it has no picks for) is an empty list, not a
+    /// failure of the whole.
+    async fn album_extras_of(&self, oid: u64) -> AlbumExtras {
+        let quiet = |r: Result<Value, LibraryError>, what: &str| match r {
+            Ok(v) => v,
+            Err(e) => {
+                println!("[library] {what} for album {oid}: {e}");
+                Value::Null
+            }
+        };
+        let similar = quiet(self.one_box(SIG_SIMILAR_ALBUMS, "GetOneBoxSimilarAlbums", Subject::Oid(oid)).await, "similar albums");
+        let recommended =
+            quiet(self.one_box(SIG_ALBUM_RECOMMENDED, "GetOneBoxAlbumRecommendedForYou", Subject::Oid(oid)).await, "recommended albums");
+        let artists =
+            quiet(self.one_box(SIG_ALBUM_SIMILAR_PERFORMERS, "GetOneBoxAlbumSimilarPerformers", Subject::Oid(oid)).await, "similar artists");
         let (similar_list, similarity) = match &similar {
             Value::Inline(s) => (
                 s.field("Albums").cloned().unwrap_or(Value::Null),
@@ -1570,12 +1604,25 @@ impl LibraryClient {
         self.wait_for_lists(&[similar_list.clone(), recommended.clone()], Some("Album")).await;
         self.wait_for_lists(std::slice::from_ref(&artists), Some("Performer")).await;
         let g = self.inner.graph.lock().unwrap();
-        Ok(AlbumExtras {
+        AlbumExtras {
             similar: self.album_cards(&g, Some(&similar_list), Some(oid)),
             similarity,
             recommended: self.album_cards(&g, Some(&recommended), Some(oid)),
             similar_artists: self.artist_cards(&g, Some(&artists), None),
+        }
+    }
+
+    /// The streaming version of an album with the most tracks (the whole
+    /// release, for a library album that holds part of it), if Roon knows one.
+    async fn full_version_of(&self, album: u64) -> Option<u64> {
+        let library = self.inner.graph.lock().unwrap().first_of_type("Library").map(|o| o.oid)?;
+        let full = self.get_album(library, album).await.ok()??;
+        self.wait_until(Duration::from_secs(3), |g| {
+            g.get(full).is_some_and(|a| a.field("AlternateVersionsReady").and_then(Value::as_bool) == Some(true))
         })
+        .await;
+        let g = self.inner.graph.lock().unwrap();
+        largest_streaming_version(&g, full).map(|(oid, _)| oid).filter(|oid| *oid != album)
     }
 
     /// The artists Roon recommends to this profile (its Home page's
@@ -1934,7 +1981,14 @@ impl LibraryClient {
             fields.push(StructField {
                 name: "bool Sooloos.Broker.Api.SwimParameters::LimitToLibrary",
                 prop_type: PropertyType::Bool,
-                value: yes.into_bytes(),
+                value: yes.as_bytes().to_vec(),
+            });
+        }
+        if seeds.limit_to_seed {
+            fields.push(StructField {
+                name: "bool Sooloos.Broker.Api.SwimParameters::LimitToSeed",
+                prop_type: PropertyType::Bool,
+                value: yes.as_bytes().to_vec(),
             });
         }
         let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.SwimParameters", &fields)?;
@@ -2258,9 +2312,13 @@ impl LibraryClient {
             .await;
             let streaming = {
                 let g = self.inner.graph.lock().unwrap();
-                largest_streaming_version(&g, full_oid)
-                    .filter(|(_, count)| *count as usize > track_oids.len())
-                    .map(|(oid, _)| oid)
+                let largest = largest_streaming_version(&g, full_oid);
+                let ready = g.get(full_oid).and_then(|a| a.field("AlternateVersionsReady")).and_then(Value::as_bool);
+                println!(
+                    "[library] album {album}: {} tracks of its own; versions ready: {ready:?}; largest streaming version: {largest:?}",
+                    track_oids.len()
+                );
+                largest.filter(|(_, count)| *count as usize > track_oids.len()).map(|(oid, _)| oid)
             };
             if let Some(version) = streaming {
                 if let Some(version_full) = self.get_album(library, version).await? {
@@ -2620,6 +2678,8 @@ fn describe_album(g: &ObjectGraph, a: &RoonObject, group: &str, profile: Option<
         playing,
         album_id: a.long_field("AlbumId"),
         year: year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate"))),
+        released: date_of(a.field("OriginalReleaseDate")).or_else(|| date_of(a.field("ReleaseDate"))),
+        popularity: number_of(a.field("Popularity")),
         image_key: image_key(g, a, "Image"),
     }
 }
@@ -2816,6 +2876,29 @@ fn year_of(value: Option<&Value>) -> Option<u32> {
     };
     let year = n >> 16;
     (1000..3000).contains(&year).then_some(year)
+}
+
+/// A release date (year << 16 | month << 8 | day) as "YYYY-MM-DD".
+fn date_of(value: Option<&Value>) -> Option<String> {
+    let n = match value? {
+        Value::Bytes(b) => Reader::new(b).flex_int().ok()?,
+        Value::Int(i) => *i as u32,
+        Value::Long(l) => *l as u32,
+        _ => return None,
+    };
+    let (year, month, day) = (n >> 16, (n >> 8) & 0xff, n & 0xff);
+    ((1000..3000).contains(&year) && month <= 12 && day <= 31).then(|| format!("{year:04}-{month:02}-{day:02}"))
+}
+
+/// Any number the Core sends (popularity comes as a double or an int).
+fn number_of(value: Option<&Value>) -> Option<f64> {
+    match value? {
+        Value::Double(d) => Some(*d),
+        Value::Float(f) => Some(*f as f64),
+        Value::Int(i) => Some(*i as f64),
+        Value::Long(l) => Some(*l as f64),
+        _ => None,
+    }
 }
 
 fn source_name(source: Option<i32>) -> String {

@@ -64,11 +64,11 @@ mod imp {
     use windows::Security::Cryptography::CryptographicBuffer;
 
     /// A line the engine read, with where it sits (real pixels of the crop).
+    #[derive(Clone)]
     struct Line {
         text: String,
         left: f32,
         top: f32,
-        #[allow(dead_code)]
         width: f32,
         height: f32,
     }
@@ -91,21 +91,50 @@ mod imp {
             return None;
         };
         // The title area: right of the sidebar, under the header row, the
-        // upper part of the page, its left half (the artist's picture is
-        // on the right); the limits are Roon's layout at 100%, scaled by
-        // the picture's own size against a 1440-wide window
+        // upper part of the page, its left 60% first (Roon puts an artist's
+        // photo on the right, and lettering in it could pass for a title);
+        // the limits are Roon's layout at 100%, scaled by the picture's own
+        // size against a 1440-wide window
         let scale = (width as f32 / 1440.0).max(0.6);
         let sidebar = crate::skin::sidebar().map(|(w, _)| w).unwrap_or(0).max(0);
         let left = (sidebar as f32 + 30.0 * scale) as i32;
         // (from just under Roon's header row: a page scrolled a little
         // lifts its title toward it)
         let top = (52.0 * scale) as i32;
-        let right = (left as f32 + (width - left) as f32 * 0.6) as i32;
+        let narrow = (left as f32 + (width - left) as f32 * 0.6) as i32;
         let bottom = (height as f32 * 0.5) as i32;
-        if right - left < 100 || bottom - top < 40 {
+        if narrow - left < 100 || bottom - top < 40 {
             return None;
         }
-        let crop = crop(&pixels, width, left, top, right - left, bottom - top);
+        let min_height = 26.0 * scale;
+        let lines = read_area(&pixels, width, left, top, narrow, bottom)?;
+        let (name, title) = match pick_name(lines, min_height) {
+            Some(found) => found,
+            None => {
+                println!("[ocr] title read: None");
+                return None;
+            }
+        };
+        // A title that runs into the crop's right edge is cut off (an artist
+        // without a photo gets a placeholder circle that pushes the name
+        // right): read again out to the page's right edge, keeping only the
+        // lines that start where the title starts
+        if title.left + title.width < (narrow - left) as f32 - 6.0 {
+            println!("[ocr] title read: {name:?}");
+            return Some(name);
+        }
+        let wide = width - (20.0 * scale) as i32;
+        let lines = read_area(&pixels, width, left, top, wide, bottom)?;
+        let aligned: Vec<Line> = lines.into_iter().filter(|l| (l.left - title.left).abs() < title.height * 0.6).collect();
+        let name = pick_name(aligned, min_height).map(|(name, _)| name);
+        println!("[ocr] title read (cut at first, read wider): {name:?}");
+        name
+    }
+
+    /// The lines in the crop of `pixels` from (`left`, `top`) to (`right`,
+    /// `bottom`), logged.
+    fn read_area(pixels: &[u8], width: i32, left: i32, top: i32, right: i32, bottom: i32) -> Option<Vec<Line>> {
+        let crop = crop(pixels, width, left, top, right - left, bottom - top);
         let lines = match recognize(&crop, right - left, bottom - top) {
             Ok(lines) => lines,
             Err(e) => {
@@ -113,11 +142,9 @@ mod imp {
                 return None;
             }
         };
-        let seen: Vec<String> = lines.iter().take(12).map(|l| format!("\"{}\"@{:.0},{:.0} h{:.0}", l.text, l.left, l.top, l.height)).collect();
-        println!("[ocr] title area ({}x{} from {left},{top}, sidebar {sidebar}): {}", right - left, bottom - top, seen.join("  "));
-        let name = pick_name(lines, 26.0 * scale);
-        println!("[ocr] title read: {name:?}");
-        name
+        let seen: Vec<String> = lines.iter().take(12).map(|l| format!("\"{}\"@{:.0},{:.0} w{:.0} h{:.0}", l.text, l.left, l.top, l.width, l.height)).collect();
+        println!("[ocr] title area ({}x{} from {left},{top}): {}", right - left, bottom - top, seen.join("  "));
+        Some(lines)
     }
 
     /// Reads Roon's content area until a line says `wanted` (letters and
@@ -267,12 +294,28 @@ mod imp {
     }
 
     /// The tallest line, with the lines right above or below it in the same
-    /// large type (a wrapped name), in reading order.
+    /// large type (a wrapped name), in reading order; and the tallest line
+    /// itself, for where the title sits.
     /// `min_height`: how tall a page title's letters are at the least
     /// (real pixels); Roon's titles are large, so smaller text isn't one.
-    fn pick_name(mut lines: Vec<Line>, min_height: f32) -> Option<String> {
+    fn pick_name(mut lines: Vec<Line>, min_height: f32) -> Option<(String, Line)> {
         // A line cut by the top of the crop isn't read whole
         lines.retain(|l| l.top >= 1.0);
+        // A placeholder picture's initials ("ON" in a circle for October
+        // Noir, who has no photo): a few capitals with large text to their
+        // right on the same row
+        let same_row = |a: &Line, b: &Line| a.top < b.top + b.height && b.top < a.top + a.height;
+        let initials: Vec<bool> = lines
+            .iter()
+            .map(|l| {
+                let text = l.text.trim();
+                (1..=3).contains(&text.chars().count())
+                    && text.chars().all(|c| c.is_alphabetic() && c.is_uppercase())
+                    && lines.iter().any(|o| o.left > l.left + l.width && same_row(l, o) && o.height >= l.height * 0.6)
+            })
+            .collect();
+        let mut keep = initials.iter().map(|i| !i);
+        lines.retain(|_| keep.next().unwrap_or(true));
         if lines.is_empty() {
             return None;
         }
@@ -294,11 +337,14 @@ mod imp {
         while last + 1 < lines.len() && large(&lines[last + 1]) && adjacent(&lines[last], &lines[last + 1]) {
             last += 1;
         }
-        // It stands out: clearly taller than the page's other text
+        // It stands out: clearly taller than the page's other text (text
+        // left of it on its rows, lettering on a cover or picture, aside)
+        let (title_top, title_bottom) = (lines[first].top, lines[last].top + lines[last].height);
+        let beside = |l: &Line| l.left + l.width <= lines[anchor].left && l.top < title_bottom && title_top < l.top + l.height;
         let body = lines
             .iter()
             .enumerate()
-            .filter(|(i, _)| *i < first || *i > last)
+            .filter(|(i, l)| (*i < first || *i > last) && !beside(l))
             .map(|(_, l)| l.height)
             .fold(0f32, f32::max);
         if body > 0.0 && tallest < body * 1.5 {
@@ -308,7 +354,7 @@ mod imp {
         let name = name.trim().trim_end_matches(|c: char| c == ',' || c == '.' || c == '-').to_string();
         // A name, not a paragraph: two lines at most, and a sensible length
         let length = name.chars().count();
-        (last - first < 2 && (2..=70).contains(&length) && name.chars().any(char::is_alphanumeric)).then_some(name)
+        (last - first < 2 && (2..=70).contains(&length) && name.chars().any(char::is_alphanumeric)).then(|| (name, lines[anchor].clone()))
     }
 
     fn adjacent(above: &Line, below: &Line) -> bool {

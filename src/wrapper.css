@@ -2266,7 +2266,10 @@ html.invert-colors {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 20px 24px 32px;
+  /* The page in a centered column, at most --wrapped-column wide; the
+     scrollbar stays at the window's edge */
+  --wrapped-column: 1500px;
+  padding: 20px max(24px, calc((100% - var(--wrapped-column)) / 2)) 32px;
   scrollbar-width: thin;
   scrollbar-color: var(--track) transparent;
 }
@@ -2333,8 +2336,12 @@ html.invert-colors {
 
 /* ----- Wrapped pages: albums, artists, search ----- */
 
+/* A section's heading, with a rule under it across the column (as Roon
+   draws its "Main albums" and "Singles and EPs") */
 .wrapped-section {
-  margin: 22px 0 10px;
+  margin: 30px 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
   font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.04em;
@@ -2450,12 +2457,21 @@ html.invert-colors {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 
+/* The artist's picture and name centered at the top, as Roon has them */
 .wrapped-artist-head {
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 20px 0 8px;
 }
 
 .wrapped-artist-head .wrapped-art {
   width: 180px;
+}
+
+.wrapped-artist-head .wrapped-album-title {
+  font-size: 40px;
+  line-height: 1.1;
 }
 
 .wrapped-album-info {
@@ -2809,10 +2825,16 @@ body > .wrapped-toast {
   align-items: baseline;
   gap: 14px;
   flex-wrap: wrap;
+  margin-top: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
 
+/* (The rule goes under the whole row, pills and all) */
 .wrapped-similar-head .wrapped-section {
   margin: 22px 0 0;
+  padding: 0;
+  border: 0;
 }
 
 .wrapped-similar-head .wrapped-tabs {
@@ -2820,10 +2842,27 @@ body > .wrapped-toast {
 }
 
 .wrapped-similar > div:last-child {
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .wrapped-tabs.scope {
+  margin-left: auto;
+}
+
+/* The artist page's discography controls: filters left, sort right */
+.wrapped-album-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.wrapped-album-tools .wrapped-tabs {
+  margin: 0;
+}
+
+.wrapped-album-tools .sorts {
   margin-left: auto;
 }
 
@@ -2958,4 +2997,64 @@ body > .wrapped-toast {
 .wrapped-search:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* ----- The Wrapped radio page ----- */
+.wrapped-radio-subject {
+  font-size: 24px;
+  font-weight: 700;
+  margin: 4px 0 18px;
+}
+
+.wrapped-radio-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.wrapped-radio-line {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.wrapped-radio-line[hidden] {
+  display: none;
+}
+
+.wrapped-radio-line .wrapped-tabs {
+  margin: 0;
+}
+
+.wrapped-radio-label {
+  width: 90px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wrapped-radio-start {
+  width: fit-content;
+  margin-bottom: 8px;
+}
+
+.wrapped-radio-start.busy,
+.wrapped-radio-start:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.wrapped-tab:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* A seed clicked out of the radio */
+.wrapped-card.left-out {
+  opacity: 0.35;
+}
+
+.wrapped-card.left-out .wrapped-card-title {
+  text-decoration: line-through;
 }

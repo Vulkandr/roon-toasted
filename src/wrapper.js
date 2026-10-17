@@ -2500,6 +2500,7 @@ new ResizeObserver(layoutWrapped).observe(hole);
 // ----- The menu -----
 
 const WRAPPED_ICONS = {
+  radio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   album: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>',
   artist: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
@@ -2545,9 +2546,9 @@ function wrappedHere() {
   // its search
   if (roonNav.page === "artist") {
     if (roonNav.albumId != null) return { page: "artist", albumId: roonNav.albumId, label: "This artist", icon: "artist" };
-    // Otherwise by the pictures Roon fetched for the page (a library
-    // artist's photo, or a performer seen this session); the artist page
-    // resolves them, and falls back to the search
+    // Otherwise by the banner Roon fetched for the page (a library
+    // artist's, or a performer seen this session); the artist page resolves
+    // it, and falls back to reading the name off Roon's screen
     if (roonNav.imageKeys?.length) return { page: "artist", imageKeys: roonNav.imageKeys.slice(), label: "This artist", icon: "artist" };
     return { page: "search", label: "Find this artist", icon: "search", find: true };
   }
@@ -2559,6 +2560,7 @@ function wrappedMenuItems() {
   const here = wrappedHere();
   if (here) items.push(here);
   items.push({ page: "search", label: "Search", icon: "search" });
+  items.push({ page: "radio", label: "Radio", icon: "radio" });
   items.push({ page: "playlists", label: "Playlists", icon: "playlists" });
   items.push({ page: "history", label: "History", icon: "history" });
   items.push({ page: "settings", label: "Settings", icon: "settings" });
@@ -2680,6 +2682,7 @@ function openWrappedPage(entry) {
     top.handle === entry.handle &&
     top.name === entry.name &&
     top.performerId === entry.performerId &&
+    top.album === entry.album &&
     (entry.imageKeys == null || top.imageKeys?.join() === entry.imageKeys.join());
   if (same) {
     if (wrapped.hidden) setWrappedOpen(true);
@@ -2694,6 +2697,8 @@ function openWrappedPage(entry) {
     handle: entry.handle,
     query: entry.query,
     name: entry.name,
+    album: entry.album,
+    albumHandle: entry.albumHandle,
     imageKeys: entry.imageKeys,
   });
   wrapped.hidden = false;
@@ -2945,7 +2950,9 @@ const WRAPPED_PAGES = {
     const here = wrappedHere();
     grid.append(
       wrappedTile("Discover", "Weekly playlists from what you've been listening to, and from your whole library. Coming next."),
-      wrappedTile("Radio", "Roon Radio from any song, artist or mix of them, library only or not. Coming next."),
+      wrappedTile("Radio", "Roon Radio seeded with the artists that share an artist's sound, from your library or outside it.", () =>
+        openWrappedPage({ page: "radio" }),
+      ),
       wrappedTile("Playlists", "The playlists Wrapped keeps for you.", () => openWrappedPage({ page: "playlists" })),
       wrappedTile("Search", "Find an artist or album to start from.", () => openWrappedPage({ page: "search" })),
       wrappedTile("History", "What you've played, and what you play most.", () => openWrappedPage({ page: "history" })),
@@ -3055,6 +3062,12 @@ const WRAPPED_PAGES = {
     wrappedBody.replaceChildren(artistHeader(card));
     wrappedFacts("artist", card, ticket);
     wrappedOutsideTags(wrappedBody.querySelector(".wrapped-genres.outside"), card.name, ticket);
+    // Roon's picks for the artist (similar artists, and the albums it would
+    // start you on, which order the discography by Popularity) load meanwhile
+    const picks = invoke("library_artist_extras", { handle: card.handle }).then(
+      (x) => ({ x }),
+      (err) => ({ err }),
+    );
     const holder = document.createElement("div");
     holder.append(wrappedNote("Loading albums..."));
     wrappedBody.append(holder);
@@ -3067,27 +3080,12 @@ const WRAPPED_PAGES = {
     }
     if (ticket !== wrappedTicket) return;
     holder.replaceChildren();
-    const groups = [
-      ["main", "Albums"],
-      ["other", "Singles & EPs"],
-      ["appearance", "Appears on"],
-    ];
-    for (const [group, label] of groups) {
-      const list = albums.filter((a) => a.group === group);
-      if (!list.length) continue;
-      holder.append(wrappedSection(label));
-      holder.append(
-        wrappedGrid(
-          list.map((a) => ({ handle: a.handle, title: a.title, sub: [a.year, a.inLibrary ? "In library" : null].filter(Boolean).join(" · "), imageKey: a.imageKey })),
-          (item) => openWrappedPage({ page: "album", handle: item.handle }),
-        ),
-      );
-    }
-    if (!albums.length) holder.append(wrappedNote("Roon lists no albums for this artist."));
+    if (albums.length) wrappedDiscography(holder, albums, picks);
+    else holder.append(wrappedNote("Roon lists no albums for this artist."));
     const extras = document.createElement("div");
     extras.className = "wrapped-extras";
     wrappedBody.append(extras);
-    await wrappedArtistExtras(extras, card, ticket);
+    await wrappedArtistExtras(extras, picks, card, ticket);
   },
 
   search(entry) {
@@ -3133,6 +3131,19 @@ const WRAPPED_PAGES = {
     });
     if (entry.query) run();
     setTimeout(() => input.focus(), 50);
+  },
+
+  // Roon Radio seeded with an artist (or album) and the artists that share
+  // its sound; without one, a search for it first
+  radio(entry) {
+    if (!entry.name) {
+      wrappedHeading("Radio", "Pick the artist to start from");
+      if (wrappedNeedsLibrary()) return;
+      return radioPickSeed();
+    }
+    wrappedHeading("Radio", entry.album ? `From ${entry.album} by ${entry.name}` : `From ${entry.name}`);
+    if (wrappedNeedsLibrary()) return;
+    wrappedRadioPage(entry, ++wrappedTicket);
   },
 
   async playlists() {
@@ -3241,10 +3252,21 @@ async function wrappedSimilarBlock(holder, subject, roonRows, ticket) {
         );
         grid.append(cards);
         wrappedFillPhotos(rows, cards, ticket);
+      } else if (!pending && answer.subjectEmpty) {
+        // Nothing to compare: say so instead of blaming the library
+        const who = subject.album ? `${subject.album} or ${subject.artist}` : subject.artist;
+        const missing = {
+          genre: "Last.fm has no genre tags",
+          blend: "Last.fm has no genre tags",
+          style: "Last.fm has no style, sound or theme words (like atmospheric, melodic or viking)",
+          scene: "Last.fm has no scene or country tags",
+          era: "MusicBrainz has no start year",
+        }[by];
+        grid.append(wrappedNote(`${missing} for ${who}, so there is nothing to match on.${by === "genre" || by === "blend" ? "" : " Try Genre."}`));
       } else if (!pending) {
         grid.append(
           wrappedNote(
-            `No tagged artist ${scope === "discover" ? "outside" : "in"} your library shares this one's ${by === "era" ? "era and genre" : by} tags yet.`,
+            `No tagged artist ${scope === "discover" ? "outside" : "in"} your library shares this one's ${{ era: "era and genre", blend: "genre and style" }[by] || by} tags yet.`,
           ),
         );
       }
@@ -3318,21 +3340,451 @@ async function wrappedAlbumExtras(holder, card, ticket) {
   wrappedPicks(holder, "Recommended from this album", x.recommended.map(albumItem), openAlbum);
 }
 
-async function wrappedArtistExtras(holder, card, ticket) {
+// (Roon's recommended and latest albums for an artist are its own albums, so
+// they order the discography above instead of repeating it here)
+async function wrappedArtistExtras(holder, picks, card, ticket) {
   holder.append(wrappedNote("Looking for similar artists..."));
-  let x;
-  try {
-    x = await invoke("library_artist_extras", { handle: card.handle });
-  } catch (err) {
-    if (ticket === wrappedTicket) holder.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+  const { x, err } = await picks;
+  if (ticket !== wrappedTicket) return;
+  if (err) {
+    holder.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
     return;
   }
-  if (ticket !== wrappedTicket) return;
   holder.replaceChildren();
   await wrappedSimilarBlock(holder, { artist: card.name }, x.similar, ticket);
-  if (ticket !== wrappedTicket) return;
-  wrappedPicks(holder, "Recommended albums", x.recommended.map(albumItem), openAlbum);
-  wrappedPicks(holder, "Latest releases", x.latest.map(albumItem), openAlbum);
+}
+
+// ----- The Wrapped radio: Roon Radio (PlaySwim) seeded with the artists
+// that share an artist's sound by its tags (tags.rs), not Roon's own guess
+// from one artist -----
+
+const RADIO_BY = [
+  ["blend", "Genre + Style"],
+  ["genre", "Genre"],
+  ["style", "Style"],
+  ["scene", "Scene"],
+  ["roon", "Roon's similar"],
+];
+const RADIO_COUNTS = [10, 20, 30];
+// Remembered between pages and runs (a convenience, so storage may fail)
+let radioPrefs = { by: "blend", scope: "library", count: 20, onlySeeds: false, libraryOnly: false };
+try {
+  radioPrefs = { ...radioPrefs, ...JSON.parse(localStorage.getItem("wrapped-radio") || "{}") };
+} catch {}
+function saveRadioPrefs() {
+  try {
+    localStorage.setItem("wrapped-radio", JSON.stringify(radioPrefs));
+  } catch {}
+}
+
+// The button on artist and album pages: opens the radio page for them
+function wrappedRadioBuilder(what, entry) {
+  return wrappedIconButton(RADIO_ICON, `Wrapped radio from this ${what}`, () => {
+    if (!entry.name) return wrappedToast("Roon didn't say who the artist is.");
+    openWrappedPage({ page: "radio", ...entry });
+  }, "wrapped-radio");
+}
+
+// A Roon handle for an artist row (Similar rows carry a performer id or
+// nothing): by id, else Roon's search, exact name only
+async function roonArtistHandle(row) {
+  if (row.handle) return row.handle;
+  if (row.performerId) {
+    try {
+      const card = await invoke("library_artist_by_id", { performerId: row.performerId });
+      if (card?.handle) return (row.handle = card.handle);
+    } catch {}
+  }
+  const key = row.name.toLowerCase();
+  let hit = roonArtistCache.get(key);
+  if (hit === undefined) {
+    try {
+      const hits = await invoke("library_search", { query: row.name });
+      hit = hits.artists.find((a) => a.name.toLowerCase() === key) || null;
+    } catch {
+      hit = null;
+    }
+    roonArtistCache.set(key, hit);
+  }
+  return hit ? (row.handle = hit.handle) : null;
+}
+
+// No artist yet: Roon's search, artists only
+function radioPickSeed() {
+  const input = document.createElement("input");
+  input.className = "wrapped-search";
+  input.type = "search";
+  input.placeholder = "An artist to start the radio from";
+  const results = document.createElement("div");
+  results.className = "wrapped-results";
+  wrappedBody.append(input, results);
+  let timer = null;
+  const run = async () => {
+    const query = input.value.trim();
+    if (!query) return results.replaceChildren();
+    const ticket = ++wrappedTicket;
+    results.replaceChildren(wrappedNote("Searching..."));
+    let hits;
+    try {
+      hits = await invoke("library_search", { query });
+    } catch (err) {
+      if (ticket === wrappedTicket) results.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+      return;
+    }
+    if (ticket !== wrappedTicket || input.value.trim() !== query) return;
+    results.replaceChildren();
+    if (!wrappedPicks(results, "Artists", hits.artists.map(artistItem), (item) => openWrappedPage({ page: "radio", name: item.title, handle: item.handle }))) {
+      results.append(wrappedNote("No artists by that name."));
+    }
+  };
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(run, 350);
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      clearTimeout(timer);
+      run();
+    }
+  });
+  setTimeout(() => input.focus(), 50);
+}
+
+// A row of pills; `selected(value)` marks them, `pick(value)` on a click
+function radioPills(options, selected, pick) {
+  const row = document.createElement("div");
+  row.className = "wrapped-tabs small";
+  const paint = () => {
+    for (const pill of row.children) pill.classList.toggle("selected", selected(pill.dataset.value));
+  };
+  for (const [value, label] of options) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.value = value;
+    pill.textContent = label;
+    pill.addEventListener("click", () => {
+      pick(value);
+      paint();
+    });
+    row.append(pill);
+  }
+  paint();
+  return { row, paint };
+}
+
+function radioControl(label, control) {
+  const line = document.createElement("div");
+  line.className = "wrapped-radio-line";
+  const name = document.createElement("span");
+  name.className = "wrapped-radio-label";
+  name.textContent = label;
+  line.append(name, control);
+  return line;
+}
+
+async function wrappedRadioPage(entry, ticket) {
+  const subject = { artist: entry.name, album: entry.album || null };
+  const head = document.createElement("div");
+  head.className = "wrapped-radio-head";
+  const controls = document.createElement("div");
+  controls.className = "wrapped-radio-controls";
+  const start = document.createElement("button");
+  start.className = "wrapped-play wrapped-radio-start";
+  start.innerHTML = `${RADIO_ICON}<span>Start radio</span>`;
+  const status = document.createElement("div");
+  status.className = "wrapped-note small";
+  const seedsHead = wrappedSection("Seeds");
+  const seeds = document.createElement("div");
+  wrappedBody.append(head, controls, start, status, seedsHead, seeds);
+
+  // The artist (and album) it starts from
+  const title = document.createElement("div");
+  title.className = "wrapped-radio-subject";
+  title.textContent = entry.album ? `${entry.album} · ${entry.name}` : entry.name;
+  head.append(title);
+
+  let rows = [];
+  const left = new Set(); // names clicked out of the seeds
+  let load = 0;
+  const discover = () => radioPrefs.by !== "roon" && radioPrefs.scope === "discover";
+
+  const libraryPill = document.createElement("button");
+  const onlyPill = document.createElement("button");
+  const paintSwitches = () => {
+    onlyPill.classList.toggle("selected", radioPrefs.onlySeeds);
+    libraryPill.classList.toggle("selected", radioPrefs.libraryOnly && !discover());
+    libraryPill.disabled = discover();
+    libraryPill.title = discover() ? "Discover seeds are outside your library" : "Play only tracks in your library";
+  };
+  for (const [pill, label, key, tip] of [
+    [onlyPill, "Only these artists", "onlySeeds", "Play only the seed artists' music, not Roon's wider pick around them"],
+    [libraryPill, "Library tracks only", "libraryOnly", ""],
+  ]) {
+    pill.className = "wrapped-tab";
+    pill.textContent = label;
+    if (tip) pill.title = tip;
+    pill.addEventListener("click", () => {
+      radioPrefs[key] = !radioPrefs[key];
+      saveRadioPrefs();
+      paintSwitches();
+      paintStatus();
+    });
+  }
+  const switches = document.createElement("div");
+  switches.className = "wrapped-tabs small";
+  switches.append(onlyPill, libraryPill);
+
+  const by = radioPills(RADIO_BY, (v) => v === radioPrefs.by, (v) => {
+    radioPrefs.by = v;
+    saveRadioPrefs();
+    scopeLine.hidden = v === "roon";
+    paintSwitches();
+    fill();
+  });
+  const scope = radioPills(SIMILAR_SCOPES, (v) => v === radioPrefs.scope, (v) => {
+    radioPrefs.scope = v;
+    saveRadioPrefs();
+    paintSwitches();
+    fill();
+  });
+  const count = radioPills(RADIO_COUNTS.map((n) => [String(n), String(n)]), (v) => Number(v) === radioPrefs.count, (v) => {
+    radioPrefs.count = Number(v);
+    saveRadioPrefs();
+    fill();
+  });
+  const scopeLine = radioControl("From", scope.row);
+  scopeLine.hidden = radioPrefs.by === "roon";
+  controls.append(radioControl("Match by", by.row), scopeLine, radioControl("Artists", count.row), radioControl("Play", switches));
+  paintSwitches();
+
+  const chosen = () => rows.filter((r) => !left.has(r.name));
+  const paintStatus = () => {
+    const n = chosen().length;
+    status.textContent = n
+      ? `${entry.name} and ${n} artist${n === 1 ? "" : "s"} like ${entry.album ? "it" : "them"}${radioPrefs.onlySeeds ? ", nobody else" : ", and Roon's picks around them"}${zone ? ` on ${zone.name}` : ""}. Click an artist to leave it out.`
+      : `${entry.name} alone${zone ? ` on ${zone.name}` : ""}.`;
+  };
+  const paint = (list, pending) => {
+    rows = list;
+    seeds.replaceChildren();
+    if (rows.length) {
+      const cards = wrappedGrid(
+        rows.map((r) => ({ row: r, title: r.name, sub: (r.why || []).slice(0, 3).join(" · "), imageKey: r.imageKey, round: true })),
+        (item) => {
+          if (left.has(item.row.name)) left.delete(item.row.name);
+          else left.add(item.row.name);
+          paintLeft();
+          paintStatus();
+        },
+      );
+      seeds.append(cards);
+      wrappedFillPhotos(rows, cards, ticket);
+      paintLeft();
+    } else if (!pending) {
+      seeds.append(wrappedNote("No artists to add; the radio would start from this one alone. Try another Match by or From."));
+    }
+    if (pending) seeds.append(wrappedNote(`Tagging ${pending} more neighbour${pending === 1 ? "" : "s"} from Last.fm...`, "wrapped-note small"));
+    paintStatus();
+  };
+  const paintLeft = () => {
+    const tiles = seeds.querySelectorAll(".wrapped-card");
+    rows.forEach((r, i) => tiles[i]?.classList.toggle("left-out", left.has(r.name)));
+  };
+
+  const fill = async () => {
+    const mine = ++load;
+    seeds.replaceChildren(wrappedNote(radioPrefs.by === "roon" ? "Asking Roon..." : discover() ? "Asking Last.fm for neighbours..." : "Comparing tags..."));
+    try {
+      if (radioPrefs.by === "roon") {
+        const x = entry.albumHandle
+          ? await invoke("library_album_extras", { handle: entry.albumHandle })
+          : await invoke("library_artist_extras", { handle: entry.handle });
+        if (mine !== load || ticket !== wrappedTicket) return;
+        const list = (entry.albumHandle ? x.similarArtists : x.similar) || [];
+        return paint(list.slice(0, radioPrefs.count).map((p) => ({ name: p.name, handle: p.handle, imageKey: p.imageKey, performerId: p.performerId, why: [] })), 0);
+      }
+      const answer = await invoke("wrapped_similar", { ...subject, by: radioPrefs.by, scope: radioPrefs.scope, limit: radioPrefs.count });
+      if (mine !== load || ticket !== wrappedTicket) return;
+      if (!answer.rows.length && !answer.pending && answer.subjectEmpty) {
+        rows = [];
+        seeds.replaceChildren(wrappedNote(`Last.fm has nothing for ${entry.name} to match ${radioPrefs.by === "blend" ? "genres" : radioPrefs.by} on. Try Genre or Roon's similar.`));
+        return paintStatus();
+      }
+      paint(answer.rows, answer.pending);
+      if (answer.pending) {
+        const unlisten = await listen("wrapped-similar", (event) => {
+          if (mine !== load || ticket !== wrappedTicket) return unlisten();
+          if (event.payload.key !== answer.key) return;
+          paint(event.payload.rows, event.payload.pending);
+          if (!event.payload.pending) unlisten();
+        });
+      }
+    } catch (err) {
+      if (mine === load && ticket === wrappedTicket) seeds.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+    }
+  };
+
+  start.addEventListener("click", async () => {
+    if (!zone) return wrappedToast("Pick a zone first.");
+    start.disabled = true;
+    start.classList.add("busy");
+    try {
+      const picked = chosen();
+      const handles = [];
+      for (const row of picked) {
+        const handle = await roonArtistHandle(row);
+        if (handle) handles.push(handle);
+      }
+      const artists = [entry.handle, ...handles].filter(Boolean);
+      const seedsOut = {
+        artists: [...new Set(artists)],
+        albums: entry.albumHandle ? [entry.albumHandle] : [],
+        libraryOnly: radioPrefs.libraryOnly && !discover(),
+        limitToSeed: radioPrefs.onlySeeds,
+      };
+      await invoke("library_play_radio", { zoneId: zone.zoneId, seeds: seedsOut });
+      const missed = picked.length - handles.length;
+      wrappedToast(
+        `Radio on ${zone.name}: ${entry.name} and ${handles.length} more${missed ? ` (${missed} not found in Roon)` : ""}`,
+      );
+    } catch (err) {
+      console.error("radio", err);
+      wrappedToast(typeof err === "string" ? err : "Roon didn't start the radio.");
+    } finally {
+      start.disabled = false;
+      start.classList.remove("busy");
+    }
+  });
+
+  fill();
+}
+
+// ----- The artist page's discography, sorted and filtered like Roon's -----
+
+const ALBUM_SORTS = [
+  ["date", "Date"],
+  ["popular", "Popularity"],
+  ["title", "Title"],
+];
+// Newest, most popular, A to Z first
+const ALBUM_SORT_DESC = { date: true, popular: true, title: false };
+const ALBUM_GROUPS = [
+  ["main", "Albums"],
+  ["other", "Singles & EPs"],
+  ["appearance", "Appears on"],
+];
+// Remembered between pages and runs (a convenience, so storage may fail)
+let albumView = { sort: "date", desc: true, library: false, favorites: false };
+try {
+  albumView = { ...albumView, ...JSON.parse(localStorage.getItem("wrapped-album-view") || "{}") };
+} catch {}
+function saveAlbumView() {
+  try {
+    localStorage.setItem("wrapped-album-view", JSON.stringify(albumView));
+  } catch {}
+}
+
+// "15 August 2025", "August 2025" or "2025", as Roon writes them
+function releasedText(a) {
+  const [y, m, d] = (a.released || "").split("-").map(Number);
+  if (y && m && d) return new Date(y, m - 1, d).toLocaleDateString(undefined, { day: "numeric", month: "long", year: "numeric" });
+  if (y && m) return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+  return a.year ? String(a.year) : "";
+}
+
+const albumKey = (a) => (a.albumId != null ? `id:${a.albumId}` : `t:${a.title.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "")}`);
+
+// Sorts a copy of `list`. Popularity is Roon's own score when the Core sends
+// one, else the order of the albums Roon recommends for the artist, the rest
+// after them newest first.
+function sortAlbums(list, sort, desc, recommended) {
+  const dateOf = (a) => a.released || (a.year ? `${a.year}-00-00` : "");
+  const byDate = (a, b) => dateOf(a).localeCompare(dateOf(b));
+  const scored = list.some((a) => a.popularity != null);
+  const rank = new Map(recommended.map((a, i) => [albumKey(a), recommended.length - i]));
+  const popularity = (a) => (scored ? a.popularity ?? -1 : rank.get(albumKey(a)) ?? 0);
+  const compare = {
+    date: byDate,
+    popular: (a, b) => popularity(a) - popularity(b) || byDate(a, b),
+    title: (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: "base", numeric: true }),
+  }[sort];
+  const known = (a) => (sort === "date" ? Boolean(dateOf(a)) : true);
+  const sorted = list.filter(known).sort((a, b) => (desc ? -compare(a, b) : compare(a, b)));
+  // (Undated albums last either way)
+  return [...sorted, ...list.filter((a) => !known(a))];
+}
+
+function wrappedDiscography(holder, albums, picks) {
+  const tools = document.createElement("div");
+  tools.className = "wrapped-album-tools";
+  const filters = document.createElement("div");
+  filters.className = "wrapped-tabs small";
+  const sorts = document.createElement("div");
+  sorts.className = "wrapped-tabs small sorts";
+  tools.append(filters, sorts);
+  const lists = document.createElement("div");
+  holder.append(tools, lists);
+  let recommended = [];
+  const render = () => {
+    for (const pill of filters.children) pill.classList.toggle("selected", Boolean(albumView[pill.dataset.filter]));
+    for (const pill of sorts.children) {
+      const on = pill.dataset.sort === albumView.sort;
+      pill.classList.toggle("selected", on);
+      pill.textContent = pill.dataset.label + (on ? (albumView.desc ? " ↓" : " ↑") : "");
+    }
+    const shown = albums.filter((a) => (!albumView.library || a.inLibrary) && (!albumView.favorites || a.favorite));
+    lists.replaceChildren();
+    for (const [group, label] of ALBUM_GROUPS) {
+      const list = shown.filter((a) => a.group === group);
+      if (!list.length) continue;
+      const items = sortAlbums(list, albumView.sort, albumView.desc, recommended).map((a) => ({
+        handle: a.handle,
+        title: a.title,
+        sub: [releasedText(a), a.inLibrary ? "In library" : null, a.favorite ? "♥" : null].filter(Boolean).join(" · "),
+        imageKey: a.imageKey,
+      }));
+      lists.append(wrappedSection(`${label} (${list.length})`), wrappedGrid(items, openAlbum));
+    }
+    if (!lists.children.length) {
+      lists.append(wrappedNote(`None of this artist's albums are ${albumView.library ? "in your library" : ""}${albumView.library && albumView.favorites ? " and " : ""}${albumView.favorites ? "hearted" : ""}.`));
+    }
+  };
+  for (const [key, label] of [
+    ["library", "In library"],
+    ["favorites", "♥ Favorites"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.filter = key;
+    pill.textContent = label;
+    pill.addEventListener("click", () => {
+      albumView[key] = !albumView[key];
+      saveAlbumView();
+      render();
+    });
+    filters.append(pill);
+  }
+  for (const [key, label] of ALBUM_SORTS) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.sort = key;
+    pill.dataset.label = label;
+    pill.addEventListener("click", () => {
+      // The selected one flips its direction
+      albumView.desc = albumView.sort === key ? !albumView.desc : ALBUM_SORT_DESC[key];
+      albumView.sort = key;
+      saveAlbumView();
+      render();
+    });
+    sorts.append(pill);
+  }
+  render();
+  // Roon's recommended albums arrive with its other picks
+  picks.then(({ x }) => {
+    if (!x?.recommended?.length || !holder.isConnected) return;
+    recommended = x.recommended;
+    if (albumView.sort === "popular") render();
+  });
 }
 
 async function wrappedHomeExtras(holder, ticket) {
@@ -3583,6 +4035,7 @@ const SIMILAR_BY = [
   ["roon", "Roon"],
   ["genre", "Genre"],
   ["style", "Style"],
+  ["blend", "Genre + Style"],
   ["scene", "Scene"],
   ["era", "Era"],
 ];
@@ -3982,7 +4435,12 @@ function albumHeader(card) {
         : await invoke("library_album_add_for", { handle: card.handle });
       return { inLibrary: next.inLibrary, favorite: next.favorite };
     }),
-    wrappedRadio("album", { albums: [card.handle] }),
+    wrappedRadioBuilder("album", {
+      name: (card.artist || "").split(/ \/ |, /)[0],
+      handle: card.performerHandle,
+      album: card.title,
+      albumHandle: card.handle,
+    }),
     wrappedOpenInRoon(`${card.artist} ${card.title}`.trim(), card.title),
     wrappedIconButton(PLAYLIST_ICON, "Save this album as a Wrapped playlist", async () => {
       if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
@@ -4017,7 +4475,7 @@ function artistHeader(card) {
   outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
-  actions.append(wrappedRadio("artist", { artists: [card.handle] }), wrappedOpenInRoon(card.name, card.name));
+  actions.append(wrappedRadioBuilder("artist", { name: card.name, handle: card.handle }), wrappedOpenInRoon(card.name, card.name));
   info.append(name, facts, genres, outside, actions);
   head.append(info);
   return head;
