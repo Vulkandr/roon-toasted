@@ -339,12 +339,21 @@ impl Remoting {
     /// Our id for a by-value struct type, declaring it (with these members, in
     /// this order) on first use. Use the same member list for a type within a session.
     pub fn define_type(&self, type_name: &str, members: &[(&str, PropertyType)]) -> Result<u32, RemotingError> {
+        // One id per type *and member list*: a struct sent with other members
+        // than the first time (SwimParameters with LimitToSeed added) is a
+        // new definition. Keyed by the name alone, the Core read the later
+        // struct's members against the first definition and failed
+        // (IndexOutOfRangeException in SwimParameters_Adapter.Populate).
+        let key = std::iter::once(type_name.to_string())
+            .chain(members.iter().map(|(name, prop_type)| format!("{name}:{}", *prop_type as i32)))
+            .collect::<Vec<_>>()
+            .join("|");
         let mut ids = self.type_ids.lock().unwrap();
-        if let Some(id) = ids.get(type_name) {
+        if let Some(id) = ids.get(&key) {
             return Ok(*id);
         }
         let id = ids.len() as u32 + 1;
-        ids.insert(type_name.to_string(), id);
+        ids.insert(key, id);
         let mut w = Writer::new();
         w.flex_int(id).string(Some(type_name)).flex_int(members.len() as u32);
         for (name, prop_type) in members {

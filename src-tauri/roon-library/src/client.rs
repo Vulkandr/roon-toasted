@@ -54,6 +54,8 @@ const SIG_GET_PERFORMER_LITE: &str = "Sooloos.Broker.Api.Library::GetPerformerLi
 const SIG_UNIFIED_SEARCH: &str = "Sooloos.Broker.Api.Library::UnifiedSearch(Sooloos.Broker.Api.SearchParameters, Base.ResultCallback<Sooloos.Broker.Api.UnifiedSearchResults>)";
 const SIG_GET_PERFORMER: &str = "Sooloos.Broker.Api.Library::GetPerformer(Sooloos.Broker.Api.PerformerBase, Base.ResultCallback<Sooloos.Broker.Api.Performer>)";
 const SIG_SIMILAR_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarPerformers(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+const SIG_PERFORMER_TOP_TRACKS: &str = "Sooloos.Broker.Api.Library::GetOneBoxPerformerTopTracks(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TrackLite>>)";
+const SIG_PLAY_TRACKS: &str = "Sooloos.Broker.Api.Transport::PlayTracks(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.TrackBase>, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
 const SIG_PERFORMER_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxPerformerRecommendedAlbums(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.PerformerRecommendedAlbums>)";
 const SIG_SIMILAR_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarAlbums(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.OneBox_SimilarAlbums>)";
 const SIG_ALBUM_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxAlbumRecommendedForYou(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
@@ -381,8 +383,11 @@ pub struct TrackHit {
 
 /// What to start Roon Radio from (session handles from the pages), whether
 /// to stay inside the library, and whether to play only the seeds' own music
-/// (`limit_to_seed`: with artists as seeds, only those artists) (see
-/// `play_radio`).
+/// (see `play_radio`). Roon's radio (its "swim type") takes one artist, or
+/// several only with `limit_to_seed`: then the Core's own radio queues every
+/// song of those artists it finds, shuffled (31 artists gave 245 songs).
+/// Several artists without it fail on the Core ("Failed to create swim
+/// session: InvalidArgument", logged on the Core only; the zone just stops).
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RadioSeeds {
@@ -393,6 +398,49 @@ pub struct RadioSeeds {
     pub genres: Vec<String>,
     pub library_only: bool,
     pub limit_to_seed: bool,
+}
+
+/// One of an artist's top songs as Roon ranks them (see `top_tracks`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopTrack {
+    pub handle: String,
+    pub title: String,
+    pub album: String,
+    /// Tells the song's albums apart (the album id, else its title).
+    pub album_key: String,
+    pub in_library: bool,
+    /// A live recording: Roon's IsLive on the album, or "live" in the song's
+    /// or album's title.
+    pub live: bool,
+}
+
+/// How to build a mix from artists' top songs (see `play_artist_mix`).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct MixOptions {
+    /// Songs per artist at most, each from a different album where the
+    /// artist has enough of them.
+    pub per_artist: usize,
+    pub include_live: bool,
+    pub library_only: bool,
+}
+
+impl Default for MixOptions {
+    fn default() -> Self {
+        MixOptions { per_artist: 3, include_live: false, library_only: false }
+    }
+}
+
+/// What `play_artist_mix` queued.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MixPlayed {
+    pub songs: usize,
+    /// Artists that gave at least one song.
+    pub artists: usize,
+    /// Live recordings left out.
+    pub live_skipped: usize,
 }
 
 /// One of Roon's playlists (see `playlists`).
@@ -1881,9 +1929,10 @@ impl LibraryClient {
     }
 
     /// Starts Roon Radio on the zone from the seeds (Roon's own "Start
-    /// Radio", which the app offers on one song, album or artist; this takes
-    /// any mix of them, and genres), optionally staying inside the library.
-    pub async fn play_radio(&self, zone_id: &str, seeds: &RadioSeeds) -> Result<(), LibraryError> {
+    /// Radio", which the app offers on one song, album or artist), optionally
+    /// staying inside the library; see `RadioSeeds` for which mixes the Core
+    /// takes. Answers how many songs the Core queued, when it says.
+    pub async fn play_radio(&self, zone_id: &str, seeds: &RadioSeeds) -> Result<Option<i32>, LibraryError> {
         let handles = |list: &[String], what: &str| -> Result<Vec<u64>, LibraryError> {
             list.iter()
                 .map(|h| h.parse::<u64>().map_err(|_| LibraryError::Unconfirmed(format!("bad {what} handle"))))
@@ -1991,6 +2040,16 @@ impl LibraryClient {
                 value: yes.as_bytes().to_vec(),
             });
         }
+        // Start on a song from the seeds right away, as Roon's own "Start
+        // radio" does: with only artists or albums as seeds and no song to
+        // play first, the zone stopped and waited (2026-10-16)
+        if tracks.is_empty() {
+            fields.push(StructField {
+                name: "bool Sooloos.Broker.Api.SwimParameters::PreplayTrackFromSeed",
+                prop_type: PropertyType::Bool,
+                value: yes.as_bytes().to_vec(),
+            });
+        }
         let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.SwimParameters", &fields)?;
         let mut args = Writer::new();
         args.long(zone).sooid(&profile).bytes(&params);
@@ -1998,7 +2057,186 @@ impl LibraryClient {
         if !res.success() {
             return Err(RemotingError::Failed { method: "PlaySwim".into(), status: res.status }.into());
         }
-        Ok(())
+        // The Core's PlayFeedback says how many songs it queued (with
+        // LimitToSeed: every song of the seeds it found, shuffled)
+        let queued = {
+            let g = self.inner.graph.lock().unwrap();
+            match g.decode_return_value(&res.payload) {
+                Ok(Value::Inline(feedback)) => feedback.field("ItemCount").and_then(Value::as_int),
+                _ => None,
+            }
+        };
+        println!(
+            "[radio] PlaySwim: {} tracks, {} albums, {} artists, library only {}, only seeds {}; queued {queued:?}",
+            tracks.len(),
+            albums.len(),
+            artists.len(),
+            seeds.library_only,
+            seeds.limit_to_seed
+        );
+        Ok(queued)
+    }
+
+    /// An artist's top songs as Roon ranks them (GetOneBoxPerformerTopTracks),
+    /// with their albums' titles and live flags.
+    pub async fn top_tracks(&self, performer_handle: &str) -> Result<Vec<TopTrack>, LibraryError> {
+        let oid: u64 = performer_handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad artist handle {performer_handle}")))?;
+        let list = self.one_box(SIG_PERFORMER_TOP_TRACKS, "GetOneBoxPerformerTopTracks", Subject::Oid(oid)).await?;
+        self.wait_for_lists(std::slice::from_ref(&list), None).await;
+        // (and the songs' albums, for their titles and live flags)
+        let albums: Vec<u64> = {
+            let g = self.inner.graph.lock().unwrap();
+            list_members(&g, Some(&list), None)
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|t| g.get(t)?.ref_field("Album"))
+                .collect()
+        };
+        self.wait_until(Duration::from_secs(2), |g| albums.iter().all(|a| g.get(*a).is_some_and(|o| o.has_field("Title")))).await;
+        let g = self.inner.graph.lock().unwrap();
+        Ok(list_members(&g, Some(&list), None)
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|oid| g.get(oid))
+            .filter(|t| t.has_field("Title"))
+            .map(|t| {
+                let album = g.deref(t.field("Album"));
+                let title = t.str_field("Title").unwrap_or_default().to_string();
+                let album_title = album.and_then(|a| a.str_field("Title")).unwrap_or_default().to_string();
+                let flagged = album.and_then(|a| a.field("IsLive")).and_then(Value::as_bool) == Some(true);
+                TopTrack {
+                    handle: t.oid.to_string(),
+                    album_key: album
+                        .and_then(|a| a.long_field("AlbumId"))
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| album_title.to_lowercase()),
+                    live: flagged || looks_live(&title) || looks_live(&album_title),
+                    in_library: t.has_field("LibraryTrackId"),
+                    title,
+                    album: album_title,
+                }
+            })
+            .collect())
+    }
+
+    /// The Wrapped radio: up to `per_artist` of each artist's top songs (one
+    /// per album first, no live recordings unless asked), the first
+    /// artist's best song first, then round by round in a shuffled artist
+    /// order so no artist plays twice in a row, queued on the zone at once
+    /// (Roon Radio carries on after it, if the zone has it on). Roon's own
+    /// radio takes several artists only as "these artists only", and then
+    /// queues every song it has of theirs, whole albums at a time.
+    pub async fn play_artist_mix(&self, zone_id: &str, artists: &[String], options: &MixOptions) -> Result<MixPlayed, LibraryError> {
+        let per_artist = options.per_artist.clamp(1, 10);
+        // Every artist's top songs, eight lookups at a time
+        let gate = std::sync::Arc::new(tokio::sync::Semaphore::new(8));
+        let mut jobs = tokio::task::JoinSet::new();
+        for (i, handle) in artists.iter().enumerate() {
+            let (client, handle, gate) = (self.clone(), handle.clone(), gate.clone());
+            jobs.spawn(async move {
+                let _turn = gate.acquire_owned().await;
+                (i, client.top_tracks(&handle).await.unwrap_or_default())
+            });
+        }
+        let mut found: Vec<(usize, Vec<TopTrack>)> = Vec::new();
+        while let Some(done) = jobs.join_next().await {
+            if let Ok(pair) = done {
+                found.push(pair);
+            }
+        }
+        found.sort_by_key(|(i, _)| *i);
+
+        // Each artist's picks: one song per album first, then a second from
+        // an album already used if there's room; the same song (by title) once
+        let mut live_skipped = 0;
+        let mut picks: Vec<Vec<String>> = Vec::new();
+        for (_, tracks) in &found {
+            let mut seen_titles: HashSet<String> = HashSet::new();
+            let usable: Vec<&TopTrack> = tracks
+                .iter()
+                .filter(|t| {
+                    if t.live && !options.include_live {
+                        live_skipped += 1;
+                        return false;
+                    }
+                    !options.library_only || t.in_library
+                })
+                .collect();
+            let mut mine: Vec<&TopTrack> = Vec::new();
+            let mut albums: HashMap<&str, usize> = HashMap::new();
+            for pass in 1..=2 {
+                for t in &usable {
+                    if mine.len() >= per_artist {
+                        break;
+                    }
+                    let used = albums.get(t.album_key.as_str()).copied().unwrap_or(0);
+                    let song = normalized_title(&t.title);
+                    if used >= pass || mine.iter().any(|m| m.handle == t.handle) || seen_titles.contains(&song) {
+                        continue;
+                    }
+                    albums.insert(t.album_key.as_str(), used + 1);
+                    seen_titles.insert(song);
+                    mine.push(t);
+                }
+            }
+            picks.push(mine.into_iter().map(|t| t.handle.clone()).collect());
+        }
+        let artists_with_songs = picks.iter().filter(|p| !p.is_empty()).count();
+
+        // The order: the first artist's best song, then rounds
+        let mut rng = Shuffle::new();
+        let mut order: Vec<u64> = Vec::new();
+        let mut last_artist: Option<usize> = None;
+        if let Some(first) = picks.first().and_then(|p| p.first()) {
+            order.push(first.parse().unwrap_or(0));
+            last_artist = Some(0);
+        }
+        for round in 0..per_artist {
+            let mut who: Vec<usize> = (0..picks.len()).filter(|a| !(round == 0 && *a == 0)).filter(|a| picks[*a].len() > round).collect();
+            rng.shuffle(&mut who);
+            // (not the artist that just played)
+            if who.len() > 1 && who.first().copied() == last_artist {
+                let n = who.len();
+                who.swap(0, n - 1);
+            }
+            for a in who {
+                order.push(picks[a][round].parse().unwrap_or(0));
+                last_artist = Some(a);
+            }
+        }
+        order.retain(|oid| *oid != 0);
+        if order.is_empty() {
+            return Err(LibraryError::Unconfirmed("Roon found no songs by these artists".into()));
+        }
+
+        let (transport, zone, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            let zone = self.zone_object(&g, zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into()))?;
+            (g.first_of_type("Transport").map(|o| o.oid), zone.oid, self.profile_sooid(&g))
+        };
+        let (Some(transport), Some(profile)) = (transport, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
+        };
+        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        let mut list = Writer::new();
+        list.flex_int(order.len() as u32);
+        for oid in &order {
+            list.long(*oid);
+        }
+        let mut args = Writer::new();
+        args.long(zone).sooid(&profile).bytes(&params).flex_int(list.len() as u32).bytes(list.as_bytes());
+        let res = self.inner.remoting.call(transport, SIG_PLAY_TRACKS, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "PlayTracks".into(), status: res.status }.into());
+        }
+        println!(
+            "[radio] mix: {} songs from {} of {} artists ({} live left out)",
+            order.len(),
+            artists_with_songs,
+            artists.len(),
+            live_skipped
+        );
+        Ok(MixPlayed { songs: order.len(), artists: artists_with_songs, live_skipped })
     }
 
     /// Plays an album (by its handle) on the zone, right now, the way the Roon
@@ -2901,6 +3139,50 @@ fn number_of(value: Option<&Value>) -> Option<f64> {
     }
 }
 
+/// A live recording by its title: "(Live)", "[Live at ...]", "- Live",
+/// "Live at/in/from ...", "Unplugged", "In Concert".
+fn looks_live(title: &str) -> bool {
+    let t = title.to_lowercase();
+    ["(live", "[live", "- live", "live at ", "live in ", "live from ", "unplugged", "in concert", "live session", "live version"]
+        .iter()
+        .any(|mark| t.contains(mark))
+        || t.ends_with(" live")
+        || t == "live"
+}
+
+/// A song's title for telling the same song apart on other albums ("Song
+/// (Remastered 2019)" is "song").
+fn normalized_title(title: &str) -> String {
+    let t = title.to_lowercase();
+    let cut = t.find(" (").or_else(|| t.find(" [")).or_else(|| t.find(" - ")).unwrap_or(t.len());
+    t[..cut].chars().filter(|c| c.is_alphanumeric()).collect()
+}
+
+/// A small shuffler (xorshift, seeded by the clock): the mix's order needn't
+/// be any more random than that.
+struct Shuffle(u64);
+
+impl Shuffle {
+    fn new() -> Self {
+        let seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+        Shuffle(seed | 1)
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = (self.next() % (i as u64 + 1)) as usize;
+            items.swap(i, j);
+        }
+    }
+}
+
 fn source_name(source: Option<i32>) -> String {
     match source {
         Some(1) => "local",
@@ -3038,5 +3320,36 @@ mod discography_tests {
         assert_eq!(group_name("OtherAlbums"), "other");
         assert_eq!(group_name("AppearanceAlbums"), "appearance");
         assert_eq!(group_name("LiveAlbums"), "livealbums");
+    }
+}
+
+#[cfg(test)]
+mod mix_tests {
+    use super::*;
+
+    #[test]
+    fn live_titles() {
+        for live in ["Diaken (Live)", "Live at Roadburn 2019", "Wear My Crown - Live", "MTV Unplugged", "Live", "Sarin [Live in Berlin]"] {
+            assert!(looks_live(live), "{live}");
+        }
+        for studio in ["Deliverance", "Oliver", "Alive", "Lives", "Delivery", "Mass VI"] {
+            assert!(!looks_live(studio), "{studio}");
+        }
+    }
+
+    #[test]
+    fn same_song_titles() {
+        assert_eq!(normalized_title("Diaken (Remastered 2019)"), normalized_title("Diaken"));
+        assert_eq!(normalized_title("Sarin - Single Version"), "sarin");
+        assert_ne!(normalized_title("Sarin"), normalized_title("Saturn"));
+    }
+
+    #[test]
+    fn shuffle_keeps_items() {
+        let mut items: Vec<u32> = (0..50).collect();
+        Shuffle::new().shuffle(&mut items);
+        let mut sorted = items.clone();
+        sorted.sort();
+        assert_eq!(sorted, (0..50).collect::<Vec<_>>());
     }
 }

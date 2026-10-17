@@ -281,6 +281,18 @@ pub async fn wrapper_roon_search() -> Result<bool, String> {
     Ok(false)
 }
 
+/// Roon's own queue shown (Ctrl+E in Roon), for the queue panel's button.
+/// False if Roon couldn't be put in front for it.
+#[tauri::command]
+pub async fn wrapper_roon_queue() -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        tauri::async_runtime::spawn_blocking(windows_wrapper::roon_queue).await.map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    Ok(false)
+}
+
 /// Roon's own search run for `text` (its results page comes up). False if
 /// Roon couldn't be put in front for it.
 #[tauri::command]
@@ -2425,13 +2437,13 @@ mod windows_wrapper {
         true
     }
 
-    /// Roon's own search box (Ctrl+F in Roon), for Search set to Roon.
-    /// Blocking; run off the main thread.
-    pub fn roon_search() -> bool {
-        use windows::Win32::UI::Input::KeyboardAndMouse::{
-            GetAsyncKeyState, SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-            VIRTUAL_KEY, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
-        };
+    /// Roon put in front for a shortcut: once the keys still held from our
+    /// own hotkey are let go (Ctrl+F with Alt still down is a different
+    /// shortcut), and only while the Wrapper holds Roon. The Wrapper comes
+    /// back above Roon without taking the focus, as when Roon is clicked
+    /// (see keep_order).
+    fn roon_to_front() -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT};
         use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, SetForegroundWindow};
         if STATE.load(Ordering::Relaxed) != OPEN {
             return false;
@@ -2454,9 +2466,8 @@ mod windows_wrapper {
         if held() {
             return false;
         }
-        // Roon in front, so its search box gets the typing (the Wrapper
-        // comes back above it without taking the focus, as when Roon is
-        // clicked; see keep_order)
+        // Roon in front, so the shortcut (and any typing after it) goes to
+        // Roon
         // SAFETY: plain window calls on a valid handle.
         unsafe {
             let _ = SetForegroundWindow(roon);
@@ -2467,9 +2478,12 @@ mod windows_wrapper {
             std::thread::sleep(Duration::from_millis(20));
         }
         // SAFETY: a plain query.
-        if unsafe { GetForegroundWindow() } != roon {
-            return false;
-        }
+        unsafe { GetForegroundWindow() == roon }
+    }
+
+    /// Ctrl plus `vk` pressed (into Roon, once it's in front).
+    fn press_ctrl(vk: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY) -> bool {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_CONTROL};
         let key = |vk: VIRTUAL_KEY, up: bool| INPUT {
             r#type: INPUT_KEYBOARD,
             Anonymous: INPUT_0 {
@@ -2480,12 +2494,29 @@ mod windows_wrapper {
                 },
             },
         };
-        let f = VIRTUAL_KEY(0x46);
-        let inputs = [key(VK_CONTROL, false), key(f, false), key(f, true), key(VK_CONTROL, true)];
-        let press = || {
-            // SAFETY: an array of keyboard inputs, with the size of one.
-            unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
-        };
+        let inputs = [key(VK_CONTROL, false), key(vk, false), key(vk, true), key(VK_CONTROL, true)];
+        // SAFETY: an array of keyboard inputs, with the size of one.
+        unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) == inputs.len() as u32 }
+    }
+
+    /// Roon's own queue (Ctrl+E in Roon: "Show Now Playing/Queue"), for
+    /// the queue panel's "Open Roon's queue", once our Now Playing's close
+    /// has taken Roon's player along. Blocking; run off the main thread.
+    pub fn roon_queue() -> bool {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while player_busy() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        roon_to_front() && press_ctrl(windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(0x45))
+    }
+
+    /// Roon's own search box (Ctrl+F in Roon), for Search set to Roon.
+    /// Blocking; run off the main thread.
+    pub fn roon_search() -> bool {
+        if !roon_to_front() {
+            return false;
+        }
+        let press = || press_ctrl(windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY(0x46));
         // The first search after Roon starts takes two presses (Roon's own
         // search button does too), so it's pressed again if Roon's search
         // field doesn't show

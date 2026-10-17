@@ -663,6 +663,7 @@ pub fn run() {
             library::library_search,
             library::library_play_album,
             library::library_play_radio,
+            library::library_play_artist_mix,
             library::library_playlists,
             library::library_playing_album,
             library::library_playlist_from_playing,
@@ -678,6 +679,7 @@ pub fn run() {
             wrapper::wrapper_roon_close,
             wrapper::wrapper_roon_search,
             wrapper::wrapper_roon_search_for,
+            wrapper::wrapper_roon_queue,
             skin::wrapper_colors,
             roonnav::wrapper_nav
         ])

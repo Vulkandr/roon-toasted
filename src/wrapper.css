@@ -1874,6 +1874,24 @@ html.invert-colors {
   border-bottom: 1px solid var(--border);
 }
 
+/* "Open Roon's queue": a small pill beside the close button */
+.queue-roon {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+
+.queue-roon:hover {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
 .queue-heading {
   flex: 1;
   min-width: 0;

@@ -2276,6 +2276,15 @@ function setQueueOpen(open) {
 queueBtn.addEventListener("click", () => setQueueOpen(queuePanel.hidden));
 $("#queue-close").addEventListener("click", () => setQueueOpen(false));
 
+// Roon's own queue instead of ours: our panel and Now Playing step aside
+// (Roon's player closes along with ours first), then Ctrl+E goes to Roon
+$("#queue-roon").addEventListener("click", async () => {
+  setQueueOpen(false);
+  await closeStage();
+  const shown = await invoke("wrapper_roon_queue").catch(() => false);
+  if (!shown) wrapperToast("Roon couldn't be brought to the front for its queue.");
+});
+
 // ===== Zone picker =========================================================
 
 // Checkmark next to the zone you're on (Lucide "check")
@@ -3365,12 +3374,15 @@ const RADIO_BY = [
   ["scene", "Scene"],
   ["roon", "Roon's similar"],
 ];
-const RADIO_COUNTS = [10, 20, 30];
+const RADIO_COUNTS = [5, 10, 20, 30, 50];
+const RADIO_PER_ARTIST = [1, 2, 3, 5];
 // Remembered between pages and runs (a convenience, so storage may fail)
-let radioPrefs = { by: "blend", scope: "library", count: 20, onlySeeds: false, libraryOnly: false };
+let radioPrefs = { by: "blend", scope: "library", count: 20, perArtist: 3, includeLive: false, libraryOnly: false };
 try {
   radioPrefs = { ...radioPrefs, ...JSON.parse(localStorage.getItem("wrapped-radio") || "{}") };
 } catch {}
+if (!RADIO_COUNTS.includes(radioPrefs.count)) radioPrefs.count = 20;
+if (!RADIO_PER_ARTIST.includes(radioPrefs.perArtist)) radioPrefs.perArtist = 3;
 function saveRadioPrefs() {
   try {
     localStorage.setItem("wrapped-radio", JSON.stringify(radioPrefs));
@@ -3509,15 +3521,15 @@ async function wrappedRadioPage(entry, ticket) {
   const discover = () => radioPrefs.by !== "roon" && radioPrefs.scope === "discover";
 
   const libraryPill = document.createElement("button");
-  const onlyPill = document.createElement("button");
+  const livePill = document.createElement("button");
   const paintSwitches = () => {
-    onlyPill.classList.toggle("selected", radioPrefs.onlySeeds);
+    livePill.classList.toggle("selected", radioPrefs.includeLive);
     libraryPill.classList.toggle("selected", radioPrefs.libraryOnly && !discover());
     libraryPill.disabled = discover();
     libraryPill.title = discover() ? "Discover seeds are outside your library" : "Play only tracks in your library";
   };
   for (const [pill, label, key, tip] of [
-    [onlyPill, "Only these artists", "onlySeeds", "Play only the seed artists' music, not Roon's wider pick around them"],
+    [livePill, "Include live recordings", "includeLive", "Live albums and songs are left out unless this is on"],
     [libraryPill, "Library tracks only", "libraryOnly", ""],
   ]) {
     pill.className = "wrapped-tab";
@@ -3532,7 +3544,7 @@ async function wrappedRadioPage(entry, ticket) {
   }
   const switches = document.createElement("div");
   switches.className = "wrapped-tabs small";
-  switches.append(onlyPill, libraryPill);
+  switches.append(livePill, libraryPill);
 
   const by = radioPills(RADIO_BY, (v) => v === radioPrefs.by, (v) => {
     radioPrefs.by = v;
@@ -3552,17 +3564,35 @@ async function wrappedRadioPage(entry, ticket) {
     saveRadioPrefs();
     fill();
   });
+  const perArtist = radioPills(RADIO_PER_ARTIST.map((n) => [String(n), String(n)]), (v) => Number(v) === radioPrefs.perArtist, (v) => {
+    radioPrefs.perArtist = Number(v);
+    saveRadioPrefs();
+    paintStatus();
+  });
   const scopeLine = radioControl("From", scope.row);
   scopeLine.hidden = radioPrefs.by === "roon";
-  controls.append(radioControl("Match by", by.row), scopeLine, radioControl("Artists", count.row), radioControl("Play", switches));
+  controls.append(radioControl("Match by", by.row), scopeLine, radioControl("Artists", count.row), radioControl("Songs each", perArtist.row), radioControl("Play", switches));
   paintSwitches();
 
   const chosen = () => rows.filter((r) => !left.has(r.name));
+  // Several artists go to Roon's radio as "these artists only": the Core
+  // queues their songs, shuffled (client.rs, RadioSeeds). Roon's own radio
+  // from one artist is in Roon already, so it isn't offered here.
   const paintStatus = () => {
     const n = chosen().length;
+    const on = zone ? ` on ${zone.name}` : "";
+    const each = radioPrefs.perArtist;
+    const top = each === 1 ? "The top song" : `Up to ${each} top songs`;
+    const live = radioPrefs.includeLive ? "" : ", no live recordings";
+    if (discover()) {
+      status.textContent = n
+        ? `${top} by each of the ${n} artist${n === 1 ? "" : "s"} below (none by ${entry.name}), one per album${live}, mixed so no artist plays twice in a row${on}. Click an artist to leave it out.`
+        : "No artists left to play; Discover leaves out the one it starts from.";
+      return;
+    }
     status.textContent = n
-      ? `${entry.name} and ${n} artist${n === 1 ? "" : "s"} like ${entry.album ? "it" : "them"}${radioPrefs.onlySeeds ? ", nobody else" : ", and Roon's picks around them"}${zone ? ` on ${zone.name}` : ""}. Click an artist to leave it out.`
-      : `${entry.name} alone${zone ? ` on ${zone.name}` : ""}.`;
+      ? `${top} by ${entry.name} and each of the ${n} artist${n === 1 ? "" : "s"} below, one per album${live}, mixed so no artist plays twice in a row${on}. Click an artist to leave it out.`
+      : `${top} by ${entry.name} alone${live}${on}.`;
   };
   const paint = (list, pending) => {
     rows = list;
@@ -3603,7 +3633,13 @@ async function wrappedRadioPage(entry, ticket) {
         const list = (entry.albumHandle ? x.similarArtists : x.similar) || [];
         return paint(list.slice(0, radioPrefs.count).map((p) => ({ name: p.name, handle: p.handle, imageKey: p.imageKey, performerId: p.performerId, why: [] })), 0);
       }
-      const answer = await invoke("wrapped_similar", { ...subject, by: radioPrefs.by, scope: radioPrefs.scope, limit: radioPrefs.count });
+      const answer = await invoke("wrapped_similar", {
+        ...subject,
+        by: radioPrefs.by,
+        scope: radioPrefs.scope,
+        limit: radioPrefs.count,
+        neighboursOnly: true,
+      });
       if (mine !== load || ticket !== wrappedTicket) return;
       if (!answer.rows.length && !answer.pending && answer.subjectEmpty) {
         rows = [];
@@ -3611,6 +3647,11 @@ async function wrappedRadioPage(entry, ticket) {
         return paintStatus();
       }
       paint(answer.rows, answer.pending);
+      if (!answer.byListeners) {
+        seeds.prepend(
+          wrappedNote(`Last.fm lists no listener neighbours for ${entry.name}, so these are matched by tags alone.`, "wrapped-note small"),
+        );
+      }
       if (answer.pending) {
         const unlisten = await listen("wrapped-similar", (event) => {
           if (mine !== load || ticket !== wrappedTicket) return unlisten();
@@ -3628,29 +3669,54 @@ async function wrappedRadioPage(entry, ticket) {
     if (!zone) return wrappedToast("Pick a zone first.");
     start.disabled = true;
     start.classList.add("busy");
+    // The big spinner over the page while the seeds are found in Roon and
+    // Roon gathers their songs (up to 50 lookups, then the queue)
+    const picked = chosen();
+    wrappedBusy(`Finding ${picked.length ? `${picked.length + 1} artists` : entry.name} in Roon...`);
     try {
-      const picked = chosen();
-      const handles = [];
-      for (const row of picked) {
-        const handle = await roonArtistHandle(row);
-        if (handle) handles.push(handle);
+      // (five lookups at a time, in the seeds' order)
+      const found = new Array(picked.length).fill(null);
+      let done = 0;
+      for (let i = 0; i < picked.length; i += 5) {
+        await Promise.all(
+          picked.slice(i, i + 5).map(async (row, j) => {
+            found[i + j] = await roonArtistHandle(row);
+            done += 1;
+            wrappedBusy(`Finding artists in Roon... ${done} of ${picked.length}`);
+          }),
+        );
       }
-      const artists = [entry.handle, ...handles].filter(Boolean);
-      const seedsOut = {
-        artists: [...new Set(artists)],
-        albums: entry.albumHandle ? [entry.albumHandle] : [],
-        libraryOnly: radioPrefs.libraryOnly && !discover(),
-        limitToSeed: radioPrefs.onlySeeds,
-      };
-      await invoke("library_play_radio", { zoneId: zone.zoneId, seeds: seedsOut });
+      const handles = found.filter(Boolean);
+      const count = handles.length + (discover() ? 0 : 1);
+      wrappedBusy(`Picking songs from ${count} artist${count === 1 ? "" : "s"}...`);
+      // (Discover leaves the starting artist out: only artists you don't have)
+      const artists = [...new Set([discover() ? null : entry.handle, ...handles].filter(Boolean))];
+      if (!artists.length) throw "Roon didn't find any of these artists.";
+      // Wrapped picks the songs itself (client.rs, play_artist_mix): Roon's
+      // own radio takes several artists only as "these artists only" and
+      // then queues all their songs, whole albums of one artist at a time
+      const played = await invoke("library_play_artist_mix", {
+        zoneId: zone.zoneId,
+        artists,
+        options: {
+          perArtist: radioPrefs.perArtist,
+          includeLive: radioPrefs.includeLive,
+          libraryOnly: radioPrefs.libraryOnly && !discover(),
+        },
+      });
       const missed = picked.length - handles.length;
+      const notes = [
+        missed ? `${missed} not found in Roon` : null,
+        played.liveSkipped ? `${played.liveSkipped} live left out` : null,
+      ].filter(Boolean);
       wrappedToast(
-        `Radio on ${zone.name}: ${entry.name} and ${handles.length} more${missed ? ` (${missed} not found in Roon)` : ""}`,
+        `Radio on ${zone.name}: ${played.songs} songs by ${played.artists} artist${played.artists === 1 ? "" : "s"}${notes.length ? ` (${notes.join(", ")})` : ""}`,
       );
     } catch (err) {
       console.error("radio", err);
       wrappedToast(typeof err === "string" ? err : "Roon didn't start the radio.");
     } finally {
+      wrappedBusy(null);
       start.disabled = false;
       start.classList.remove("busy");
     }

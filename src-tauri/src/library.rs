@@ -49,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -647,10 +647,19 @@ pub async fn library_play_playlist(app: AppHandle, zone_id: String, handle: Stri
 /// (`seeds: { tracks, albums, artists, genres, libraryOnly }`, handles from
 /// the pages).
 #[tauri::command]
-pub async fn library_play_radio(app: AppHandle, zone_id: String, seeds: RadioSeeds) -> Result<(), String> {
+pub async fn library_play_radio(app: AppHandle, zone_id: String, seeds: RadioSeeds) -> Result<Option<i32>, String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.play_radio(&zone_id, &seeds).await.map_err(describe)
+}
+
+/// The Wrapped radio: a mix of the artists' top songs (by handle), queued
+/// on the zone at once (see `play_artist_mix`).
+#[tauri::command]
+pub async fn library_play_artist_mix(app: AppHandle, zone_id: String, artists: Vec<String>, options: MixOptions) -> Result<MixPlayed, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.play_artist_mix(&zone_id, &artists, &options).await.map_err(describe)
 }
 
 /// Plays an album (by handle) on the zone right now.
