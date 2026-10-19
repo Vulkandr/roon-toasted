@@ -142,7 +142,7 @@ pub enum SimilarScope {
     Discover,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WrappedSettings {
     /// The user's own Last.fm API key (last.fm/api/account/create); without
@@ -150,6 +150,35 @@ pub struct WrappedSettings {
     pub lastfm_key: String,
     pub similar_by: SimilarBy,
     pub similar_scope: SimilarScope,
+    /// Wrapped Discovery (discover.rs): the weekly lists, ratings, the
+    /// player's "Suggested because", and the zone watching behind them.
+    /// Off, none of it shows or runs; what it kept stays on disk.
+    pub discovery: bool,
+    /// Tier 2, the language model (judge.rs): which service, its key (or
+    /// Ollama's address), the model name (empty: the service's default),
+    /// and how much say it gets ("light": keep or drop, pick the song;
+    /// "heavy": also reorder and add, later).
+    pub llm_provider: String,
+    pub llm_key: String,
+    pub llm_model: String,
+    pub llm_url: String,
+    pub llm_mode: String,
+}
+
+impl Default for WrappedSettings {
+    fn default() -> Self {
+        WrappedSettings {
+            lastfm_key: String::new(),
+            similar_by: SimilarBy::default(),
+            similar_scope: SimilarScope::default(),
+            discovery: true,
+            llm_provider: "anthropic".into(),
+            llm_key: String::new(),
+            llm_model: String::new(),
+            llm_url: String::new(),
+            llm_mode: "light".into(),
+        }
+    }
 }
 
 impl WrappedSettings {
@@ -191,10 +220,13 @@ pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value) -> Re
     }
     let next: WrappedSettings = serde_json::from_value(value).map_err(|e| format!("Bad value: {e}"))?;
     next.save(&app);
+    crate::discover::set_enabled(next.discovery);
+    // (Toasted's Settings window shows Wrapped Discovery too)
+    let _ = app.emit("wrapped-settings-changed", &next);
     Ok(next)
 }
 
-fn now_ms() -> i64 {
+pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -324,6 +356,52 @@ pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<Histor
         }
     });
     Ok(wrapped.status())
+}
+
+/// Reads the plays newer than the copy from the Core and keeps them,
+/// waiting for it (for a build that needs the latest plays). A full read
+/// isn't done here; without a complete copy it just returns.
+pub async fn history_catch_up(app: &AppHandle) -> Result<usize, String> {
+    let wrapped = app.state::<Wrapped>();
+    wrapped.ensure_loaded(app);
+    let stop_at = {
+        let store = wrapped.store.lock().unwrap();
+        if !store.complete {
+            return Ok(0);
+        }
+        store.plays.first().map(|p| p.played_at)
+    };
+    if wrapped.syncing.swap(true, Ordering::SeqCst) {
+        return Ok(0);
+    }
+    let Some(client) = app.state::<Library>().client() else {
+        wrapped.syncing.store(false, Ordering::SeqCst);
+        return Err("Not connected to the Roon Core's library yet.".into());
+    };
+    let quiet = |_: usize, _: usize| {};
+    let result = client.history_since(200_000, stop_at, &quiet).await;
+    wrapped.syncing.store(false, Ordering::SeqCst);
+    let history = result.map_err(|e| format!("Reading the history failed: {e}"))?;
+    let added = {
+        let mut store = wrapped.store.lock().unwrap();
+        let known: std::collections::HashSet<_> = store.plays.iter().map(play_key).collect();
+        let mut fresh: Vec<Play> = history
+            .plays
+            .into_iter()
+            .filter(|p| stop_at.is_none_or(|at| p.played_at > at))
+            .filter(|p| !known.contains(&play_key(p)))
+            .collect();
+        let added = fresh.len();
+        fresh.append(&mut store.plays);
+        store.plays = fresh;
+        store.plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
+        store.total = history.total;
+        store.synced_at = Some(now_ms());
+        added
+    };
+    wrapped.save(app);
+    println!("[wrapped] history caught up: {added} new plays");
+    Ok(added)
 }
 
 /// The newest plays in the copy, `limit` from `offset`.
@@ -531,6 +609,13 @@ pub struct HistoryArtist {
 }
 
 impl Wrapped {
+    /// Runs `f` over the copy's plays (newest first).
+    pub fn with_plays<T>(&self, app: &AppHandle, f: impl FnOnce(&[Play]) -> T) -> T {
+        self.ensure_loaded(app);
+        let store = self.store.lock().unwrap();
+        f(&store.plays)
+    }
+
     /// Every artist in the copy, most played first (listens of at least
     /// half a track).
     pub fn artists(&self, app: &AppHandle) -> Vec<HistoryArtist> {

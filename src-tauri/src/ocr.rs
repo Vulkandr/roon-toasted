@@ -107,24 +107,38 @@ mod imp {
             return None;
         }
         let min_height = 26.0 * scale;
-        let lines = read_area(&pixels, width, left, top, narrow, bottom)?;
-        let (name, title) = match pick_name(lines, min_height) {
-            Some(found) => found,
-            None => {
-                println!("[ocr] title read: None");
-                return None;
-            }
+        // As the picture is, then (nothing found) with only the white
+        // lettering kept and a little deeper: a wide window puts the title
+        // over the middle of the artist's photo, where the engine reads
+        // nothing at all (a maximized Roon on Absent in Body's page)
+        if let Some(name) = read_title(&pixels, width, left, top, narrow, bottom, min_height, false) {
+            return Some(name);
+        }
+        let deeper = ((height as f32) * 0.62) as i32;
+        let name = read_title(&pixels, width, left, top, narrow, deeper, min_height, true);
+        println!("[ocr] title read (white lettering only): {name:?}");
+        name
+    }
+
+    /// The title in the crop from (`left`, `top`) to (`narrow`, `bottom`),
+    /// read again out to the page's right edge when it runs into the
+    /// crop's (an artist without a photo gets a placeholder circle that
+    /// pushes the name right), keeping only the lines that start where the
+    /// title starts. `bright`: only near-white pixels kept (see `bright_only`).
+    #[allow(clippy::too_many_arguments)]
+    fn read_title(pixels: &[u8], width: i32, left: i32, top: i32, narrow: i32, bottom: i32, min_height: f32, bright: bool) -> Option<String> {
+        let lines = read_area(pixels, width, left, top, narrow, bottom, bright)?;
+        let Some((name, title)) = pick_name(lines, min_height) else {
+            println!("[ocr] title read: None");
+            return None;
         };
-        // A title that runs into the crop's right edge is cut off (an artist
-        // without a photo gets a placeholder circle that pushes the name
-        // right): read again out to the page's right edge, keeping only the
-        // lines that start where the title starts
         if title.left + title.width < (narrow - left) as f32 - 6.0 {
             println!("[ocr] title read: {name:?}");
             return Some(name);
         }
+        let scale = (width as f32 / 1440.0).max(0.6);
         let wide = width - (20.0 * scale) as i32;
-        let lines = read_area(&pixels, width, left, top, wide, bottom)?;
+        let lines = read_area(pixels, width, left, top, wide, bottom, bright)?;
         let aligned: Vec<Line> = lines.into_iter().filter(|l| (l.left - title.left).abs() < title.height * 0.6).collect();
         let name = pick_name(aligned, min_height).map(|(name, _)| name);
         println!("[ocr] title read (cut at first, read wider): {name:?}");
@@ -133,8 +147,11 @@ mod imp {
 
     /// The lines in the crop of `pixels` from (`left`, `top`) to (`right`,
     /// `bottom`), logged.
-    fn read_area(pixels: &[u8], width: i32, left: i32, top: i32, right: i32, bottom: i32) -> Option<Vec<Line>> {
+    fn read_area(pixels: &[u8], width: i32, left: i32, top: i32, right: i32, bottom: i32, bright: bool) -> Option<Vec<Line>> {
+        let height = (pixels.len() / 4) as i32 / width.max(1);
+        let bottom = bottom.min(height);
         let crop = crop(pixels, width, left, top, right - left, bottom - top);
+        let crop = if bright { super::bright_only(&crop) } else { crop };
         let lines = match recognize(&crop, right - left, bottom - top) {
             Ok(lines) => lines,
             Err(e) => {
@@ -144,7 +161,36 @@ mod imp {
         };
         let seen: Vec<String> = lines.iter().take(12).map(|l| format!("\"{}\"@{:.0},{:.0} w{:.0} h{:.0}", l.text, l.left, l.top, l.width, l.height)).collect();
         println!("[ocr] title area ({}x{} from {left},{top}): {}", right - left, bottom - top, seen.join("  "));
+        // (the last try finding nothing at all: the picture kept to look at)
+        if lines.is_empty() && bright {
+            keep_miss(pixels, width, &crop);
+        }
         Some(lines)
+    }
+
+    /// Nothing read at all: the crop's mean brightness logged and Roon's
+    /// whole picture kept as `ocr-miss.bmp` in the app data folder, to see
+    /// what the engine was given (a blank capture, or a page it can't read).
+    fn keep_miss(pixels: &[u8], width: i32, crop: &[u8]) {
+        let mean = |px: &[u8]| -> u64 {
+            let n = (px.len() / 4) as u64;
+            if n == 0 {
+                return 0;
+            }
+            px.chunks_exact(4).map(|p| (p[0] as u64 + p[1] as u64 + p[2] as u64) / 3).sum::<u64>() / n
+        };
+        let height = if width > 0 { (pixels.len() / 4) as i32 / width } else { 0 };
+        let kept = std::env::var("APPDATA")
+            .ok()
+            .map(|dir| std::path::Path::new(&dir).join("com.vulkan.roon-toasted").join("ocr-miss.bmp"))
+            .is_some_and(|path| std::fs::write(path, super::bmp(pixels, width, height)).is_ok());
+        println!(
+            "[ocr] nothing read: the crop's mean brightness {} of 255, the whole picture's {} ({}x{}); kept as ocr-miss.bmp: {kept}",
+            mean(crop),
+            mean(pixels),
+            width,
+            height
+        );
     }
 
     /// Reads Roon's content area until a line says `wanted` (letters and
@@ -366,5 +412,64 @@ mod imp {
 mod imp {
     pub fn read_page_name() -> Option<String> {
         None
+    }
+}
+
+/// Only the near-white pixels of a BGRA picture, as black on white: Roon's
+/// titles are white, and over a photo the engine finds them once the photo
+/// is gone (Absent in Body's faces have no pixel that bright; the lettering
+/// is 255).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn bright_only(bgra: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bgra.len());
+    for px in bgra.chunks_exact(4) {
+        let v = if px[0].min(px[1]).min(px[2]) >= 225 { 0 } else { 255 };
+        out.extend_from_slice(&[v, v, v, 255]);
+    }
+    out
+}
+
+/// A 32-bit top-down BMP of BGRA pixels (for looking at what OCR was given).
+#[cfg_attr(not(windows), allow(dead_code))]
+fn bmp(bgra: &[u8], width: i32, height: i32) -> Vec<u8> {
+    let size = (width.max(0) * height.max(0) * 4) as usize;
+    let size = size.min(bgra.len());
+    let data = size as u32;
+    let mut out = Vec::with_capacity(54 + size);
+    out.extend_from_slice(b"BM");
+    out.extend_from_slice(&(54 + data).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&54u32.to_le_bytes());
+    out.extend_from_slice(&40u32.to_le_bytes());
+    out.extend_from_slice(&width.to_le_bytes());
+    out.extend_from_slice(&(-height).to_le_bytes()); // negative: rows top to bottom
+    out.extend_from_slice(&1u16.to_le_bytes());
+    out.extend_from_slice(&32u16.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // BI_RGB
+    out.extend_from_slice(&data.to_le_bytes());
+    out.extend_from_slice(&2835i32.to_le_bytes());
+    out.extend_from_slice(&2835i32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&bgra[..size]);
+    out
+}
+
+#[cfg(test)]
+mod bmp_tests {
+    #[test]
+    fn header_and_rows() {
+        let px = [1u8, 2, 3, 255, 4, 5, 6, 255];
+        let out = super::bmp(&px, 2, 1);
+        assert_eq!(&out[0..2], b"BM");
+        assert_eq!(out.len(), 54 + 8);
+        assert_eq!(i32::from_le_bytes(out[22..26].try_into().unwrap()), -1);
+        assert_eq!(&out[54..], &px);
+    }
+
+    #[test]
+    fn bright_only_keeps_white_lettering() {
+        let px = [255u8, 255, 255, 255, 200, 230, 240, 255, 230, 226, 228, 255];
+        assert_eq!(super::bright_only(&px), vec![0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
     }
 }

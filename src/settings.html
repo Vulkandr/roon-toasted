@@ -340,6 +340,7 @@
       <section class="card wrapper-card" data-new="wrapper-card">
         <!-- The card's own switch sits next to its title -->
         <div class="card-head">
+          <button id="wrapper-open" class="small" title="Open the Wrapper">Open</button>
           <span class="badge">Experimental</span>
           <h2>The Wrapper</h2>
           <div class="switch-group" id="wrapper-group">
@@ -375,8 +376,16 @@
               <span class="switch-label label-on">On</span>
             </div>
           </div>
-          <div class="setting wrapper-option update-action-row">
-            <button id="wrapper-open">Open Wrapper</button>
+          <div class="setting wrapper-option" title="Discover Weekly, Library Rediscover, rating their songs and &quot;Suggested because&quot; in the player. Off, none of it shows or runs; your ratings and the lists in Roon are kept.">
+            <span class="setting-name">Wrapped Discovery</span>
+            <div class="switch-group" id="wrapper-discovery-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="wrapper-discovery" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
           </div>
         </div>
 

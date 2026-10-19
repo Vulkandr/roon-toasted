@@ -10,6 +10,8 @@ use tauri::{
 mod autostart;
 mod browse;
 mod changelog;
+mod discover;
+mod judge;
 mod hotkeys;
 mod icon;
 mod launch;
@@ -434,6 +436,8 @@ pub fn run() {
         .manage(launch::StartupMode::default())
         .manage(library::Library::default())
         .manage(wrapped::Wrapped::default())
+        .manage(discover::Discover::default())
+        .manage(judge::Judge::default())
         .manage(wrapped::LibraryCopy::default())
         .manage(tags::Tags::default())
         .manage(update::Updates::default())
@@ -607,6 +611,7 @@ pub fn run() {
             hotkeys::pause_hotkeys,
             queue::roon_queue,
             queue::roon_play_from_here,
+            queue::roon_queue_start,
             toast::toast_present,
             toast::toast_hide,
             toast::toast_test,
@@ -649,6 +654,13 @@ pub fn run() {
             ocr::wrapper_open_in_roon,
             wrapped::wrapped_library_status,
             wrapped::wrapped_library_sync,
+            discover::wrapper_build,
+            discover::wrapped_discover_status,
+            discover::wrapped_discover_build,
+            discover::wrapped_discover_ratings,
+            discover::wrapped_discover_vote,
+            discover::wrapped_discover_reset,
+            judge::wrapped_llm_test,
             wrapped::wrapped_settings_get,
             wrapped::wrapped_settings_update,
             tags::wrapped_artist_tags,
@@ -664,12 +676,15 @@ pub fn run() {
             library::library_play_album,
             library::library_play_radio,
             library::library_play_artist_mix,
+            library::library_save_queue,
+            library::library_queue_songs,
             library::library_playlists,
             library::library_playing_album,
             library::library_playlist_from_playing,
             library::library_create_playlist,
             library::library_delete_playlist,
             library::library_play_playlist,
+            library::library_queue_play_from,
             wrapper::wrapper_hole,
             wrapper::wrapper_status,
             wrapper::wrapper_put_back,

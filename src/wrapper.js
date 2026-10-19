@@ -78,6 +78,7 @@ const darkScheme = matchMedia("(prefers-color-scheme: dark)");
 
 let zoneList = [];
 let zone = null; // the Toaster's zone, from Rust
+let ratingReady = false; // the Discover thumbs are set up (renderRating)
 let artKey; // the art showing (undefined at first, so the first render always draws it)
 let draggingSeek = false;
 let draggingVolume = false;
@@ -234,6 +235,7 @@ function render(payload) {
   nextBtn.disabled = !zone?.canNext;
   playPauseBtn.disabled = !zone || (!zone.canPlay && !zone.canPause);
   playPauseBtn.classList.toggle("playing", zone?.state === "playing");
+  queuePanel.classList.toggle("paused", zone?.state !== "playing");
   shuffleBtn.disabled = !zone;
   repeatBtn.disabled = !zone;
   radioBtn.disabled = !zone;
@@ -823,6 +825,8 @@ $("#stage-minimize").addEventListener("click", () => closeStage());
 // Puts every piece where the layout says, in pixels: first its size, then
 // (knowing how big it came out) its place
 function layoutStage() {
+  // (the Discover thumbs move between the info and Wrapped pieces)
+  if (ratingReady) renderRating();
   renderFormat();
   styleControls();
   const W = stageCanvas.clientWidth;
@@ -1618,6 +1622,8 @@ function refreshEditor() {
     labelScale.value = Math.round((withLabels.labelScale || 1) * 100);
     labelScaleValue.textContent = `${labelScale.value}%`;
   }
+  // (the accent fill up to the value, as the player's sliders have)
+  for (const range of [textEdgeSize, iconEdgeSize, labelScale]) setFill(range);
   const withBar = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
   editorBar.hidden = !withBar;
   editorWaveform.hidden = selected !== "seek";
@@ -1709,6 +1715,7 @@ function setEdge(kind, value) {
   }
   changed();
 }
+for (const range of [textEdgeSize, iconEdgeSize, labelScale]) range.addEventListener("input", () => setFill(range));
 textEdgeSelect.addEventListener("change", () => setEdge("text", { textEdge: textEdgeSelect.value, textEdgeSize: Number(textEdgeSize.value) }));
 textEdgeSize.addEventListener("input", () => setEdge("text", { textEdge: textEdgeSelect.value, textEdgeSize: Number(textEdgeSize.value) }));
 iconEdgeSelect.addEventListener("change", () => setEdge("icon", { iconEdge: iconEdgeSelect.value, iconEdgeSize: Number(iconEdgeSize.value) }));
@@ -2127,6 +2134,7 @@ function renderFormat() {
 }
 
 function renderLibrary() {
+  renderRating();
   renderQuality();
   renderFormat();
   syncWaveform();
@@ -2162,6 +2170,199 @@ function renderLibrary() {
   }
 }
 
+// ----- Rating the Discover lists' songs (discover.rs) -----
+//
+// While a song from 🌟 Discover Weekly or 💎 Library Rediscover plays,
+// thumbs sit above its title: up makes its artist a starting point for the
+// next lists, down keeps it (and what sounds like it) out. A heart on such
+// a song counts as a milder thumbs up.
+
+let discoverRatings = { songs: [], votes: {} };
+const rateBox = $("#rate");
+const RATE_HELP = rateBox.title;
+// (and in Now Playing, under the Wrapped piece's buttons, with why the
+// song is there; the info piece's thumbs step aside while it shows)
+const pieceRate = $("#wrapped-piece-rate");
+const pieceWhy = pieceRate.querySelector(".wrapped-piece-why");
+
+// Wrapped Discovery (Wrapped's Settings): off, the star, the thumbs and
+// the Discover page go away (the html element's "no-discovery" class)
+async function discoveryEnabled() {
+  if (!wrappedSettings) wrappedSettings = await invoke("wrapped_settings_get").catch(() => null);
+  return wrappedSettings?.discovery !== false;
+}
+
+async function loadDiscoverRatings() {
+  const on = await discoveryEnabled();
+  document.documentElement.classList.toggle("no-discovery", !on);
+  if (!on) {
+    discoverRatings = { songs: [], votes: {} };
+    renderRating();
+    markDiscoverFresh();
+    return;
+  }
+  try {
+    discoverRatings = await invoke("wrapped_discover_ratings");
+  } catch {
+    return;
+  }
+  renderRating();
+  markDiscoverFresh();
+}
+
+// The star's dot: a list built since the Discover page was last opened
+const discoverBtn = $("#discover-btn");
+function markDiscoverFresh() {
+  let seen = 0;
+  try {
+    seen = Number(localStorage.getItem("wrapped-discover-seen")) || 0;
+  } catch {}
+  const newest = Math.max(0, ...(discoverRatings.newest || []));
+  const fresh = newest > seen;
+  discoverBtn.classList.toggle("fresh", fresh);
+  document.querySelector(".wrapped-piece-btn.discover")?.classList.toggle("fresh", fresh);
+}
+function discoverSeen() {
+  try {
+    localStorage.setItem("wrapped-discover-seen", String(Date.now()));
+  } catch {}
+  markDiscoverFresh();
+}
+discoverBtn.addEventListener("click", () => openWrappedPage({ page: "discover" }));
+// Switched in Toasted's Settings window (or here): the star, thumbs and
+// menu follow, and an open Settings or Discover page redraws
+listen("wrapped-settings-changed", (event) => {
+  const was = wrappedSettings?.discovery !== false;
+  wrappedSettings = event.payload;
+  if ((wrappedSettings?.discovery !== false) === was) return;
+  loadDiscoverRatings();
+  if (!wrapped.hidden && ["settings", "discover", "home"].includes(wrappedStack.at(-1)?.page)) renderWrapped();
+});
+
+// The list song playing now, or null: by Roon's track id, else by title
+// and artist (a stream may come back under another id)
+function discoverSongNow() {
+  const track = zone ? libraryTracks[zone.zoneId] : null;
+  const np = zone?.nowPlaying;
+  if (!np || !discoverRatings.songs.length) return null;
+  const id = track?.trackId != null ? String(track.trackId) : null;
+  return (
+    discoverRatings.songs.find((s) => id && s.trackId === id) ||
+    discoverRatings.songs.find(
+      (s) => s.title && s.title === (track?.title || np.title) && (np.artist || "").toLowerCase().includes(s.artist.toLowerCase()),
+    ) ||
+    null
+  );
+}
+
+let heartSent = "";
+function renderRating() {
+  const song = discoverSongNow();
+  const inPiece = !stage.hidden && layout?.pieces?.wrapped?.visible !== false;
+  rateBox.hidden = !song || inPiece;
+  pieceRate.hidden = !song;
+  if (!song) return;
+  const key = song.artist.toLowerCase();
+  const mine = discoverRatings.votes[key];
+  for (const btn of document.querySelectorAll(".rate-btn[data-vote]")) {
+    btn.classList.toggle("on", Number(btn.dataset.vote) === mine?.vote);
+  }
+  rateBox.dataset.which = song.which;
+  // The reason: a small lead line, then the artists of yours it came from
+  // large (links to their Wrapped pages); for a Rediscover song, its lead
+  // ("In your library, never played") on top
+  pieceWhy.replaceChildren();
+  const names = song.because || [];
+  let reason = song.reason || "";
+  if (names.length) {
+    const first = reason.indexOf(names[0]);
+    const lead = document.createElement("div");
+    lead.className = "wrapped-piece-why-lead";
+    lead.textContent = (first > 0 ? reason.slice(0, first) : "Suggested because you listened to ").trim();
+    const big = document.createElement("div");
+    big.className = "wrapped-piece-why-names";
+    names.forEach((name, i) => {
+      if (i) big.append(" and ");
+      const link = document.createElement("button");
+      link.className = "wrapped-piece-link";
+      link.textContent = name;
+      link.title = `Open ${name} in Wrapped`;
+      link.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        if (editing) return;
+        // (exact name first; then letters only, "Septic Flesh" being
+        // Roon's "Septicflesh")
+        let handle = await roonArtistHandle({ name });
+        if (!handle) {
+          const plain = (t) => t.toLowerCase().replace(/[^a-z0-9]/g, "");
+          try {
+            const hits = await invoke("library_search", { query: name });
+            handle = hits.artists.find((a) => plain(a.name) === plain(name))?.handle || null;
+          } catch {}
+        }
+        if (!handle) return wrappedToastStage(`Roon didn't find ${name}.`);
+        await closeStage();
+        if (stage.hidden) openWrappedPage({ page: "artist", handle });
+      });
+      big.append(link);
+    });
+    pieceWhy.append(lead, big);
+    if (song.why) {
+      const line = document.createElement("div");
+      line.className = "wrapped-piece-why-text";
+      line.textContent = song.why;
+      pieceWhy.append(line);
+    }
+  } else if (reason) {
+    const lead = document.createElement("div");
+    lead.className = "wrapped-piece-why-lead";
+    lead.textContent = reason;
+    pieceWhy.append(lead);
+  }
+  pieceWhy.hidden = !song.reason;
+  rateBox.title = song.reason ? `${song.reason}.\n\n${RATE_HELP}` : RATE_HELP;
+  // A heart on a list song counts too (once per change)
+  const hearted = !!(zone && libraryTracks[zone.zoneId]?.favorite);
+  const state = `${key}|${hearted}`;
+  if (hearted !== !!mine?.heart && heartSent !== state) {
+    heartSent = state;
+    invoke("wrapped_discover_vote", { artist: song.artist, heart: hearted })
+      .then((r) => {
+        discoverRatings = r;
+      })
+      .catch(() => {});
+  }
+}
+
+async function rateNow(value) {
+  const song = discoverSongNow();
+  if (!song) return;
+  const current = discoverRatings.votes[song.artist.toLowerCase()]?.vote || 0;
+  // (the same thumb again takes it back)
+  const vote = current === value ? 0 : value;
+  try {
+    discoverRatings = await invoke("wrapped_discover_vote", { artist: song.artist, vote });
+  } catch (err) {
+    return wrapperToast(String(err));
+  }
+  renderRating();
+  wrapperToast(
+    vote === 1
+      ? `More like ${song.artist} in your next lists`
+      : vote === -1
+        ? `No more ${song.artist}, or bands that sound like them`
+        : `Rating for ${song.artist} taken back`,
+  );
+}
+
+for (const btn of document.querySelectorAll(".rate-btn[data-vote]")) {
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    rateNow(Number(btn.dataset.vote));
+  });
+}
+ratingReady = true;
+
 libraryBtn.addEventListener("click", async () => {
   const track = zone ? libraryTracks[zone.zoneId] : null;
   if (!zone || !track || libraryBusy) return;
@@ -2192,6 +2393,12 @@ function setLibraryStatus(status) {
   renderLibrary();
   // A Wrapped page waiting for the link (or showing handles from a dropped one)
   if (was !== libraryReady && !wrapped.hidden) renderWrapped();
+  // The queue panel's played songs, ready before it's first opened; the
+  // Discover lists' songs, for the thumbs
+  if (libraryReady && !was) {
+    loadQueueHistory(true);
+    loadDiscoverRatings();
+  }
 }
 
 // ===== Queue panel =========================================================
@@ -2225,6 +2432,12 @@ function queueRow(item, isNow) {
     play.className = "queue-play";
     play.innerHTML = PLAY_ICON;
     artBox.append(play);
+  } else {
+    // (moving bars on the playing song, as Roon has)
+    const eq = document.createElement("span");
+    eq.className = "queue-eq";
+    eq.innerHTML = "<i></i><i></i><i></i>";
+    artBox.append(eq);
   }
 
   const text = document.createElement("div");
@@ -2250,13 +2463,154 @@ function queueRow(item, isNow) {
   return row;
 }
 
-function renderQueue(payload) {
+// A song already played (from the Core's own queue; the Roon API's queue
+// starts at the playing one)
+function playedRow(song) {
+  const row = queueRow(
+    { title: song.title, artist: song.artist, imageKey: song.imageKey, length: song.lengthSeconds },
+    false,
+  );
+  row.className = "queue-item played";
+  // A copy without the Roon API's play-from-here (it only knows the songs
+  // still to come); the Core's own, by item id, takes its place
+  const copy = row.cloneNode(true);
+  if (song.itemId != null) {
+    copy.classList.add("playable");
+    copy.addEventListener("click", () => {
+      invoke("library_queue_play_from", { zoneId: zone.zoneId, itemId: song.itemId }).catch((err) => wrapperToast(String(err)));
+    });
+  } else {
+    copy.querySelector(".queue-play")?.remove();
+  }
+  return copy;
+}
+
+// Where the zone's current queue began (queue.rs notes it when a queue is
+// started or replaced): the played part goes back that far, not through
+// everything Roon ever played
+async function queueStart() {
+  try {
+    return (await invoke("roon_queue_start", { zoneId: zone.zoneId })) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// The played part of the queue (library.rs, queue_songs), fetched when the
+// playing song changes and once the library link is up, whether the panel
+// is open or not (it takes a moment, so it's ready by the time it opens),
+// and again when the panel opens
+let queueHistory = [];
+let historyFor = "";
+let historyZone = "";
+let historyTimer = null;
+let scrolledFor = "";
+function loadQueueHistory(force = false) {
+  clearTimeout(historyTimer);
+  historyTimer = setTimeout(async () => {
+    if (!zone || !libraryReady) return;
+    const key = `${zone.zoneId}|${queue?.items?.[0]?.queueItemId ?? ""}`;
+    if (!force && key === historyFor) return;
+    historyFor = key;
+    // (another zone's played songs never show under this one's)
+    if (historyZone !== zone.zoneId) {
+      historyZone = zone.zoneId;
+      queueHistory = [];
+    }
+    try {
+      // (a queue begun in Roon, with no start noted: its last 30 items)
+      const songs = await invoke("library_queue_songs", { zoneId: zone.zoneId, start: await queueStart(), recent: 30 });
+      queueHistory = songs.filter((s) => s.played);
+    } catch (err) {
+      console.warn("library_queue_songs", err);
+      queueHistory = [];
+    }
+    if (queue) renderQueue(queue, true);
+  }, 400);
+}
+
+// Songs jumped over before the playing one fold into one block, as Roon's
+// "N skipped items": a count tile and Expand / Collapse, the songs inside
+// the same block (one background, a rail down its side) when open
+const openSkips = new Set(); // folds opened, by their first song
+function playedRows(songs) {
+  const rows = [];
+  for (let i = 0; i < songs.length; ) {
+    if (!songs[i].skipped) {
+      rows.push(playedRow(songs[i]));
+      i += 1;
+      continue;
+    }
+    let end = i;
+    while (end < songs.length && songs[end].skipped) end += 1;
+    const run = songs.slice(i, end);
+    const foldKey = `${run[0].itemId ?? ""}|${run[0].title}`;
+    const showSkipped = openSkips.has(foldKey);
+    const group = document.createElement("li");
+    group.className = showSkipped ? "queue-skip-group open" : "queue-skip-group";
+
+    const head = document.createElement("div");
+    head.className = "queue-skip-head";
+    const count = document.createElement("span");
+    count.className = "queue-skip-count";
+    count.textContent = run.length;
+    const text = document.createElement("div");
+    text.className = "queue-text";
+    const label = document.createElement("div");
+    label.className = "queue-item-title";
+    label.textContent = `${run.length} skipped song${run.length === 1 ? "" : "s"}`;
+    const toggle = document.createElement("div");
+    toggle.className = "queue-item-artist";
+    toggle.textContent = showSkipped ? "Collapse ▴" : "Expand ▾";
+    text.append(label, toggle);
+    head.append(count, text);
+    head.addEventListener("click", () => {
+      if (showSkipped) openSkips.delete(foldKey);
+      else openSkips.add(foldKey);
+      renderQueue(queue, true);
+    });
+    group.append(head);
+
+    if (showSkipped) {
+      const list = document.createElement("ol");
+      list.className = "queue-skip-list";
+      list.append(...run.map(playedRow));
+      group.append(list);
+    }
+    rows.push(group);
+    i = end;
+  }
+  return rows;
+}
+
+function renderQueue(payload, fromHistory = false) {
   queue = payload;
   // The player bar shows the queue's first track while nothing is loaded
   if (lastZones && zone && !zone.nowPlaying) render(lastZones);
-  queueEmpty.hidden = payload.items.length > 0;
-  queueList.replaceChildren(...payload.items.map((item, i) => queueRow(item, i === 0)));
+  queueEmpty.hidden = payload.items.length > 0 || queueHistory.length > 0;
+  const rows = playedRows(queueHistory);
+  let nowLabel = null;
+  if (rows.length && payload.items.length) {
+    nowLabel = document.createElement("li");
+    nowLabel.className = "queue-now-label";
+    nowLabel.textContent = "Now playing";
+    rows.push(nowLabel);
+  }
+  rows.push(...payload.items.map((item, i) => queueRow(item, i === 0)));
+  queueList.replaceChildren(...rows);
   updateQueueMore();
+  // The playing song near the top with the two rows before it in view (as
+  // Roon's queue keeps the skipped block above "Now playing"), the older
+  // ones above to scroll up to; once per song, so looking back isn't undone
+  const key = `${zone?.zoneId}|${payload.items[0]?.queueItemId ?? ""}|${queueHistory.length}`;
+  if (nowLabel && key !== scrolledFor) {
+    scrolledFor = key;
+    const scroller = queuePanel.querySelector(".queue-scroll");
+    let top = nowLabel;
+    for (let n = 0; n < 2 && top.previousElementSibling; n += 1) top = top.previousElementSibling;
+    scroller.scrollTop += top.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 4;
+  }
+  if (!fromHistory) loadQueueHistory();
 }
 
 // "+ N more tracks not shown" when the queue is longer than the 100 shown
@@ -2270,11 +2624,65 @@ function updateQueueMore() {
 function setQueueOpen(open) {
   queuePanel.hidden = !open;
   queueBtn.classList.toggle("on", open);
+  if (!open) hideQueueSave();
+  else {
+    // What's already fetched shows (and scrolls into place) right away;
+    // a fresh copy follows
+    scrolledFor = "";
+    if (queue) renderQueue(queue, true);
+    loadQueueHistory(true);
+  }
   reportHole();
 }
 
 queueBtn.addEventListener("click", () => setQueueOpen(queuePanel.hidden));
 $("#queue-close").addEventListener("click", () => setQueueOpen(false));
+
+// A date for playlist names ("Oct 17, 1:55 AM")
+function playlistStamp() {
+  return new Date().toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+// The whole queue (played songs too) as a Roon playlist (library.rs),
+// under a name asked for first; left empty, the dated default
+const queueSave = $("#queue-save");
+const queueSaveForm = $("#queue-save-form");
+const queueSaveName = $("#queue-save-name");
+function hideQueueSave() {
+  queueSaveForm.hidden = true;
+}
+queueSave.addEventListener("click", () => {
+  if (!zone) return wrapperToast("Pick a zone first.");
+  queueSaveName.value = "";
+  queueSaveName.placeholder = `${WRAPPED_PREFIX}Queue, ${playlistStamp()}`;
+  queueSaveForm.hidden = false;
+  queueSaveName.focus();
+});
+$("#queue-save-cancel").addEventListener("click", hideQueueSave);
+queueSaveName.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    event.stopPropagation();
+    hideQueueSave();
+  }
+});
+queueSaveForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!zone) return;
+  const name = queueSaveName.value.trim() || queueSaveName.placeholder;
+  hideQueueSave();
+  queueSave.disabled = true;
+  queueSave.textContent = "Saving...";
+  try {
+    const made = await invoke("library_save_queue", { zoneId: zone.zoneId, name, start: await queueStart() });
+    wrapperToast(`Saved "${made.name}"${made.tracks != null ? ` (${made.tracks} tracks)` : ""}`);
+  } catch (err) {
+    console.error("library_save_queue", err);
+    wrapperToast(typeof err === "string" ? err : "Roon didn't save the queue.");
+  } finally {
+    queueSave.disabled = false;
+    queueSave.textContent = "Save as playlist";
+  }
+});
 
 // Roon's own queue instead of ours: our panel and Now Playing step aside
 // (Roon's player closes along with ours first), then Ctrl+E goes to Roon
@@ -2350,6 +2758,7 @@ document.addEventListener("keydown", (event) => {
   if (dialogOpen()) cancelDialog();
   else if (!zoneMenu.hidden) closeZoneMenu();
   else if (!wrappedMenu.hidden) closeWrappedMenu();
+  else if (!queueSaveForm.hidden) hideQueueSave();
   else if (!queuePanel.hidden) setQueueOpen(false);
   else if (editing) finishEditing();
   else if (!stage.hidden) closeStage();
@@ -2509,6 +2918,8 @@ new ResizeObserver(layoutWrapped).observe(hole);
 // ----- The menu -----
 
 const WRAPPED_ICONS = {
+  // (Lucide "sparkles")
+  discover: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>',
   radio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>',
   home: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
   album: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>',
@@ -2569,6 +2980,7 @@ function wrappedMenuItems() {
   const here = wrappedHere();
   if (here) items.push(here);
   items.push({ page: "search", label: "Search", icon: "search" });
+  if (wrappedSettings?.discovery !== false) items.push({ page: "discover", label: "Discover", icon: "discover" });
   items.push({ page: "radio", label: "Radio", icon: "radio" });
   items.push({ page: "playlists", label: "Playlists", icon: "playlists" });
   items.push({ page: "history", label: "History", icon: "history" });
@@ -2677,6 +3089,7 @@ function setWrappedOpen(open) {
   if (open && !wrappedStack.length) wrappedStack = [{ page: "home" }];
   wrapped.hidden = !open;
   if (open) renderWrapped();
+  else discoverBtn.classList.remove("on");
   layoutWrapped();
   reportHole();
 }
@@ -2723,6 +3136,7 @@ function wrappedBackPage() {
 }
 
 function renderWrapped() {
+  discoverBtn.classList.toggle("on", !wrapped.hidden && wrappedStack.at(-1)?.page === "discover");
   const entry = wrappedStack.at(-1);
   if (!entry) return;
   wrappedBack.hidden = wrappedStack.length <= 1;
@@ -2958,7 +3372,13 @@ const WRAPPED_PAGES = {
     grid.className = "wrapped-grid";
     const here = wrappedHere();
     grid.append(
-      wrappedTile("Discover", "Weekly playlists from what you've been listening to, and from your whole library. Coming next."),
+      ...(wrappedSettings?.discovery === false
+        ? []
+        : [
+            wrappedTile("Discover", "🌟 Discover Weekly and 💎 Library Rediscover: new artists from what you play, and the ones your library has that you never do.", () =>
+              openWrappedPage({ page: "discover" }),
+            ),
+          ]),
       wrappedTile("Radio", "Roon Radio seeded with the artists that share an artist's sound, from your library or outside it.", () =>
         openWrappedPage({ page: "radio" }),
       ),
@@ -3155,6 +3575,41 @@ const WRAPPED_PAGES = {
     wrappedRadioPage(entry, ++wrappedTicket);
   },
 
+  // The weekly playlists (discover.rs): this week's large, last weeks'
+  // two smaller above it, and Build now for each
+  async discover() {
+    wrappedHeading("Discover", "Built every Monday from your listening; the last two weeks are kept");
+    if (!(await discoveryEnabled())) {
+      wrappedBody.append(wrappedNote("Wrapped Discovery is off. Turn it on in Wrapped's Settings."));
+      const go = document.createElement("button");
+      go.className = "wrapped-button";
+      go.textContent = "Open Settings";
+      go.addEventListener("click", () => openWrappedPage({ page: "settings" }));
+      wrappedBody.append(go);
+      return;
+    }
+    discoverSeen();
+    if (wrappedNeedsLibrary()) return;
+    const ticket = ++wrappedTicket;
+    wrappedBody.append(wrappedNote("Loading..."));
+    let status;
+    try {
+      status = await invoke("wrapped_discover_status");
+    } catch (err) {
+      if (ticket === wrappedTicket) wrappedFailed(err);
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    wrappedBody.replaceChildren();
+    const lists = document.createElement("div");
+    lists.className = "discover-lists";
+    lists.append(
+      discoverColumn("weekly", "🌟 Discover Weekly", "Artists you don't have and have never played, found through the listeners of what you've played most lately. One song each.", status.weekly, status.building, status.weeklyError),
+      discoverColumn("rediscover", "💎 Library Rediscover", "Artists in your library you've never played, and a quarter you haven't for a year or more. One song each.", status.rediscover, status.building, status.rediscoverError),
+    );
+    wrappedBody.append(lists, discoverResetRow(!!status.building));
+  },
+
   async playlists() {
     wrappedHeading("Playlists", "Roon's playlists; the ones Wrapped made first");
     if (wrappedNeedsLibrary()) return;
@@ -3169,8 +3624,8 @@ const WRAPPED_PAGES = {
     }
     if (ticket !== wrappedTicket) return;
     wrappedBody.replaceChildren();
-    const mine = list.filter((p) => p.name.startsWith(WRAPPED_PREFIX));
-    const others = list.filter((p) => !p.name.startsWith(WRAPPED_PREFIX));
+    const mine = list.filter(isWrappedPlaylist);
+    const others = list.filter((p) => !isWrappedPlaylist(p));
     if (mine.length) {
       wrappedBody.append(wrappedSection("Made by Wrapped"), playlistRows(mine, true));
     } else {
@@ -3377,7 +3832,7 @@ const RADIO_BY = [
 const RADIO_COUNTS = [5, 10, 20, 30, 50];
 const RADIO_PER_ARTIST = [1, 2, 3, 5];
 // Remembered between pages and runs (a convenience, so storage may fail)
-let radioPrefs = { by: "blend", scope: "library", count: 20, perArtist: 3, includeLive: false, libraryOnly: false };
+let radioPrefs = { by: "blend", scope: "library", count: 20, perArtist: 3, includeLive: false, libraryOnly: false, savePlaylist: false };
 try {
   radioPrefs = { ...radioPrefs, ...JSON.parse(localStorage.getItem("wrapped-radio") || "{}") };
 } catch {}
@@ -3398,8 +3853,14 @@ function wrappedRadioBuilder(what, entry) {
 }
 
 // A Roon handle for an artist row (Similar rows carry a performer id or
-// nothing): by id, else Roon's search, exact name only
-async function roonArtistHandle(row) {
+// nothing): by id, else Roon's search, exact name only. A name can be
+// several artists: Last.fm's page for a name lumps them together, and
+// Roon's first hit may be another one (Absent in Body's neighbour "Kingdom"
+// came out as the electronic producer). With `like` (the starting artist's
+// Roon genres) a name match counts only if it shares one of them; one
+// Roon has no genres for is taken when nothing better turns up.
+const roonNameHits = new Map(); // lower-cased name -> exact-name ArtistCards
+async function roonArtistHandle(row, like = []) {
   if (row.handle) return row.handle;
   if (row.performerId) {
     try {
@@ -3408,17 +3869,41 @@ async function roonArtistHandle(row) {
     } catch {}
   }
   const key = row.name.toLowerCase();
-  let hit = roonArtistCache.get(key);
-  if (hit === undefined) {
+  let hits = roonNameHits.get(key);
+  if (hits === undefined) {
     try {
-      const hits = await invoke("library_search", { query: row.name });
-      hit = hits.artists.find((a) => a.name.toLowerCase() === key) || null;
+      const found = await invoke("library_search", { query: row.name });
+      hits = found.artists.filter((a) => a.name.toLowerCase() === key);
     } catch {
-      hit = null;
+      hits = [];
     }
-    roonArtistCache.set(key, hit);
+    roonNameHits.set(key, hits);
   }
-  return hit ? (row.handle = hit.handle) : null;
+  if (!like.length) return hits[0] ? (row.handle = hits[0].handle) : null;
+  const wanted = new Set(like.map((g) => g.toLowerCase()));
+  let unknown = null;
+  for (const hit of hits) {
+    const genres = await roonGenres(hit.handle);
+    if (genres.some((g) => wanted.has(g.toLowerCase()))) return (row.handle = hit.handle);
+    if (!genres.length && !unknown) unknown = hit;
+  }
+  if (hits.length && !unknown) console.info(`[radio] left out ${row.name}: Roon's ${row.name} shares no genre with the starting artist`);
+  return unknown ? (row.handle = unknown.handle) : null;
+}
+
+// Roon's genres for an artist (its Performer's), once per handle
+const roonGenreCache = new Map();
+function roonGenres(handle) {
+  if (!handle) return Promise.resolve([]);
+  if (!roonGenreCache.has(handle)) {
+    roonGenreCache.set(
+      handle,
+      invoke("library_artist_facts", { handle })
+        .then((facts) => facts?.genres || [])
+        .catch(() => []),
+    );
+  }
+  return roonGenreCache.get(handle);
 }
 
 // No artist yet: Roon's search, artists only
@@ -3522,8 +4007,10 @@ async function wrappedRadioPage(entry, ticket) {
 
   const libraryPill = document.createElement("button");
   const livePill = document.createElement("button");
+  const savePill = document.createElement("button");
   const paintSwitches = () => {
     livePill.classList.toggle("selected", radioPrefs.includeLive);
+    savePill.classList.toggle("selected", radioPrefs.savePlaylist);
     libraryPill.classList.toggle("selected", radioPrefs.libraryOnly && !discover());
     libraryPill.disabled = discover();
     libraryPill.title = discover() ? "Discover seeds are outside your library" : "Play only tracks in your library";
@@ -3531,6 +4018,7 @@ async function wrappedRadioPage(entry, ticket) {
   for (const [pill, label, key, tip] of [
     [livePill, "Include live recordings", "includeLive", "Live albums and songs are left out unless this is on"],
     [libraryPill, "Library tracks only", "libraryOnly", ""],
+    [savePill, "Save as playlist", "savePlaylist", "Also keep the mix as a Roon playlist"],
   ]) {
     pill.className = "wrapped-tab";
     pill.textContent = label;
@@ -3544,7 +4032,7 @@ async function wrappedRadioPage(entry, ticket) {
   }
   const switches = document.createElement("div");
   switches.className = "wrapped-tabs small";
-  switches.append(livePill, libraryPill);
+  switches.append(livePill, libraryPill, savePill);
 
   const by = radioPills(RADIO_BY, (v) => v === radioPrefs.by, (v) => {
     radioPrefs.by = v;
@@ -3674,13 +4162,15 @@ async function wrappedRadioPage(entry, ticket) {
     const picked = chosen();
     wrappedBusy(`Finding ${picked.length ? `${picked.length + 1} artists` : entry.name} in Roon...`);
     try {
-      // (five lookups at a time, in the seeds' order)
+      // (five lookups at a time, in the seeds' order; artists found by name
+      // must share a Roon genre with the starting one)
+      const like = await roonGenres(entry.handle);
       const found = new Array(picked.length).fill(null);
       let done = 0;
       for (let i = 0; i < picked.length; i += 5) {
         await Promise.all(
           picked.slice(i, i + 5).map(async (row, j) => {
-            found[i + j] = await roonArtistHandle(row);
+            found[i + j] = await roonArtistHandle(row, like);
             done += 1;
             wrappedBusy(`Finding artists in Roon... ${done} of ${picked.length}`);
           }),
@@ -3705,9 +4195,24 @@ async function wrappedRadioPage(entry, ticket) {
         },
       });
       const missed = picked.length - handles.length;
+      // The same mix kept as a Roon playlist, when asked
+      let saved = null;
+      let unsaved = null;
+      if (radioPrefs.savePlaylist) {
+        wrappedBusy("Saving the mix as a playlist...");
+        const name = `${WRAPPED_PREFIX}Radio: ${entry.name}${discover() ? " (Discover)" : ""}, ${playlistStamp()}`;
+        try {
+          saved = await invoke("library_create_playlist", { name, tracks: played.tracks });
+        } catch (err) {
+          console.error("radio playlist", err);
+          unsaved = `not saved as a playlist: ${typeof err === "string" ? err : "Roon said no"}`;
+        }
+      }
       const notes = [
         missed ? `${missed} not found in Roon` : null,
         played.liveSkipped ? `${played.liveSkipped} live left out` : null,
+        saved ? `saved as "${saved.name}"` : null,
+        unsaved,
       ].filter(Boolean);
       wrappedToast(
         `Radio on ${zone.name}: ${played.songs} songs by ${played.artists} artist${played.artists === 1 ? "" : "s"}${notes.length ? ` (${notes.join(", ")})` : ""}`,
@@ -4200,6 +4705,193 @@ WRAPPED_PAGES.settings = async function () {
   row.append(input, show, saveKey);
   key.append(row);
 
+  // Wrapped Discovery on or off: the weekly lists, the thumbs and the
+  // zone watching behind them (the menu, pages and radio stay either way)
+  const discovery = field(
+    "Wrapped Discovery",
+    "Discover Weekly and Library Rediscover, rating their songs, and \"Suggested because\" in the player. Off, none of it shows or runs; your ratings and the lists in Roon are kept.",
+  );
+  const onOff = document.createElement("div");
+  onOff.className = "wrapped-tabs small";
+  const discoveryOn = wrappedSettings.discovery !== false;
+  for (const [value, label] of [
+    [false, "Off"],
+    [true, "On"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${discoveryOn === value ? " selected" : ""}`;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      if (discoveryOn === value) return;
+      await save({ discovery: value });
+      loadDiscoverRatings();
+      renderWrapped();
+    });
+    onOff.append(pill);
+  }
+  discovery.append(onOff);
+
+  // How the Discover lists pick: three tiers, each adding to the one below
+  if (discoveryOn) {
+    const tiers = field(
+      "How Discover picks",
+      "Each level adds to the one below it, and your thumbs on the lists' songs count at every level.",
+    );
+    const tierCards = document.createElement("div");
+    tierCards.className = "picking-tiers";
+    const tier = (level, title, text, state, stateClass) => {
+      const card = document.createElement("div");
+      card.className = `picking-tier ${stateClass}`;
+      const head = document.createElement("div");
+      head.className = "picking-tier-head";
+      const name = document.createElement("span");
+      name.className = "picking-tier-name";
+      name.textContent = `${level}. ${title}`;
+      const badge = document.createElement("span");
+      badge.className = "picking-tier-state";
+      badge.textContent = state;
+      head.append(name, badge);
+      card.append(head, wrappedNote(text, "wrapped-note small"));
+      tierCards.append(card);
+      return card;
+    };
+    const hasKey = !!wrappedSettings.lastfmKey;
+    tier(
+      1,
+      "Tags",
+      "Artists your favorites' listeners also play, kept to the ones whose Last.fm genre tags sound like the artist they came from. Needs the Last.fm key above.",
+      hasKey ? "On" : "Needs a key",
+      hasKey ? "on" : "setup",
+    );
+    // Tier 2: a service and its key (or Ollama's address), the model, Light
+    // or Heavy, and a Test button
+    const llmProvider = wrappedSettings.llmProvider || "anthropic";
+    const llmReady = llmProvider === "ollama" || !!wrappedSettings.llmKey;
+    const llmCard = tier(
+      2,
+      "Language model",
+      "Reads what's written about each pick (Roon's reviews and bios, Last.fm) against the albums you played of the artist it came from, drops the ones that don't fit, and picks the song to open with. Light: tier 1 decides the order. Heavy (coming soon): also reorders and adds picks of its own.",
+      llmReady ? "On" : "Needs a key",
+      llmReady ? "on" : "setup",
+    );
+    const llmBox = document.createElement("div");
+    llmBox.className = "llm-setup";
+    const providers = [
+      ["anthropic", "Anthropic"],
+      ["openai", "OpenAI"],
+      ["gemini", "Gemini"],
+      ["ollama", "Ollama (on this PC)"],
+    ];
+    const defaults = { anthropic: "claude-haiku-5-5", openai: "gpt-4o-mini", gemini: "gemini-2.5-flash", ollama: "llama3.1" };
+    const providerRow = document.createElement("div");
+    providerRow.className = "wrapped-tabs small";
+    for (const [value, label] of providers) {
+      const pill = document.createElement("button");
+      pill.className = `wrapped-tab${llmProvider === value ? " selected" : ""}`;
+      pill.textContent = label;
+      pill.addEventListener("click", async () => {
+        if (llmProvider === value) return;
+        await save({ llmProvider: value });
+        renderWrapped();
+      });
+      providerRow.append(pill);
+    }
+    llmBox.append(providerRow);
+    const keyRow = document.createElement("div");
+    keyRow.className = "wrapped-setting-row";
+    const keyInput = document.createElement("input");
+    keyInput.className = "wrapped-search";
+    keyInput.autocomplete = "off";
+    if (llmProvider === "ollama") {
+      keyInput.type = "text";
+      keyInput.placeholder = "http://localhost:11434";
+      keyInput.value = wrappedSettings.llmUrl || "";
+    } else {
+      keyInput.type = "password";
+      keyInput.placeholder = `${providers.find((p) => p[0] === llmProvider)[1]} API key`;
+      keyInput.value = wrappedSettings.llmKey || "";
+    }
+    const modelInput = document.createElement("input");
+    modelInput.className = "wrapped-search llm-model";
+    modelInput.type = "text";
+    modelInput.placeholder = `model (default ${defaults[llmProvider]})`;
+    modelInput.value = wrappedSettings.llmModel || "";
+    modelInput.autocomplete = "off";
+    const saveLlm = document.createElement("button");
+    saveLlm.className = "wrapped-button";
+    saveLlm.textContent = "Save";
+    saveLlm.addEventListener("click", async () => {
+      const changes = { llmModel: modelInput.value.trim() };
+      if (llmProvider === "ollama") changes.llmUrl = keyInput.value.trim();
+      else changes.llmKey = keyInput.value.trim();
+      await save(changes);
+      renderWrapped();
+    });
+    for (const input of [keyInput, modelInput]) {
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") saveLlm.click();
+      });
+    }
+    keyRow.append(keyInput, modelInput, saveLlm);
+    llmBox.append(keyRow);
+    if (llmProvider === "ollama") {
+      llmBox.append(
+        wrappedNote("Ollama runs the model on this PC: nothing leaves it and there's no key. Install it from ollama.com, then run \"ollama pull llama3.1\" (or the model named above).", "wrapped-note small"),
+      );
+    } else if (llmProvider === "openai") {
+      llmBox.append(wrappedNote("OpenAI hasn't been tested yet (no account to test with). If it misbehaves, please report it.", "wrapped-note small"));
+    } else if (llmProvider === "gemini") {
+      llmBox.append(wrappedNote("Gemini's free tier allows a few calls a minute, so a build takes longer, and Google may use free-tier prompts to train its models.", "wrapped-note small"));
+    }
+    const modeRow = document.createElement("div");
+    modeRow.className = "wrapped-tabs small";
+    const llmMode = wrappedSettings.llmMode === "heavy" ? "heavy" : "light";
+    for (const [value, label, soon] of [
+      ["light", "Light", false],
+      ["heavy", "Heavy (coming soon)", true],
+    ]) {
+      const pill = document.createElement("button");
+      pill.className = `wrapped-tab${llmMode === value ? " selected" : ""}`;
+      pill.textContent = label;
+      pill.disabled = soon;
+      pill.addEventListener("click", async () => {
+        if (llmMode === value) return;
+        await save({ llmMode: value });
+        renderWrapped();
+      });
+      modeRow.append(pill);
+    }
+    const testRow = document.createElement("div");
+    testRow.className = "wrapped-setting-row llm-test";
+    const test = document.createElement("button");
+    test.className = "wrapped-button small";
+    test.textContent = "Test";
+    test.disabled = !llmReady;
+    const testOut = document.createElement("span");
+    testOut.className = "llm-test-out";
+    test.addEventListener("click", async () => {
+      test.disabled = true;
+      testOut.textContent = "Asking...";
+      try {
+        testOut.textContent = await invoke("wrapped_llm_test");
+      } catch (err) {
+        testOut.textContent = String(err);
+      }
+      test.disabled = false;
+    });
+    testRow.append(modeRow, test, testOut);
+    llmBox.append(testRow);
+    llmCard.append(llmBox);
+    tier(
+      3,
+      "Sound",
+      "Listens to 30-second previews of the songs with a model that runs on this PC, so picks are compared by how they actually sound. Will be a one-time download.",
+      "Coming soon",
+      "soon",
+    );
+    tiers.append(tierCards);
+  }
+
   const similar = field(
     "Similar by",
     'Which row the "Similar" section under artists and albums opens with. Roon is Roon\'s own picks; the others come from the tags.',
@@ -4394,8 +5086,141 @@ function wrappedBusy(text) {
 
 // The playlists Wrapped makes are named with this, so they're told apart
 const WRAPPED_PREFIX = "Wrapped: ";
+// The weekly ones (discover.rs) carry their own names, dated copies too
+const WEEKLY_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover"];
+const isWrappedPlaylist = (p) => p.name.startsWith(WRAPPED_PREFIX) || WEEKLY_NAMES.some((n) => p.name.startsWith(n));
 const PLAYLIST_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>';
 const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
+
+// One weekly list on the Discover page: the two dated copies small on
+// top, the current one large with Play and Build now
+function discoverColumn(which, title, blurb, built, building, failed) {
+  const column = document.createElement("section");
+  column.className = "discover-column";
+  const head = document.createElement("div");
+  head.className = "discover-head";
+  const name = document.createElement("h3");
+  name.textContent = title;
+  head.append(name, wrappedNote(blurb, "wrapped-note small"));
+  column.append(head);
+
+  const [current, ...older] = built;
+  if (older.length) {
+    const row = document.createElement("div");
+    row.className = "discover-old";
+    for (const copy of older) row.append(discoverCard(copy, false));
+    column.append(row);
+  }
+  if (current) column.append(discoverCard(current, true));
+  else column.append(wrappedNote("Not built yet: the first one comes next Monday, or build it now.", "wrapped-note discover-empty"));
+
+  const build = document.createElement("button");
+  build.className = "wrapped-button discover-build";
+  build.textContent = building === which ? "Building..." : current ? "Rebuild now" : "Build now";
+  build.disabled = !!building;
+  build.title = current ? "Build this week's list again (the one now becomes a dated copy)" : "Build the list now";
+  build.addEventListener("click", () => discoverBuild(which, title));
+  column.append(build);
+  // (why the last build didn't make a new list; the details are in
+  // discover-log.txt in the app data folder)
+  if (failed && building !== which) column.append(wrappedNote(`The last build didn't finish: ${failed}`, "wrapped-note error"));
+  return column;
+}
+
+function discoverCard(copy, large) {
+  const card = document.createElement("div");
+  card.className = large ? "discover-card large" : "discover-card";
+  const p = copy.playlist;
+  const art = wrappedArt(p?.imageKey, large ? 400 : 120, copy.name);
+  const text = document.createElement("div");
+  text.className = "discover-text";
+  const title = document.createElement("div");
+  title.className = "discover-title";
+  title.textContent = large ? `This week, ${copy.date}` : copy.date;
+  const sub = document.createElement("div");
+  sub.className = "discover-sub";
+  const length = p?.lengthSeconds ? formatLongTime(p.lengthSeconds) : null;
+  sub.textContent = [`${copy.songs} songs`, length, p ? null : "deleted in Roon"].filter(Boolean).join(" · ");
+  text.append(title, sub);
+  if (large && copy.artists.length) {
+    const who = document.createElement("div");
+    who.className = "discover-artists";
+    const shown = copy.artists.slice(0, 8).join(", ");
+    who.textContent = copy.artists.length > 8 ? `${shown} and ${copy.artists.length - 8} more` : shown;
+    text.append(who);
+  }
+  if (p) {
+    const play = document.createElement("button");
+    play.className = large ? "wrapped-play" : "wrapped-button small";
+    play.innerHTML = large ? `${WRAPPED_PLAY_ICON}<span>Play</span>` : "Play";
+    play.addEventListener("click", () => {
+      if (!zone) return wrappedToast("Pick a zone first.");
+      invoke("library_play_playlist", { zoneId: zone.zoneId, handle: p.handle, clear: true })
+        .then(() => wrappedToast(`Playing ${p.name} on ${zone.name}`))
+        .catch((err) => wrappedToast(String(err)));
+    });
+    text.append(play);
+  }
+  card.append(art, text);
+  return card;
+}
+
+// "Start fresh" under the lists: forgets ratings and skips and lets the
+// songs and artists of the lists so far come back. Two clicks, no dialog.
+function discoverResetRow(building) {
+  const row = document.createElement("div");
+  row.className = "discover-reset";
+  const button = document.createElement("button");
+  button.className = "wrapped-button small";
+  button.textContent = "Start fresh";
+  button.disabled = building;
+  button.title = "Forget your ratings and skips, and let everything the lists have suggested come around again";
+  const note = wrappedNote("Forgets your ratings and skips; past suggestions can come back. Your listening history stays.", "wrapped-note small");
+  let armed = null;
+  button.addEventListener("click", async () => {
+    if (!armed) {
+      button.textContent = "Click again to start fresh";
+      armed = setTimeout(() => {
+        armed = null;
+        button.textContent = "Start fresh";
+      }, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    armed = null;
+    button.disabled = true;
+    try {
+      await invoke("wrapped_discover_reset");
+      wrappedToast("Started fresh. The next build picks from the whole pool again.");
+      loadDiscoverRatings();
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+    button.textContent = "Start fresh";
+    button.disabled = false;
+  });
+  row.append(button, note);
+  return row;
+}
+
+// Builds a list now, with the builder's progress over the page
+async function discoverBuild(which, title) {
+  wrappedBusy(`Building ${title}...`);
+  const unlisten = await listen("wrapped-discover", (event) => {
+    if (event.payload.which === which && event.payload.text) wrappedBusy(event.payload.text);
+  });
+  try {
+    await invoke("wrapped_discover_build", { which, utcOffsetMinutes: -new Date().getTimezoneOffset() });
+    wrappedToast(`${title} is ready.`);
+  } catch (err) {
+    wrappedToast(String(err));
+  } finally {
+    unlisten();
+    wrappedBusy(null);
+    loadDiscoverRatings();
+    if (wrappedStack.at(-1)?.page === "discover" && !wrapped.hidden) renderWrapped();
+  }
+}
 
 function playlistRows(list, mine) {
   const rows = document.createElement("div");
@@ -4417,7 +5242,7 @@ function playlistRows(list, mine) {
     text.className = "wrapped-track-text";
     const title = document.createElement("span");
     title.className = "wrapped-track-title";
-    title.textContent = mine ? p.name.slice(WRAPPED_PREFIX.length) : p.name;
+    title.textContent = mine && p.name.startsWith(WRAPPED_PREFIX) ? p.name.slice(WRAPPED_PREFIX.length) : p.name;
     const sub = document.createElement("span");
     sub.className = "wrapped-track-sub";
     sub.textContent = [
@@ -4749,6 +5574,11 @@ for (const btn of document.querySelectorAll(".wrapped-piece-btn")) {
       if (stage.hidden) openWrappedPage(wrappedStack.at(-1) ?? { page: "home" });
       return;
     }
+    if (action === "discover") {
+      await closeStage();
+      if (stage.hidden) openWrappedPage({ page: "discover" });
+      return;
+    }
     if (!libraryReady || !track) {
       wrappedToastStage("Wrapped needs the Hearts & Library link for this.");
       return;
@@ -4910,6 +5740,12 @@ listen("roon-seek", (event) => {
 });
 darkScheme.addEventListener("change", applyColors);
 invoke("library_status").then(setLibraryStatus);
+// (the build number, from Rust: only a real rebuild changes it)
+invoke("wrapper_build")
+  .then((n) => {
+    $("#titlebar-build").textContent = `Build: ${n}`;
+  })
+  .catch(() => {});
 listen("library-status", (event) => setLibraryStatus(event.payload));
 listen("library-track", (event) => {
   libraryTracks[event.payload.zoneId] = event.payload.track;

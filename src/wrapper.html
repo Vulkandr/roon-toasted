@@ -21,6 +21,8 @@
       <div class="titlebar" data-tauri-drag-region="deep">
         <span class="titlebar-logo" data-tauri-drag-region="deep"></span>
         <span class="titlebar-title" data-tauri-drag-region="deep">Roon: Wrapped</span>
+        <!-- A build number for checking a dev build came through (bumped by hand) -->
+        <span id="titlebar-build" class="titlebar-build" data-tauri-drag-region="deep"></span>
         <button id="detach" class="titlebar-action" title="Close the Wrapper and give Roon its own window back">Return Roon</button>
         <span id="status" class="titlebar-status" data-tauri-drag-region="deep" hidden></span>
         <span class="titlebar-spacer" data-tauri-drag-region="deep"></span>
@@ -55,11 +57,21 @@
             <div id="art-missing" class="art art-placeholder" hidden></div>
           </div>
           <div class="text">
+            <!-- Thumbs for a song from the Discover lists (wrapper.js, renderRating) -->
+            <div id="rate" class="rate" hidden title="Rate your discovery. A thumbs up says it was a good suggestion: the artists it came from count for more in your next lists, and once you play this artist on your own it becomes a starting point too. A thumbs down keeps them, and bands that sound like them, out. A heart counts like a thumbs up; skipping a list song in its first 30 seconds counts against it.">
+              <span class="rate-label">Rate your discovery</span>
+              <span class="rate-buttons">
+                <button id="rate-down" class="rate-btn down" data-vote="-1" aria-label="Thumbs down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg></button>
+                <button id="rate-up" class="rate-btn up" data-vote="1" aria-label="Thumbs up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg></button>
+              </span>
+            </div>
             <div id="title" class="title">Roon: Toasted</div>
-            <div id="artist" class="artist"></div>
             <div id="album" class="album"></div>
+            <div id="artist" class="artist"></div>
           </div>
         </div>
+        <!-- Discover: the weekly playlists page (a dot while a new list is unseen) -->
+        <button id="discover-btn" class="icon-btn discover-btn" title="Discover: your weekly playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
 
         <div class="middle">
           <div class="transport">
@@ -150,13 +162,24 @@
               <div id="wrapped-piece" class="wrapped-piece">
                 <div class="wrapped-piece-title">Wrapped</div>
                 <div class="wrapped-piece-buttons">
-                  <button class="wrapped-piece-btn" data-action="open" data-tip="Open Wrapped"><svg class="wrapped-mark" viewBox="0 0 32 32" aria-hidden="true"><path d="M0 0h16l-8 8v17l-8 7z" fill="#fff"/><path d="M16 0h16v32H8V8z" fill="currentColor"/><path d="M32 21v11H21z" fill="#d29922"/><path d="M15.5 13.5 29 1M15.5 24 29 11.5" fill="none" stroke="#000" stroke-width="2.4" stroke-linecap="round"/><path d="M0.8 0.8h30.4v30.4H8.5L0.8 31.2zM16 0.8 8 8.5v16.7" fill="none" stroke="#000" stroke-width="1.6" stroke-linejoin="round"/></svg></button>
+                  <button class="wrapped-piece-btn discover" data-action="discover" data-tip="Discover: your weekly playlists"><i class="fresh-dot"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
+                  <button class="wrapped-piece-btn" data-action="open" data-tip="Open Wrapped"><svg class="wrapped-mark" viewBox="0 0 32 32" aria-hidden="true"><defs><clipPath id="wrapped-mark-inner"><path d="M1.125 1.125H27.2a3.675 3.675 0 0 1 3.675 3.675v26.075H4.8a3.675 3.675 0 0 1-3.675-3.675z"/></clipPath></defs><path d="M0 0h27.2A4.8 4.8 0 0 1 32 4.8V32H4.8A4.8 4.8 0 0 1 0 27.2z"/><g clip-path="url(#wrapped-mark-inner)"><path d="M0 0h17.75l-11.125 11.125v14.125L0 31.875z" fill="#fff"/><path d="M20.875 0H32v32H8.875V12z" fill="currentColor"/><path d="M32 21.875V32H21.875z" fill="#d29922"/><path d="M14.375 14.375 28.75 0h3.125L14.375 17.5zM14.375 25.375 32 7.75v3.125L17.5 25.375zM18.75 32 32 18.75v3.125L21.875 32z"/></g></svg></button>
                   <button class="wrapped-piece-btn" data-action="artist" data-tip="Open the artist in Wrapped">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                   </button>
                   <button class="wrapped-piece-btn" data-action="playlist" data-tip="Create a playlist from this song">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>
                   </button>
+                </div>
+                <!-- A Discover list's song: why it's there, and its thumbs
+                     (wrapper.js, renderRating) -->
+                <div id="wrapped-piece-rate" class="wrapped-piece-rate" hidden>
+                  <div class="wrapped-piece-why"></div>
+                  <div class="wrapped-piece-thumbs">
+                    <span class="rate-label" title="A thumbs up makes this artist a starting point for your next Discover lists, so you get more like them. A thumbs down keeps them, and bands that sound like them, out. Without a rating, listening through counts a little in their favor, skipping a little against, and a heart counts as a milder thumbs up.">Rate your discovery</span>
+                    <button class="rate-btn down" data-vote="-1" aria-label="Thumbs down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg></button>
+                    <button class="rate-btn up" data-vote="1" aria-label="Thumbs up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg></button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -369,11 +392,20 @@
             <div class="queue-title">Queue</div>
             <div id="queue-summary" class="queue-summary"></div>
           </div>
-          <button id="queue-roon" class="queue-roon" title="Show Roon's own queue (Ctrl+E in Roon)">Open Roon's queue</button>
+          <div class="queue-actions">
+            <button id="queue-save" class="queue-roon" title="Save the whole queue, played songs too, as a Roon playlist">Save as playlist</button>
+            <button id="queue-roon" class="queue-roon" title="Show Roon's own queue (Ctrl+E in Roon)">Open Roon's queue</button>
+          </div>
           <button id="queue-close" class="icon-btn" title="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>
+        <!-- "Save as playlist" asks for a name here (empty: the default) -->
+        <form id="queue-save-form" class="queue-save-form" hidden>
+          <input id="queue-save-name" type="text" spellcheck="false" autocomplete="off" />
+          <button type="submit" class="queue-roon">Save</button>
+          <button type="button" id="queue-save-cancel" class="queue-roon">Cancel</button>
+        </form>
         <div class="queue-scroll">
           <p id="queue-empty" class="queue-empty" hidden>The queue is empty.</p>
           <ol id="queue-list" class="queue-list"></ol>

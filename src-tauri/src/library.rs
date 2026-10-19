@@ -49,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, PlaylistCard, RadioSeeds, SearchHits, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, PlaylistCard, QueueSong, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -637,10 +637,34 @@ pub async fn library_delete_playlist(app: AppHandle, handle: String) -> Result<(
 
 /// Plays a playlist (by handle) on the zone from its start.
 #[tauri::command]
-pub async fn library_play_playlist(app: AppHandle, zone_id: String, handle: String) -> Result<(), String> {
+pub async fn library_play_playlist(app: AppHandle, zone_id: String, handle: String, clear: Option<bool>) -> Result<(), String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
-    client.play_playlist(&zone_id, &handle).await.map_err(describe)
+    // (a fresh queue first when asked: the Discover lists play as a queue
+    // of their own, like the radio)
+    if clear.unwrap_or(false) {
+        let _ = client.queue_clear(&zone_id).await;
+    }
+    client.play_playlist(&zone_id, &handle).await.map_err(describe)?;
+    // Where this queue begins, for the queue panel's played part
+    if clear.unwrap_or(false) {
+        tokio::time::sleep(std::time::Duration::from_millis(600)).await;
+        if let Ok(songs) = client.queue_songs(&zone_id, None, 1).await {
+            if let Some(first) = songs.iter().find(|s| s.current).and_then(|s| s.item_id) {
+                crate::queue::set_start(&app, &zone_id, first);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Plays the zone's queue from one of its items, a played one included
+/// (the Core's item id, from `library_queue_songs`).
+#[tauri::command]
+pub async fn library_queue_play_from(app: AppHandle, zone_id: String, item_id: u64) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.queue_play_from(&zone_id, item_id).await.map_err(describe)
 }
 
 /// Starts Roon Radio on the zone from songs, albums, artists and genres
@@ -653,13 +677,48 @@ pub async fn library_play_radio(app: AppHandle, zone_id: String, seeds: RadioSee
     client.play_radio(&zone_id, &seeds).await.map_err(describe)
 }
 
+/// The songs the zone's queue has played since `start` (the current
+/// queue's first item, from queue.rs; without one, or one the queue no
+/// longer has, the last `recent` items) and the playing one, for the queue
+/// panel's played part (the songs to come are the Roon API's queue).
+#[tauri::command]
+pub async fn library_queue_songs(app: AppHandle, zone_id: String, start: Option<u64>, recent: Option<usize>) -> Result<Vec<QueueSong>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let (songs, report) = client.queue_songs_report(&zone_id, start, recent.unwrap_or(0), true).await.map_err(describe)?;
+    // (what the Core gave, while the played part is being worked out)
+    if let Ok(dir) = app.path().app_data_dir() {
+        let _ = std::fs::write(dir.join("queue-debug.txt"), report);
+    }
+    Ok(songs)
+}
+
+/// The zone's current queue (played since `start` and to come) saved as a
+/// playlist named `name`.
+#[tauri::command]
+pub async fn library_save_queue(app: AppHandle, zone_id: String, name: String, start: Option<u64>) -> Result<PlaylistCard, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let songs = client.queue_songs(&zone_id, start, 0).await.map_err(describe)?;
+    if songs.is_empty() {
+        return Err("The queue is empty.".into());
+    }
+    let tracks: Vec<String> = songs.into_iter().map(|s| s.handle).collect();
+    client.create_playlist(&name, &tracks).await.map_err(describe)
+}
+
 /// The Wrapped radio: a mix of the artists' top songs (by handle), queued
 /// on the zone at once (see `play_artist_mix`).
 #[tauri::command]
 pub async fn library_play_artist_mix(app: AppHandle, zone_id: String, artists: Vec<String>, options: MixOptions) -> Result<MixPlayed, String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
-    client.play_artist_mix(&zone_id, &artists, &options).await.map_err(describe)
+    let played = client.play_artist_mix(&zone_id, &artists, &options).await.map_err(describe)?;
+    // The queue panel's played part starts here
+    if let Some(item) = played.queue_start {
+        crate::queue::set_start(&app, &zone_id, item);
+    }
+    Ok(played)
 }
 
 /// Plays an album (by handle) on the zone right now.

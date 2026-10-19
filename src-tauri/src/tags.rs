@@ -231,6 +231,38 @@ impl Tags {
         names
     }
 
+    /// The artist's tags, Last.fm's only when they're missing or stale (one
+    /// request, not two: for checking many artists in a row, as the weekly
+    /// lists do). A full `lookup` later fills in MusicBrainz.
+    pub async fn lookup_quick(&self, app: &AppHandle, name: &str, lastfm_key: &str) -> ArtistTags {
+        let name = name.trim();
+        if let Some(have) = self.cached(app, name) {
+            if now_ms() - have.fetched_at < KEEP_FOR_MS && (have.from_lastfm || lastfm_key.is_empty()) {
+                return have;
+            }
+        }
+        if lastfm_key.is_empty() {
+            return ArtistTags { name: name.to_string(), ..Default::default() };
+        }
+        self.turn().await;
+        let mut out = ArtistTags { name: name.to_string(), fetched_at: now_ms(), ..Default::default() };
+        match client() {
+            Ok(client) => match lastfm_top_tags(&client, name, lastfm_key).await {
+                Ok(tags) => {
+                    out.from_lastfm = true;
+                    out.tags = tags;
+                }
+                Err(e) => out.note = Some(format!("Last.fm: {e}")),
+            },
+            Err(e) => out.note = Some(e),
+        }
+        self.with_store(app, |s| {
+            s.artists.insert(key_of(name), out.clone());
+        });
+        self.save(app);
+        out
+    }
+
     /// Everything tagged so far, for the similarity scores.
     fn all_artists(&self, app: &AppHandle) -> Vec<ArtistTags> {
         self.with_store(app, |s| s.artists.values().cloned().collect())
@@ -779,6 +811,29 @@ pub struct SimilarRow {
     pub image_key: Option<String>,
     pub plays: u32,
     pub in_library: bool,
+}
+
+/// How alike two artists sound by their tags: the cosine of their genre and
+/// style tag weights, 0 (nothing shared) to 1 (the same tags in the same
+/// proportions). "Melodic death metal, viking metal" against "metalcore,
+/// melodic death metal" is about 0.36; against "melodic death metal" alone
+/// about 0.7. Media-manager junk doesn't count.
+pub fn sound_match(a: &[Tag], b: &[Tag]) -> f64 {
+    fn vector(tags: &[Tag]) -> HashMap<&str, f64> {
+        tags.iter()
+            .filter(|t| matches!(t.kind, TagKind::Genre | TagKind::Style) && !JUNK.contains(&t.name.as_str()))
+            .map(|t| (t.name.as_str(), t.weight as f64))
+            .collect()
+    }
+    let (u, v) = (vector(a), vector(b));
+    let dot: f64 = u.iter().filter_map(|(k, x)| v.get(k).map(|y| x * y)).sum();
+    let norm = |w: &HashMap<&str, f64>| w.values().map(|x| x * x).sum::<f64>().sqrt();
+    let (nu, nv) = (norm(&u), norm(&v));
+    if nu == 0.0 || nv == 0.0 {
+        0.0
+    } else {
+        dot / (nu * nv)
+    }
 }
 
 fn overlap(a: &[Tag], b: &[Tag], kind: TagKind) -> (f64, Vec<String>) {

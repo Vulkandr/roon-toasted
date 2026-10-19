@@ -928,6 +928,30 @@ wrapperOpen.addEventListener("click", () => {
 invoke("get_settings").then(showWrapper);
 listen("settings-changed", (event) => showWrapper(event.payload));
 
+// Wrapped Discovery: one of Wrapped's own settings (wrapped-settings.json,
+// so it goes with Wrapped), shown here too; Wrapped's Settings page has the
+// same switch, and either one updates the other
+const wrapperDiscovery = document.querySelector("#wrapper-discovery");
+const showDiscovery = (wrapped) => {
+  wrapperDiscovery.checked = wrapped?.discovery !== false;
+};
+async function saveDiscovery(on) {
+  try {
+    showDiscovery(await invoke("wrapped_settings_update", { changes: { discovery: on } }));
+  } catch (err) {
+    console.error(err);
+    showDiscovery(await invoke("wrapped_settings_get").catch(() => null));
+  }
+}
+wrapperDiscovery.addEventListener("change", () => saveDiscovery(wrapperDiscovery.checked));
+{
+  const labels = document.querySelector("#wrapper-discovery-group");
+  labels.querySelector(".label-off").addEventListener("click", () => saveDiscovery(false));
+  labels.querySelector(".label-on").addEventListener("click", () => saveDiscovery(true));
+}
+invoke("wrapped_settings_get").then(showDiscovery).catch(() => {});
+listen("wrapped-settings-changed", (event) => showDiscovery(event.payload));
+
 // ===== Hearts & Library ====================================================
 //
 // On/off and what "add to library" adds. The line underneath says whether the

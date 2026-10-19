@@ -154,6 +154,11 @@ button:disabled {
   font-weight: 700;
 }
 
+.titlebar-build {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .titlebar-status {
   color: var(--warn);
   font-size: 12px;
@@ -1185,9 +1190,12 @@ button:disabled {
 }
 
 /* Edge thickness */
-.editor-range {
+/* (input[type="range"] further down gives every slider width 0 and lets
+   it grow, for the player bar; these sit in a row that doesn't stretch
+   them, so they keep their own width) */
+input[type="range"].editor-range {
+  flex: none;
   width: 80px;
-  accent-color: var(--accent);
 }
 
 .editor-value {
@@ -1256,7 +1264,7 @@ button:disabled {
 
 .player {
   display: grid;
-  grid-template-columns: minmax(200px, 1fr) minmax(320px, 2fr) minmax(200px, 1fr);
+  grid-template-columns: minmax(200px, 1fr) auto minmax(320px, 2fr) minmax(200px, 1fr);
   align-items: center;
   gap: 16px;
   height: 109px; /* plus the window border: 110 */
@@ -1478,7 +1486,7 @@ input[type="range"]:disabled {
    width, whatever else is going on. */
 @container panel (max-width: 900px) {
   .player {
-    grid-template-columns: minmax(110px, 1fr) minmax(352px, 2fr) minmax(140px, 1fr);
+    grid-template-columns: minmax(110px, 1fr) auto minmax(352px, 2fr) minmax(140px, 1fr);
     gap: 10px;
     padding: 0 10px;
   }
@@ -1874,7 +1882,20 @@ html.invert-colors {
   border-bottom: 1px solid var(--border);
 }
 
-/* "Open Roon's queue": a small pill beside the close button */
+/* "Save as playlist" over "Open Roon's queue": small pills beside the
+   close button */
+.queue-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.queue-roon:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
 .queue-roon {
   flex: none;
   padding: 4px 10px;
@@ -1939,7 +1960,168 @@ html.invert-colors {
 .queue-item.now,
 .queue-item.now:hover {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: inset 3px 0 0 var(--accent);
   cursor: default;
+}
+
+/* The songs already played, above the playing one (like Roon's queue) */
+.queue-item.played {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.queue-item.played:hover {
+  background: none;
+}
+
+/* A played song you can jump back to */
+.queue-item.played.playable {
+  cursor: pointer;
+}
+
+.queue-item.played.playable:hover {
+  opacity: 0.8;
+  background: var(--hover);
+}
+
+/* Skipped songs as one block, like Roon's "N skipped items": a count tile
+   where the art goes, and when open the songs inside the same block (a
+   shared background and a rail down its left side) */
+.queue-skip-group {
+  margin: 2px 0;
+  border-radius: 8px;
+}
+
+.queue-skip-group.open {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  box-shadow: inset 2px 0 0 var(--border);
+}
+
+.queue-skip-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.queue-skip-head:hover {
+  background: var(--hover);
+}
+
+.queue-skip-head .queue-item-title {
+  color: var(--muted);
+}
+
+.queue-skip-head:hover .queue-item-title {
+  color: var(--text);
+}
+
+.queue-skip-count {
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-skip-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 2px;
+}
+
+.queue-now-label {
+  margin: 10px 8px 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* The playing song's art: moving bars, still while paused */
+.queue-eq {
+  position: absolute;
+  inset: 0;
+  contain: paint;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 3px;
+  padding: 11px 10px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+}
+
+.queue-eq i {
+  width: 4px;
+  height: 92%;
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: bottom;
+  will-change: transform;
+  animation: queue-eq 0.8s ease-in-out infinite alternate;
+}
+
+.queue-eq i:nth-child(2) {
+  animation-delay: -0.3s;
+}
+
+.queue-eq i:nth-child(3) {
+  animation-delay: -0.55s;
+}
+
+/* (scaled rather than resized: a height animation repainted the row every
+   frame, and WebView2 left flashing specks of the accent beside the rows
+   above it) */
+@keyframes queue-eq {
+  from {
+    transform: scaleY(0.2);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+
+.queue-panel.paused .queue-eq i {
+  animation-play-state: paused;
+}
+
+/* The name asked for when saving the queue as a playlist */
+.queue-save-form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 8px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.queue-save-form[hidden] {
+  display: none;
+}
+
+.queue-save-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.queue-save-form input:focus {
+  outline: none;
+  border-color: var(--accent);
 }
 
 .queue-art {
@@ -3075,4 +3257,452 @@ body > .wrapped-toast {
 
 .wrapped-card.left-out .wrapped-card-title {
   text-decoration: line-through;
+}
+
+/* ----- Discover: the weekly playlists (discover.rs) -----
+   Two columns (one when narrow): last weeks' copies small on top, this
+   week's large, Build now under it */
+.discover-lists {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 28px;
+  align-items: start;
+}
+
+.discover-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.discover-head h3 {
+  margin: 0 0 4px;
+  font-size: 20px;
+}
+
+.discover-old {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.discover-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.discover-card .wrapped-art {
+  width: 56px;
+  flex: none;
+}
+
+.discover-card.large {
+  flex-direction: column;
+  align-items: stretch;
+  padding: 16px;
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.discover-card.large .wrapped-art {
+  width: 100%;
+  max-width: 420px;
+  align-self: center;
+}
+
+.discover-text {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+}
+
+.discover-title {
+  font-weight: 700;
+}
+
+.discover-card.large .discover-title {
+  font-size: 18px;
+}
+
+.discover-sub,
+.discover-artists {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.discover-artists {
+  margin-bottom: 6px;
+}
+
+.discover-card:not(.large) .wrapped-button.small {
+  margin-top: 2px;
+}
+
+.wrapped-button.small {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.discover-build {
+  width: fit-content;
+}
+
+.discover-build:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* "Start fresh", under both lists */
+.discover-reset {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 28px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.discover-reset .wrapped-note {
+  margin: 0;
+}
+
+/* ----- Rating a Discover list's song: thumbs above the title -----
+   In the player bar a compact row; in Now Playing the label above the
+   thumbs, sized with the info piece (em) */
+.rate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.rate[hidden] {
+  display: none;
+}
+
+.rate-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  cursor: help;
+}
+
+.rate-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+.rate-btn {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s;
+}
+
+.rate-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.rate-btn:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.rate-btn.up.on {
+  color: #3fb950;
+}
+
+.rate-btn.down.on {
+  color: #f85149;
+}
+
+.rate-btn.on svg {
+  fill: currentColor;
+  fill-opacity: 0.25;
+}
+
+/* Now Playing: the label over the thumbs, above the title */
+.piece-info .rate {
+  order: -1;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.15em;
+  margin-bottom: 0.2em;
+}
+
+.piece-info[data-align="center"] .rate {
+  align-items: center;
+}
+
+.piece-info[data-align="right"] .rate {
+  align-items: flex-end;
+}
+
+.piece-info .rate-label {
+  font-size: 0.55em;
+}
+
+.piece-info .rate-btn {
+  width: 1.5em;
+  height: 1.5em;
+}
+
+.piece-info .rate-btn svg {
+  width: 1em;
+  height: 1em;
+}
+
+/* ----- Wrapped settings: how Discover picks, as three tiers ----- */
+.picking-tiers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+/* (tier 2's setup needs the width: its card spans the row) */
+.picking-tier:has(.llm-setup) {
+  grid-column: 1 / -1;
+}
+
+.picking-tier {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.picking-tier.on {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.picking-tier.soon {
+  opacity: 0.7;
+}
+
+.picking-tier-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.picking-tier-name {
+  font-weight: 700;
+}
+
+.picking-tier-state {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--hover);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.picking-tier.on .picking-tier-state {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--text);
+}
+
+.picking-tier.setup .picking-tier-state {
+  background: color-mix(in srgb, var(--warn) 25%, transparent);
+  color: var(--text);
+}
+
+/* Now Playing's Wrapped piece: why a Discover song is there, and its
+   thumbs, under the buttons */
+.wrapped-piece-rate {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3em;
+  max-width: 22em;
+}
+
+.wrapped-piece-rate[hidden] {
+  display: none;
+}
+
+.wrapped-piece-why {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1em;
+  line-height: 1.3;
+}
+
+.wrapped-piece-why-lead {
+  font-size: 0.72em;
+  opacity: 0.75;
+}
+
+.wrapped-piece-why-names {
+  font-size: 1.05em;
+  font-weight: 700;
+}
+
+.wrapped-piece-why[hidden] {
+  display: none;
+}
+
+.wrapped-piece-thumbs {
+  display: flex;
+  align-items: center;
+  gap: 0.3em;
+}
+
+.wrapped-piece-thumbs {
+  margin-top: 0.3em;
+}
+
+.wrapped-piece .wrapped-piece-thumbs .rate-label {
+  margin-right: 0.4em;
+  color: inherit;
+  opacity: 0.95;
+  font-size: 0.9em;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.wrapped-piece .rate-btn {
+  width: 2.2em;
+  height: 2.2em;
+  color: #fff;
+}
+
+.wrapped-piece .rate-btn svg {
+  width: 1.4em;
+  height: 1.4em;
+}
+
+.wrapped-piece .rate-btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.wrapped-piece .rate-btn.up.on {
+  color: #3fb950;
+}
+
+.wrapped-piece .rate-btn.down.on {
+  color: #f85149;
+}
+
+/* An artist's name in "Suggested because you listened to ...": opens its
+   Wrapped page */
+.wrapped-piece-link {
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.wrapped-piece-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
+.stage-editing .wrapped-piece-link {
+  cursor: inherit;
+}
+
+
+/* ----- The Discover star: the weekly playlists, one click away ----- */
+.discover-btn {
+  position: relative;
+  margin-left: -4px;
+}
+
+.discover-btn:hover,
+.discover-btn.on {
+  color: var(--accent);
+}
+
+/* A new list since the page was last opened */
+.discover-btn.fresh::after,
+.wrapped-piece-btn.discover.fresh .fresh-dot {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 1;
+  pointer-events: none;
+  transition: none;
+}
+
+.wrapped-piece-btn.discover .fresh-dot {
+  display: none;
+}
+
+.wrapped-piece-btn.discover.fresh .fresh-dot {
+  display: block;
+  top: 0.3em;
+  right: 0.3em;
+  width: 0.45em;
+  height: 0.45em;
+}
+
+.wrapped-piece-btn.discover svg {
+  color: #f5c542;
+}
+
+/* Wrapped Discovery off (Wrapped's Settings): its buttons and thumbs go */
+.no-discovery #discover-btn,
+.no-discovery .wrapped-piece-btn.discover,
+.no-discovery #rate,
+.no-discovery #wrapped-piece-rate {
+  display: none !important;
+}
+
+/* Tier 2's setup on the Settings page */
+.llm-setup {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.llm-setup .wrapped-search.llm-model {
+  flex: 0 1 260px;
+}
+
+.llm-test {
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.llm-test-out {
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+/* Tier 2's line under "Suggested because" in the player */
+.wrapped-piece-why-text {
+  font-size: 13px;
+  opacity: 0.8;
+  margin-top: 4px;
+  max-width: 420px;
 }

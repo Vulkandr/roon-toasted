@@ -742,6 +742,13 @@ mod windows_wrapper {
         if roon_window().is_none() {
             match find_roon(true) {
                 Some(roon) => {
+                    // A Roon window out on the desktop: the Wrapper takes its
+                    // place and size (Roon inside ends up a little smaller,
+                    // by our bars). One we parked earlier has no place.
+                    if !is_tool_window(roon) && is_visible(roon) && !is_minimized(roon) {
+                        let spot = if is_maximized(roon) { RoonSpot::Maximized } else { visible_bounds(roon).map_or(RoonSpot::None, RoonSpot::At) };
+                        *TAKE_ROON_SPOT.lock().unwrap() = spot;
+                    }
                     adopt(roon);
                     set_note("");
                 }
@@ -774,7 +781,7 @@ mod windows_wrapper {
             let (w, h) = within_screen(&window, min);
             let _ = window.set_min_size(Some(tauri::Size::Logical(tauri::LogicalSize::new(w, h))));
         }
-        restore_size(app);
+        apply_size(app);
         let _ = window.unminimize();
         let _ = window.show();
         let _ = window.set_focus();
@@ -835,9 +842,19 @@ mod windows_wrapper {
         *COVERED_HOLE.lock().unwrap() = None;
         DRAGGING.store(false, Ordering::Relaxed);
         drop_thumbnails();
+        // Roon goes back where the Wrapper is, at its size, so putting it
+        // back looks like the Wrapper's bars just going away
+        let mut drop_at = RoonSpot::None;
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
             if before == OPEN {
                 crate::save_window_state(app);
+            }
+            if before != OFF && !window.is_minimized().unwrap_or(false) {
+                if window.is_maximized().unwrap_or(false) {
+                    drop_at = RoonSpot::Maximized;
+                } else if let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) {
+                    drop_at = RoonSpot::At((pos.x, pos.y, size.width as i32, size.height as i32));
+                }
             }
             let _ = window.hide();
         }
@@ -847,9 +864,21 @@ mod windows_wrapper {
         *LAST_REGION.lock().unwrap() = None;
         if let Some(roon) = roon_window() {
             release(roon);
-            match ROON_RESTORE.lock().unwrap().take() {
-                Some(rect) => place_window(roon, rect),
-                None => show_where_it_is(roon),
+            let restore = ROON_RESTORE.lock().unwrap().take();
+            match (drop_at, restore) {
+                (RoonSpot::At(rect), _) => place_visible(roon, rect),
+                (RoonSpot::Maximized, _) => {
+                    // (on the Wrapper's screen, then maximized there)
+                    if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
+                        if let Ok(pos) = window.outer_position() {
+                            let (w, h) = restore.map_or((1200, 800), |r| (r.2, r.3));
+                            place_visible(roon, (pos.x + 40, pos.y + 40, w, h));
+                        }
+                    }
+                    maximize(roon);
+                }
+                (RoonSpot::None, Some(rect)) => place_window(roon, rect),
+                (RoonSpot::None, None) => show_where_it_is(roon),
             }
             bring_to_front(roon);
         }
@@ -1201,6 +1230,86 @@ mod windows_wrapper {
         }
     }
 
+    /// Where a Roon window was when the Wrapper took it in, for the Wrapper
+    /// to open there instead of at its remembered size.
+    #[derive(Clone, Copy, PartialEq)]
+    enum RoonSpot {
+        None,
+        Maximized,
+        /// Its visible bounds: x, y, width, height in real pixels.
+        At((i32, i32, i32, i32)),
+    }
+    static TAKE_ROON_SPOT: Mutex<RoonSpot> = Mutex::new(RoonSpot::None);
+
+    /// The Wrapper's size as it opens: where Roon was, if it was just taken
+    /// in from the desktop, else the remembered size.
+    fn apply_size(app: &AppHandle) {
+        let spot = *TAKE_ROON_SPOT.lock().unwrap();
+        match spot {
+            RoonSpot::None => restore_size(app),
+            RoonSpot::Maximized => {
+                if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
+                    let _ = window.maximize();
+                }
+            }
+            RoonSpot::At(rect) => take_roon_spot(app, rect),
+        }
+    }
+
+    /// Puts the Wrapper where Roon's window was, at its size (no smaller
+    /// than the Wrapper's minimum, and all on that screen).
+    fn take_roon_spot(app: &AppHandle, (x, y, w, h): (i32, i32, i32, i32)) {
+        use tauri::{PhysicalPosition, PhysicalSize};
+        let Some(window) = app.get_webview_window(WRAPPER_WINDOW) else {
+            return;
+        };
+        if window.is_maximized().unwrap_or(false) {
+            let _ = window.unmaximize();
+        }
+        // (on Roon's screen first, so the scale and room are that screen's)
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+        let Some(monitor) = window
+            .available_monitors()
+            .ok()
+            .and_then(|all| {
+                all.into_iter().find(|m| {
+                    let (p, s) = (m.position(), m.size());
+                    let (cx, cy) = (x + w / 2, y + h / 2);
+                    cx >= p.x && cx < p.x + s.width as i32 && cy >= p.y && cy < p.y + s.height as i32
+                })
+            })
+            .or_else(|| window.current_monitor().ok().flatten())
+        else {
+            return;
+        };
+        let scale = monitor.scale_factor();
+        let work = monitor.work_area();
+        let min = (*WRAPPER_MIN.lock().unwrap()).unwrap_or_else(|| configured_min(&window));
+        let room = (work.size.width as i32, work.size.height as i32);
+        let w = w.max((min.0 * scale).ceil() as i32).min(room.0);
+        let h = h.max((min.1 * scale).ceil() as i32).min(room.1);
+        let x = x.clamp(work.position.x, (work.position.x + room.0 - w).max(work.position.x));
+        let y = y.clamp(work.position.y, (work.position.y + room.1 - h).max(work.position.y));
+        let _ = window.set_size(PhysicalSize::new(w as u32, h as u32));
+        let _ = window.set_position(PhysicalPosition::new(x, y));
+    }
+
+    /// A window's bounds as you see them (without Windows' invisible resize
+    /// borders, which GetWindowRect counts), in real pixels.
+    fn visible_bounds(hwnd: HWND) -> Option<(i32, i32, i32, i32)> {
+        use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_EXTENDED_FRAME_BOUNDS};
+        let mut rect = RECT::default();
+        // SAFETY: a valid window handle, and an out-pointer of the size given.
+        let ok = unsafe {
+            DwmGetWindowAttribute(hwnd, DWMWA_EXTENDED_FRAME_BOUNDS, &mut rect as *mut RECT as *mut _, std::mem::size_of::<RECT>() as u32).is_ok()
+        };
+        if ok && rect.right > rect.left && rect.bottom > rect.top {
+            Some((rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top))
+        } else {
+            window_rect(hwnd)
+        }
+    }
+
     /// Puts the Wrapper back at the size it was left at (logical pixels,
     /// saved by lib.rs as `wrapperSize`), fitted to the screen it's on and
     /// to its minimum, keeping it on that screen. Not while maximized.
@@ -1254,8 +1363,10 @@ mod windows_wrapper {
             let handle = app.clone();
             let _ = app.run_on_main_thread(move || {
                 if STATE.load(Ordering::Relaxed) == OPEN && !IN_SIZE_MOVE.load(Ordering::Relaxed) {
-                    restore_size(&handle);
+                    apply_size(&handle);
                 }
+                // (Roon's spot is taken once: next time, the remembered size)
+                *TAKE_ROON_SPOT.lock().unwrap() = RoonSpot::None;
             });
         });
     }
@@ -1342,6 +1453,39 @@ mod windows_wrapper {
             let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
         }
         show_na(hwnd);
+    }
+
+    /// Places a window so the part you see (without Windows' invisible
+    /// resize borders) is `rect` (real pixels), and shows it. The borders
+    /// are measured on the window itself, once it's shown.
+    fn place_visible(hwnd: HWND, rect: (i32, i32, i32, i32)) {
+        use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE, SWP_NOZORDER};
+        let set = |(x, y, w, h): (i32, i32, i32, i32)| {
+            // SAFETY: a valid window handle.
+            unsafe {
+                let _ = SetWindowPos(hwnd, None, x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+            }
+        };
+        set(rect);
+        show_na(hwnd);
+        // (how far the window's rect reaches past what's drawn, per side)
+        if let (Some(outer), Some(seen)) = (window_rect(hwnd), visible_bounds(hwnd)) {
+            let left = seen.0 - outer.0;
+            let top = seen.1 - outer.1;
+            let right = (outer.0 + outer.2) - (seen.0 + seen.2);
+            let bottom = (outer.1 + outer.3) - (seen.1 + seen.3);
+            if (left, top, right, bottom) != (0, 0, 0, 0) {
+                set((rect.0 - left, rect.1 - top, rect.2 + left + right, rect.3 + top + bottom));
+            }
+        }
+    }
+
+    fn maximize(hwnd: HWND) {
+        use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_SHOWMAXIMIZED};
+        // SAFETY: a valid window handle.
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_SHOWMAXIMIZED);
+        }
     }
 
     fn show_where_it_is(hwnd: HWND) {

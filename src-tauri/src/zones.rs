@@ -318,6 +318,7 @@ impl Zones {
         if let Some(app) = self.app.get() {
             let _ = app.emit("roon-zones", &payload);
             crate::toast::zones_updated(app, &payload);
+            crate::discover::zones_updated(app, &payload);
             if let Some((core, zone_id)) = queue_change {
                 crate::queue::follow(app, core, zone_id);
             }
@@ -403,6 +404,7 @@ async fn watch(app: AppHandle, core: Core) {
                         if let Some(z) = inner.zones.get_mut(&s.zone_id) {
                             z.seek_position = s.seek_position;
                         }
+                        crate::discover::seeked(&s.zone_id, s.seek_position);
                     }
                 }
                 for s in seeks {
