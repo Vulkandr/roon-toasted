@@ -202,6 +202,16 @@ pub fn wrapper_hole(
     let _ = (app, x, y, width, height, covers, radii);
 }
 
+/// Flashes the Wrapper's taskbar button: Deep Dive asked something or is
+/// done while the window is minimized or behind another.
+#[tauri::command]
+pub fn wrapper_attention(app: AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
+        let _ = window.request_user_attention(Some(tauri::UserAttentionType::Informational));
+    }
+}
+
 #[tauri::command]
 pub fn wrapper_status(app: AppHandle) -> WrapperStatus {
     #[cfg(windows)]
@@ -2065,6 +2075,15 @@ mod windows_wrapper {
             }
             return result;
         }
+        // Losing (or getting) focus: Windows repaints the frame it thinks
+        // the window has, and with no frame of ours that came out as white
+        // in the transparent corners while the Wrapper was in the
+        // background. An lparam of -1 keeps the activation change but skips
+        // that repaint.
+        if msg == windows::Win32::UI::WindowsAndMessaging::WM_NCACTIVATE {
+            // SAFETY: passing the message on, as every subclass must.
+            return unsafe { DefSubclassProc(hwnd, msg, wparam, windows::Win32::Foundation::LPARAM(-1)) };
+        }
         // SAFETY: passing the message on, as every subclass must.
         unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
     }
@@ -2384,7 +2403,23 @@ mod windows_wrapper {
 
     unsafe extern "system" fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         use windows::Win32::UI::WindowsAndMessaging::{CallNextHookEx, MSLLHOOKSTRUCT, WM_LBUTTONDOWN};
-        if code >= 0 && wparam.0 as u32 == WM_LBUTTONDOWN && STATE.load(Ordering::Relaxed) == OPEN {
+        // (only while one of our windows, or Roon through the hole, is in
+        // front and the Wrapper isn't minimized: a click in another app,
+        // over where the hole was, isn't one on Roon)
+        let ours = || {
+            use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+            if !hwnd_of(&HOST_HWND).is_some_and(|h| !is_minimized(h)) {
+                return false;
+            }
+            let Some(front) = foreground() else { return false };
+            if Some(front) == roon_window() {
+                return true;
+            }
+            let mut pid = 0u32;
+            GetWindowThreadProcessId(front, Some(&mut pid));
+            pid == std::process::id()
+        };
+        if code >= 0 && wparam.0 as u32 == WM_LBUTTONDOWN && STATE.load(Ordering::Relaxed) == OPEN && ours() {
             let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
             let (x, y) = (info.pt.x, info.pt.y);
             let on_roon = {

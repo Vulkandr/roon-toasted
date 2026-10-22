@@ -2322,6 +2322,21 @@ html.invert-colors {
   background: var(--roon-hover);
 }
 
+/* The name lit while the Wrapped page is open, like the arrow while the
+   side menu is; either goes dark again under the mouse */
+.wrapped-btn.page-on .wrapped-open {
+  background: var(--hover);
+}
+
+.wrapped-btn.through-filter.page-on .wrapped-open {
+  background: var(--roon-hover);
+}
+
+.wrapped-btn.page-on .wrapped-open:hover,
+.wrapped-btn.on .wrapped-arrow:hover {
+  background: transparent;
+}
+
 .wrapped-chevron {
   width: 15px;
   height: 15px;
@@ -2362,52 +2377,396 @@ html.invert-colors {
   background: var(--hover);
 }
 
-/* The menu: like the zone picker, opening under the button or beside the
-   sidebar (wrapper.js places it) */
-.wrapped-menu {
-  position: fixed;
-  z-index: 10;
-  min-width: 200px;
-  padding: 6px;
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+/* The side menu: Wrapped's version of Roon's sidebar, over it (wrapper.js
+   places it under the Wrapped button, as wide as the sidebar). Its pages
+   are real buttons, so it's told from Roon's sidebar at a glance. */
+.wrapped-side {
+  position: absolute;
+  bottom: 109px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px 12px;
+  overflow-y: auto;
+  background: var(--bg);
+  border-right: 1px solid var(--border);
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
 }
 
-.wrapped-menu[hidden] {
+.wrapped-side[hidden] {
   display: none;
 }
 
-.wrapped-option {
+.wrapped-side-caption {
+  margin: 10px 2px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.wrapped-side-caption:first-child {
+  margin-top: 2px;
+}
+
+.wrapped-side-btn {
   display: flex;
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 6px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card);
+  color: var(--text);
   text-align: left;
   font-size: 13px;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
 }
 
-.wrapped-option:hover {
-  background: var(--hover);
+.wrapped-side-btn:hover {
+  background: color-mix(in srgb, var(--card) 70%, var(--hover));
+  border-color: color-mix(in srgb, var(--border) 50%, var(--accent));
 }
 
-.wrapped-option svg {
+.wrapped-side-btn:active {
+  transform: translateY(1px);
+  box-shadow: none;
+}
+
+.wrapped-side-btn svg {
   width: 16px;
   height: 16px;
   flex: none;
   color: var(--muted);
 }
 
-.wrapped-option.selected {
-  color: var(--accent);
-  font-weight: 600;
+.wrapped-side-btn span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
-.wrapped-option.selected svg {
+.wrapped-side-btn.selected {
   color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+}
+
+.wrapped-side-btn.selected svg {
+  color: var(--accent);
+}
+
+.wrapped-side-close {
+  margin-top: auto;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+#wrapped-side-btn.on {
+  color: var(--accent);
+}
+
+/* Under skin.rs's color filter (over Roon's sidebar): Roon's colors in,
+   ours out. The matrix maps Roon's grey to our background and Roon's
+   purple to our accent, and keeps the greys in between. */
+.wrapped-side.through-filter {
+  background: var(--roon-bg);
+  border-right-color: var(--roon-border);
+  scrollbar-color: var(--roon-border) transparent;
+}
+
+.wrapped-side.through-filter .wrapped-side-caption {
+  color: var(--roon-text);
+}
+
+.wrapped-side.through-filter .wrapped-side-btn {
+  background: var(--roon-card);
+  border-color: var(--roon-border);
+  color: var(--roon-bright);
+  box-shadow: none;
+}
+
+.wrapped-side.through-filter .wrapped-side-btn svg,
+.wrapped-side.through-filter .wrapped-side-close {
+  color: var(--roon-text);
+}
+
+.wrapped-side.through-filter .wrapped-side-btn:hover {
+  background: var(--roon-hover);
+  border-color: var(--roon-accent);
+}
+
+.wrapped-side.through-filter .wrapped-side-btn.selected {
+  background: var(--roon-card);
+  border-color: var(--roon-accent);
+  color: var(--roon-accent);
+}
+
+.wrapped-side.through-filter .wrapped-side-btn.selected svg {
+  color: var(--roon-accent);
+}
+
+.wrapped-side-lists {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.wrapped-side-list {
+  padding: 7px 12px;
+  font-weight: 500;
+}
+
+/* The Artists and Albums pages */
+.wrapped-filter {
+  max-width: 320px;
+  height: 34px;
+  margin-bottom: 14px;
+}
+
+.wrapped-tabs-row .wrapped-filter {
+  margin: 0 0 0 auto;
+}
+
+.wrapped-more-sentinel {
+  height: 1px;
+}
+
+/* The Tracks page's date added, and its sorts' directions */
+.wrapped-track-added {
+  flex: 0 0 auto;
+  width: 132px;
+  padding: 0 8px;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.wrapped-track-added.unknown {
+  opacity: 0.6;
+}
+
+.wrapped-track-added-from {
+  margin-left: 6px;
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-size: 10px;
+  vertical-align: 1px;
+}
+
+.wrapped-sort-dir {
+  display: inline-block;
+  min-width: 0;
+  margin-left: 3px;
+  font-weight: 700;
+}
+
+.wrapped-sort-dir:empty {
+  margin-left: 0;
+}
+
+@media (max-width: 1250px) {
+  .wrapped-track-added,
+  .wrapped-track-year {
+    display: none;
+  }
+}
+
+/* The Tracks page's column headers (sticky, sorting) and year */
+.wrapped-track-year {
+  flex: none;
+  width: 52px;
+  padding: 0 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wrapped-track-header {
+  position: sticky;
+  top: -20px;
+  z-index: 2;
+  min-height: 38px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped-track.wrapped-track-header:hover {
+  background: var(--bg);
+}
+
+/* Each heading lights up on its own, with a line between them */
+.wrapped-track-header .wrapped-sort-head {
+  align-self: stretch;
+  border-left: 1px solid var(--border);
+}
+
+.wrapped-track-header .wrapped-sort-head.wrapped-track-title {
+  border-left-color: transparent;
+}
+
+.wrapped-track-header .wrapped-sort-head:hover {
+  background: var(--hover);
+}
+
+.wrapped-header-spacer {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.wrapped-library-track .wrapped-header-spacer.wrapped-art {
+  height: 1px;
+}
+
+.wrapped-sort-head {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  text-align: left;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.wrapped-sort-head.wrapped-track-title {
+  font-size: 12px;
+}
+
+.wrapped-sort-head.wrapped-track-length {
+  justify-content: flex-end;
+}
+
+.wrapped-sort-head:hover {
+  color: var(--text);
+}
+
+.wrapped-sort-head.selected {
+  color: var(--accent);
+}
+
+.wrapped-sort-head .wrapped-sort-dir {
+  margin-left: 4px;
+  font-size: 11px;
+}
+
+/* A row's X (out of a playlist, out of Listen Later) and a list's Play */
+.wrapped-row-remove {
+  flex: none;
+  opacity: 0;
+}
+
+.wrapped-track:hover .wrapped-row-remove,
+.wrapped-row-remove:focus-visible {
+  opacity: 1;
+}
+
+.wrapped-row-remove:hover {
+  color: #e5484d;
+}
+
+.wrapped-play-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.wrapped-play-all svg {
+  width: 13px;
+  height: 13px;
+}
+
+/* A song's whole row opens its menu (wrapper.js wholeRowOpens) */
+.wrapped-track.clickable {
+  cursor: pointer;
+}
+
+/* The Tracks page's hearts-only switch */
+.wrapped-hearts-filter {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--muted);
+}
+
+.wrapped-hearts-filter svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wrapped-hearts-filter .icon-add {
+  display: none;
+}
+
+.wrapped-hearts-filter:hover {
+  color: var(--text);
+}
+
+.wrapped-hearts-filter.on {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.wrapped-hearts-filter.on .icon-heart path {
+  fill: currentColor;
+}
+
+/* The Tracks page: a row per track (art, title, artist, album, length) */
+.wrapped-library-track .wrapped-art {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.wrapped-library-track .wrapped-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wrapped-library-track .wrapped-initials {
+  font-size: 11px;
+}
+
+.wrapped-track-by,
+.wrapped-track-on {
+  flex: 0 0 22%;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.wrapped-track-by.link,
+.wrapped-track-on.link {
+  cursor: pointer;
+}
+
+.wrapped-track-by.link:hover,
+.wrapped-track-on.link:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+@media (max-width: 1100px) {
+  .wrapped-track-on {
+    display: none;
+  }
 }
 
 /* The page: over Roon's content area, right of its sidebar (wrapper.js sets
@@ -2432,14 +2791,186 @@ html.invert-colors {
 .wrapped-head {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 14px 12px 10px 18px;
+  gap: 12px;
+  padding: 10px 12px 10px 18px;
   border-bottom: 1px solid var(--border);
 }
 
 .wrapped-heading {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* The bar: the title left, the pages in the middle, the search right */
+.wrapped-bar-search {
+  position: relative;
+  flex: 1 1 0;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 160px;
+}
+
+.wrapped-bar-search .wrapped-bar-input {
+  width: 100%;
+  max-width: 420px;
+}
+
+.wrapped-bar-input {
+  max-width: none;
+  height: 36px;
+  border-radius: 999px;
+  padding: 0 16px;
+  font-size: 13.5px;
+}
+
+.wrapped-bar-input::-webkit-search-cancel-button {
+  cursor: pointer;
+}
+
+/* What was searched for and opened lately, under the bar */
+.wrapped-recent {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: min(100%, 420px);
+  z-index: 7;
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: 6px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  scrollbar-width: thin;
+}
+
+.wrapped-recent[hidden] {
+  display: none;
+}
+
+.wrapped-recent-head {
+  padding: 8px 10px 6px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.wrapped-recent-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.wrapped-recent-row:hover,
+.wrapped-recent-row:focus-within {
+  background: var(--hover);
+}
+
+.wrapped-recent-row .wrapped-art {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+}
+
+.wrapped-recent-row .wrapped-art.round {
+  border-radius: 50%;
+}
+
+.wrapped-recent-row .wrapped-art .wrapped-initials {
+  font-size: 12px;
+}
+
+.wrapped-recent-glass {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
+  color: var(--muted);
+}
+
+.wrapped-recent-glass svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wrapped-recent-text {
   flex: 1;
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.wrapped-recent-kind {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.wrapped-recent-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wrapped-recent-row .discover-ask-x {
+  flex: none;
+  opacity: 0.7;
+}
+
+.wrapped-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 1 auto;
+}
+
+.wrapped-nav-link {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.wrapped-nav-link svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.wrapped-nav-link:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.wrapped-nav-link.selected {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* (narrower: the pages' names go, their icons stay) */
+@media (max-width: 1180px) {
+  .wrapped-nav-link span {
+    display: none;
+  }
+
+  .wrapped-nav-link {
+    padding: 7px 8px;
+  }
 }
 
 .wrapped-title {
@@ -2472,6 +3003,139 @@ html.invert-colors {
   padding: 20px max(24px, calc((100% - var(--wrapped-column)) / 2)) 32px;
   scrollbar-width: thin;
   scrollbar-color: var(--track) transparent;
+}
+
+/* Home */
+.wrapped-here {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.wrapped-here svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wrapped-home-progress {
+  margin: 0 0 10px;
+}
+
+.wrapped-home-row {
+  margin-bottom: 8px;
+}
+
+.wrapped-home-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 22px 0 10px;
+  padding: 0 0 6px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.wrapped-home-head:hover {
+  color: var(--text);
+}
+
+.wrapped-home-head svg {
+  width: 14px;
+  height: 14px;
+  transition: transform 0.15s;
+}
+
+.wrapped-home-row.open .wrapped-home-head svg {
+  transform: rotate(180deg);
+}
+
+.wrapped-home-more {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.wrapped-home-more[hidden] {
+  display: none;
+}
+
+/* A card with its ban X (shown on hover) */
+.wrapped-card-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.wrapped-card-wrap .wrapped-card {
+  width: 100%;
+}
+
+.wrapped-card-ban {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  transition: opacity 0.12s;
+}
+
+.wrapped-card-wrap:hover .wrapped-card-ban,
+.wrapped-card-ban:focus-visible {
+  opacity: 1;
+}
+
+.wrapped-card-ban:hover {
+  color: #e5484d;
+  border-color: #e5484d;
+}
+
+/* The page's top-right button, and the ban list */
+.wrapped-corner {
+  display: flex;
+  justify-content: flex-end;
+  margin: -6px 0 4px;
+}
+
+.wrapped-ban-rows {
+  display: flex;
+  flex-direction: column;
+  max-width: 640px;
+}
+
+.wrapped-ban-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped-ban-name {
+  flex: 1;
+  font-weight: 600;
+}
+
+.wrapped-ban-when {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wrapped-home-foot {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 26px;
+}
+
+.wrapped-home-foot .wrapped-note {
+  margin: 0;
 }
 
 .wrapped-grid {
@@ -2758,6 +3422,71 @@ html.invert-colors {
   font-weight: 600;
 }
 
+/* Play now with its arrow for the other ways to play (album pages) */
+.wrapped-split {
+  display: flex;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.wrapped-split .wrapped-play {
+  margin-right: 0;
+  border-radius: 999px 0 0 999px;
+}
+
+.wrapped-split .wrapped-split-more {
+  width: 34px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 0 999px 999px 0;
+  border-left: 1px solid color-mix(in srgb, var(--on-accent) 30%, transparent);
+}
+
+/* The play choices (Play Now, Add Next, Queue, Start Radio, Deep Dive) */
+.wrapped-popmenu {
+  position: absolute;
+  z-index: 8;
+  min-width: 200px;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+}
+
+.wrapped-popmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  padding: 10px 14px;
+  border-radius: 8px;
+  color: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+}
+
+.wrapped-popmenu-item:hover,
+.wrapped-popmenu-item:focus-visible {
+  background: color-mix(in srgb, var(--on-accent) 14%, transparent);
+  outline: none;
+}
+
+.wrapped-popmenu-item svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+}
+
+.wrapped-track-title.link {
+  cursor: pointer;
+}
+
+.wrapped-track-title.link:hover {
+  text-decoration: underline;
+}
+
 .wrapped-play svg {
   width: 16px;
   height: 16px;
@@ -2860,6 +3589,22 @@ body > .wrapped-toast {
   margin-bottom: 22px;
 }
 
+/* Settings in two columns, each as wide as one column was; one under the
+   other when the page is narrow */
+.wrapped-settings-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 640px));
+  gap: 48px;
+  justify-content: center;
+  align-items: start;
+}
+
+@media (max-width: 1100px) {
+  .wrapped-settings-columns {
+    grid-template-columns: minmax(0, 640px);
+  }
+}
+
 .wrapped-setting-label {
   font-weight: 600;
   margin-bottom: 4px;
@@ -2941,6 +3686,58 @@ body > .wrapped-toast {
 }
 
 /* A spinner over the whole Wrapped page (Open in Roon) */
+/* A question over the page (wrappedConfirm) */
+.wrapped-dialog-back {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 18vh;
+  background: color-mix(in srgb, var(--bg) 60%, transparent);
+  backdrop-filter: blur(2px);
+}
+
+.wrapped-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: min(540px, calc(100% - 40px));
+  padding: 18px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
+}
+
+.wrapped-dialog-title {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.wrapped-dialog .wrapped-note {
+  margin: 0;
+}
+
+.wrapped-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.wrapped-button.danger {
+  border-color: color-mix(in srgb, #e5484d 60%, var(--border));
+  color: #e5484d;
+}
+
+.wrapped-button.danger:hover {
+  background: color-mix(in srgb, #e5484d 14%, var(--card));
+  border-color: #e5484d;
+}
+
 .wrapped-busy {
   position: absolute;
   inset: 0;
@@ -2974,22 +3771,37 @@ body > .wrapped-toast {
   }
 }
 
-/* The History page's views */
+/* Choices as Roon shows them: one dark track, the chosen one a lighter
+   block in it (the History page's views, Deep Dive's tabs, the radio's
+   settings, Settings' pills) */
 .wrapped-tabs {
-  display: flex;
-  gap: 6px;
+  display: inline-flex;
+  align-self: flex-start;
+  flex-wrap: wrap;
+  gap: 2px;
   margin-bottom: 14px;
+  padding: 3px;
+  border-radius: 8px;
+  /* (in the page's own colors: the track between the page and its
+     cards, the chosen one the palette's track color) */
+  background: color-mix(in srgb, var(--track) 45%, var(--bg));
+  border: 1px solid var(--border);
 }
 
 .wrapped-tab {
-  padding: 5px 12px;
-  border-radius: 999px;
-  border: 1px solid var(--border);
+  flex: 1 0 auto;
+  min-width: 64px;
+  padding: 6px 16px;
+  border-radius: 6px;
+  border: 0;
   background: none;
   color: var(--muted);
   font: inherit;
   font-size: 12.5px;
+  font-weight: 500;
+  text-align: center;
   cursor: pointer;
+  transition: background 0.12s, color 0.12s;
 }
 
 .wrapped-tab:hover {
@@ -2998,20 +3810,35 @@ body > .wrapped-toast {
 
 .wrapped-tab.selected {
   color: var(--text);
-  border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-weight: 600;
+  background: var(--track);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
 }
 
-.wrapped-tab.reload {
+/* (a row of tabs with a button beside them, like History's reload) */
+.wrapped-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.wrapped-tabs-row .wrapped-tabs {
+  margin: 0;
+}
+
+.wrapped-tabs-row .reload {
   margin-left: auto;
 }
 
 .wrapped-tabs.small {
   margin-bottom: 10px;
+  padding: 2px;
 }
 
 .wrapped-tabs.small .wrapped-tab {
-  padding: 3px 10px;
+  min-width: 44px;
+  padding: 4px 12px;
   font-size: 11.5px;
 }
 
@@ -3288,12 +4115,201 @@ body > .wrapped-toast {
 
 .discover-card {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 12px;
   padding: 10px;
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--card);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background-color 0.15s ease;
+}
+
+.discover-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+
+.discover-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* A dated copy opened: the whole row, with its songs under it */
+.discover-old .discover-card.open {
+  grid-column: 1 / -1;
+}
+
+.discover-card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.discover-chevron {
+  display: flex;
+  margin-left: auto;
+  color: var(--muted);
+  transition: transform 0.2s ease;
+}
+
+.discover-chevron svg {
+  width: 16px;
+  height: 16px;
+}
+
+.discover-card.open .discover-chevron {
+  transform: rotate(180deg);
+}
+
+/* Parts that fold away (the cover, the artists) or out (the songs) */
+.discover-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows 0.22s ease, opacity 0.18s ease;
+}
+
+.discover-fold-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.discover-card.open .discover-fold.cover,
+.discover-card.open .discover-fold.summary,
+.discover-card:not(.open) .discover-fold.tracks {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.discover-fold.cover,
+.discover-fold.tracks {
+  width: 100%;
+}
+
+/* (a folded part takes the card's gap with it) */
+.discover-fold.cover,
+.discover-fold.tracks {
+  transition: grid-template-rows 0.22s ease, opacity 0.18s ease, margin 0.22s ease;
+}
+
+.discover-card.open .discover-fold.cover {
+  margin-bottom: -12px;
+}
+
+.discover-card:not(.open) .discover-fold.tracks {
+  margin-top: -12px;
+}
+
+.discover-fold.cover .discover-fold-inner {
+  display: flex;
+  justify-content: center;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .discover-fold,
+  .discover-chevron {
+    transition: none;
+  }
+}
+
+/* The numbered track list */
+.discover-tracklist {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 8px 0 0;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.discover-track {
+  display: grid;
+  grid-template-columns: 2.4em 1fr;
+  gap: 6px;
+  padding: 6px 4px;
+  border-radius: 8px;
+  cursor: default;
+}
+
+.discover-track:hover {
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.discover-track.empty {
+  display: block;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.discover-track-num {
+  text-align: right;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  padding-top: 1px;
+}
+
+.discover-track-body {
+  min-width: 0;
+}
+
+.discover-track-title {
+  font-weight: 600;
+  font-size: 13.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.discover-track-artist {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.discover-track-why {
+  color: var(--muted);
+  font-size: 12px;
+  opacity: 0.85;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Play: bigger, and it stands out */
+.wrapped-play.discover-play {
+  height: 44px;
+  padding: 0 24px 0 18px;
+  margin-top: 6px;
+  font-size: 15px;
+  box-shadow: 0 4px 16px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: transform 0.12s ease, filter 0.12s ease, box-shadow 0.12s ease;
+}
+
+.wrapped-play.discover-play svg {
+  width: 20px;
+  height: 20px;
+}
+
+.wrapped-play.discover-play:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+.wrapped-play.discover-play.small {
+  height: 32px;
+  padding: 0 14px 0 10px;
+  margin-top: 4px;
+  font-size: 13px;
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.wrapped-play.discover-play.small svg {
+  width: 15px;
+  height: 15px;
 }
 
 .discover-card .wrapped-art {
@@ -3314,12 +4330,26 @@ body > .wrapped-toast {
   align-self: center;
 }
 
+/* A list's cover before Roon has made one: four album covers in a square */
+.wrapped-art.discover-mosaic {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.wrapped-art.discover-mosaic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
 .discover-text {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
   min-width: 0;
+  flex: 1;
 }
 
 .discover-title {
@@ -3340,9 +4370,6 @@ body > .wrapped-toast {
   margin-bottom: 6px;
 }
 
-.discover-card:not(.large) .wrapped-button.small {
-  margin-top: 2px;
-}
 
 .wrapped-button.small {
   height: 26px;
@@ -3357,6 +4384,126 @@ body > .wrapped-toast {
 .discover-build:disabled {
   opacity: 0.6;
   cursor: progress;
+}
+
+/* Fine Tuning, under Discover Weekly's Build now: your own words, and the
+   requests standing */
+.discover-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.discover-ask-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.discover-ask-head svg {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  color: var(--accent);
+}
+
+.discover-ask-head h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.discover-ask .wrapped-note {
+  margin: 0;
+}
+
+.discover-ask-x {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  color: var(--muted);
+}
+
+.discover-ask-x:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.discover-ask-x svg {
+  width: 14px;
+  height: 14px;
+}
+
+.discover-ask-row {
+  display: flex;
+  gap: 8px;
+}
+
+.discover-ask-row .wrapped-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+.discover-ask-row .wrapped-button {
+  height: 38px;
+}
+
+.discover-requests {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.discover-request {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 6px 8px 12px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--text) 5%, transparent);
+}
+
+.discover-request-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.discover-request-when {
+  display: block;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.discover-request-keep {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.discover-request-keep:hover {
+  color: var(--text);
+}
+
+.discover-request-keep.on {
+  color: var(--text);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
 }
 
 /* "Start fresh", under both lists */
@@ -3470,21 +4617,15 @@ body > .wrapped-toast {
 
 /* ----- Wrapped settings: how Discover picks, as three tiers ----- */
 .picking-tiers {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  display: flex;
+  flex-direction: column;
   gap: 10px;
   margin-top: 8px;
-}
-
-/* (tier 2's setup needs the width: its card spans the row) */
-.picking-tier:has(.llm-setup) {
-  grid-column: 1 / -1;
 }
 
 .picking-tier {
   display: flex;
   flex-direction: column;
-  gap: 6px;
   padding: 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -3499,6 +4640,68 @@ body > .wrapped-toast {
   opacity: 0.7;
 }
 
+/* One tier inside a card; switched-on tiers share a card, a line between */
+.picking-tier-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.picking-tier-section + .picking-tier-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+.picking-tier-section .wrapped-note.small {
+  margin: 0;
+}
+
+/* Tier 2's setup, folding open and shut */
+.llm-setup-toggle {
+  align-self: flex-start;
+  margin-top: 2px;
+}
+
+/* A tier's buttons in a row (Change setup, Scan all) with a status line */
+.tier-actions {
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.tier-actions .llm-setup-toggle {
+  margin-top: 0;
+}
+
+.llm-fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.22s ease, opacity 0.18s ease;
+}
+
+.llm-fold.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* (shut, it takes the section's gap with it) */
+.llm-fold:not(.open) {
+  margin-top: -6px;
+}
+
+.llm-fold-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .llm-fold {
+    transition: none;
+  }
+}
+
 .picking-tier-head {
   display: flex;
   align-items: center;
@@ -3511,23 +4714,30 @@ body > .wrapped-toast {
 }
 
 .picking-tier-state {
+  /* shaped like Toasted's Experimental badge: a small outlined pill */
   padding: 2px 8px;
   border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--hover);
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
   color: var(--muted);
   white-space: nowrap;
 }
 
-.picking-tier.on .picking-tier-state {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
-  color: var(--text);
+/* Activated: lit up in the accent */
+.picking-tier-section.on .picking-tier-state {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
+  text-shadow: 0 0 6px color-mix(in srgb, var(--accent) 50%, transparent);
 }
 
-.picking-tier.setup .picking-tier-state {
-  background: color-mix(in srgb, var(--warn) 25%, transparent);
-  color: var(--text);
+.picking-tier-section.setup .picking-tier-state {
+  color: var(--warn);
+  border-color: var(--warn);
 }
 
 /* Now Playing's Wrapped piece: why a Discover song is there, and its
@@ -3625,6 +4835,11 @@ body > .wrapped-toast {
   cursor: inherit;
 }
 
+/* A Deep Dive's name there (it wraps on its own lines, left like the rest) */
+.wrapped-piece-dive .wrapped-piece-link {
+  text-align: left;
+}
+
 
 /* ----- The Discover star: the weekly playlists, one click away ----- */
 .discover-btn {
@@ -3677,7 +4892,57 @@ body > .wrapped-toast {
   display: none !important;
 }
 
-/* Tier 2's setup on the Settings page */
+/* Tier 2's setup on the Settings page: the model, then the extra reading,
+   each a section with its own heading */
+.llm-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.llm-section + .llm-section {
+  margin-top: 6px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.llm-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
+.llm-section .wrapped-note.small {
+  margin: 0;
+}
+
+.llm-key-row {
+  align-items: flex-end;
+}
+
+.llm-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.llm-field .wrapped-search {
+  width: 100%;
+}
+
+.llm-field-label {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.llm-key-row .llm-field:has(.llm-model) {
+  flex: 0 1 220px;
+}
+
 .llm-setup {
   display: flex;
   flex-direction: column;
@@ -3685,9 +4950,6 @@ body > .wrapped-toast {
   margin-top: 10px;
 }
 
-.llm-setup .wrapped-search.llm-model {
-  flex: 0 1 260px;
-}
 
 .llm-test {
   align-items: center;
@@ -3699,10 +4961,722 @@ body > .wrapped-toast {
   opacity: 0.8;
 }
 
+/* Ollama's setup: three steps, each with a numbered mark that turns into a
+   tick once it's done; only the step at hand shows its body */
+.ollama-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 2px 0 6px;
+}
+
+.ollama-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ollama-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ollama-step-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+
+.ollama-step.now .ollama-step-mark {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ollama-step.done .ollama-step-mark {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.ollama-step-title {
+  font-weight: 600;
+}
+
+.ollama-step.later .ollama-step-title {
+  color: var(--muted);
+}
+
+.ollama-step-state {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ollama-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-left: 28px;
+}
+
+.ollama-step-body:empty {
+  display: none;
+}
+
+.ollama-step-body .wrapped-note.small {
+  margin: 0;
+}
+
+.wrapped-tabs.ollama-pills {
+  flex-wrap: wrap;
+  margin-bottom: 0;
+}
+
+.ollama-row {
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.ollama-row .llm-field {
+  flex: 0 1 340px;
+}
+
+.wrapped-button.ollama-go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+
+.wrapped-button.ollama-go:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.ollama-steps .wrapped-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.ollama-select {
+  height: 30px;
+  min-width: 220px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.ollama-error {
+  color: var(--warn);
+}
+
+/* Who runs Ollama: a tick box under the steps */
+.ollama-manual {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.ollama-manual[hidden] {
+  display: none;
+}
+
+.ollama-manual input {
+  accent-color: var(--accent);
+  margin: 0;
+}
+
+/* A job's bar: filled as it goes, or sliding while there's no count */
+.ollama-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ollama-progress[hidden] {
+  display: none;
+}
+
+.ollama-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.ollama-bar-fill {
+  height: 100%;
+  width: 0;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s linear;
+}
+
+.ollama-progress.waiting .ollama-bar-fill {
+  position: absolute;
+  width: 30%;
+  animation: ollama-slide 1.2s ease-in-out infinite;
+}
+
+@keyframes ollama-slide {
+  from {
+    left: -30%;
+  }
+  to {
+    left: 100%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ollama-progress.waiting .ollama-bar-fill {
+    animation: none;
+    left: 0;
+    width: 100%;
+    opacity: 0.5;
+  }
+}
+
+.ollama-progress-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Tier 2's line under "Suggested because" in the player */
 .wrapped-piece-why-text {
   font-size: 13px;
   opacity: 0.8;
   margin-top: 4px;
   max-width: 420px;
+}
+
+/* ----- Deep Dive: the Deep Dive / Radio tabs, the picks with their [+],
+   and what you ask for ----- */
+.dive-tabs {
+  margin-bottom: 18px;
+}
+
+.dive-picks,
+.dive-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.dive-picks h4,
+.dive-ask h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+/* Songs from: New to you / Your library / Both */
+.dive-from {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.dive-from-label {
+  color: var(--muted);
+}
+
+.dive-from .wrapped-tabs {
+  margin: 0;
+}
+
+.dive-picks .wrapped-note {
+  margin: 0;
+}
+
+.dive-pick-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.dive-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 320px;
+  padding: 6px 6px 6px 6px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.dive-pick .wrapped-art.small {
+  flex: none;
+  width: 48px;
+  height: 48px;
+}
+
+.dive-pick-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dive-pick-title,
+.dive-pick-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dive-pick-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dive-add {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+}
+
+.dive-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.dive-add svg {
+  width: 20px;
+  height: 20px;
+}
+
+.dive-input {
+  height: auto;
+  max-width: 720px;
+  padding: 10px 14px;
+  line-height: 1.4;
+  resize: vertical;
+}
+
+.dive-go {
+  width: fit-content;
+}
+
+.dive-go[hidden] {
+  display: none;
+}
+
+.dive-go:disabled {
+  opacity: 0.5;
+}
+
+.dive-radio-from {
+  margin-bottom: 14px;
+}
+
+/* The Deep Dives made so far */
+.dive-made {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.dive-made h4 {
+  margin: 0 0 2px;
+  font-size: 15px;
+}
+
+.dive-made-card {
+  max-width: 900px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.dive-made-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 8px 10px 14px;
+  cursor: pointer;
+}
+
+.dive-made-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dive-made-name {
+  font-weight: 600;
+}
+
+.dive-made-sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dive-made-songs {
+  display: none;
+  margin: 0;
+  padding: 0 14px 12px 40px;
+}
+
+.dive-made-card.open .dive-made-songs {
+  display: block;
+}
+
+.dive-made-songs li {
+  padding: 3px 0;
+}
+
+.dive-made-song {
+  display: block;
+}
+
+.dive-made-why {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Deep Dive's talk before building: tier 2's questions and your answers,
+   a line of what's settled, the box to answer in, Make it now */
+.dive-chat {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 760px;
+  margin-top: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.dive-chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.dive-msg {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  max-width: 88%;
+}
+
+.dive-msg.from-listener {
+  align-self: flex-end;
+}
+
+.dive-msg > svg {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-top: 7px;
+  color: var(--accent);
+}
+
+.dive-msg-text {
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.dive-msg.from-listener .dive-msg-text {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.dive-typing {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.dive-typing i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: dive-typing 1.2s infinite ease-in-out;
+}
+
+.dive-typing i:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dive-typing i:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dive-typing {
+  0%,
+  60%,
+  100% {
+    opacity: 0.3;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+.dive-chat .wrapped-note {
+  margin: 0;
+}
+
+.dive-chat-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+}
+
+.dive-chat-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  height: auto;
+  padding: 8px 12px;
+  line-height: 1.4;
+  resize: none;
+}
+
+.dive-chat-row .wrapped-button {
+  height: 38px;
+}
+
+.dive-chat-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.wrapped-play.dive-go.small {
+  height: 32px;
+  padding: 0 14px 0 10px;
+  font-size: 13px;
+}
+
+.wrapped-play.dive-go.small svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dive-chat-over {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dive-chat-over:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+
+/* Deep Dive's question waiting for an answer: the bubble pulses until you
+   start on one; the page's own notes in the talk */
+.dive-msg.asking .dive-msg-text {
+  animation: dive-asking 1.4s ease-in-out infinite;
+}
+
+@keyframes dive-asking {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 60%, transparent);
+  }
+}
+
+.dive-chat .dive-note {
+  align-self: center;
+  padding: 2px 0;
+  text-align: center;
+}
+
+.dive-made-top .dive-talk {
+  flex: none;
+}
+
+/* ----- Deep Dive: Sound check, tier 3's test (the picked album's songs
+   ranked by how close they sound to the picked song) ----- */
+.sound-check {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 900px;
+  margin-bottom: 22px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--card);
+}
+
+.sound-check-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.sound-check-head h4 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.sound-check-head .discover-ask-x {
+  margin-left: auto;
+}
+
+.sound-check .wrapped-note {
+  margin: 0;
+}
+
+.sound-check-group h5 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.sound-check-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* rank, title, bar, closeness, styles, what was heard */
+.sound-check-row {
+  display: grid;
+  grid-template-columns: 1.6em minmax(8em, 1.4fr) minmax(48px, 1fr) 3.4em minmax(0, 1.6fr) 5.6em;
+  align-items: center;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 13px;
+}
+
+.sound-check-rank {
+  color: var(--muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sound-check-title,
+.sound-check-styles {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sound-check-row.top .sound-check-title {
+  font-weight: 600;
+}
+
+.sound-check-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--track);
+  overflow: hidden;
+}
+
+.sound-check-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.sound-check-value {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.sound-check-styles {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* "your file" (all of the song) or "preview" */
+.sound-check-source {
+  justify-self: end;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.sound-check-source.file {
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  line-height: 15px;
+}
+
+.sound-check-row.missing {
+  opacity: 0.55;
+}
+
+/* (your songs: no rank, bar or closeness) */
+.sound-check-group.picks .sound-check-row {
+  grid-template-columns: minmax(8em, 1.4fr) minmax(0, 2fr) 5.6em;
+}
+
+.sound-check-group.picks .sound-check-rank,
+.sound-check-group.picks .sound-check-bar,
+.sound-check-group.picks .sound-check-value {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .sound-check-row {
+    grid-template-columns: 1.6em minmax(0, 1fr) 48px 3.4em;
+  }
+
+  /* (the styles under the title and bar, what was heard under the
+     closeness) */
+  .sound-check-row .sound-check-styles {
+    grid-column: 2 / 4;
+  }
+
+  .sound-check-row .sound-check-source {
+    grid-column: 4;
+  }
+
+  .sound-check-group.picks .sound-check-row .sound-check-styles,
+  .sound-check-group.picks .sound-check-row .sound-check-source {
+    grid-column: auto;
+  }
 }

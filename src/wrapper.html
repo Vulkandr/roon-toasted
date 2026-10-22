@@ -31,8 +31,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           <span>Minimize player</span>
         </button>
-        <button id="open-settings" class="titlebar-icon" title="Settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        <button id="open-settings" class="titlebar-icon" title="Wrapped Settings">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
         </button>
         <button id="win-min" class="win-btn" title="Minimize">
           <svg viewBox="0 0 10 10"><line x1="1" y1="5" x2="9" y2="5" /></svg>
@@ -162,13 +162,15 @@
               <div id="wrapped-piece" class="wrapped-piece">
                 <div class="wrapped-piece-title">Wrapped</div>
                 <div class="wrapped-piece-buttons">
-                  <button class="wrapped-piece-btn discover" data-action="discover" data-tip="Discover: your weekly playlists"><i class="fresh-dot"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
                   <button class="wrapped-piece-btn" data-action="open" data-tip="Open Wrapped"><svg class="wrapped-mark" viewBox="0 0 32 32" aria-hidden="true"><defs><clipPath id="wrapped-mark-inner"><path d="M1.125 1.125H27.2a3.675 3.675 0 0 1 3.675 3.675v26.075H4.8a3.675 3.675 0 0 1-3.675-3.675z"/></clipPath></defs><path d="M0 0h27.2A4.8 4.8 0 0 1 32 4.8V32H4.8A4.8 4.8 0 0 1 0 27.2z"/><g clip-path="url(#wrapped-mark-inner)"><path d="M0 0h17.75l-11.125 11.125v14.125L0 31.875z" fill="#fff"/><path d="M20.875 0H32v32H8.875V12z" fill="currentColor"/><path d="M32 21.875V32H21.875z" fill="#d29922"/><path d="M14.375 14.375 28.75 0h3.125L14.375 17.5zM14.375 25.375 32 7.75v3.125L17.5 25.375zM18.75 32 32 18.75v3.125L21.875 32z"/></g></svg></button>
+                  <button class="wrapped-piece-btn discover" data-action="discover" data-tip="Discover: your weekly playlists"><i class="fresh-dot"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
+                  <!-- (its icon is Deep Dive's own, put in by wrapper.js) -->
+                  <button class="wrapped-piece-btn dive" data-action="dive" data-tip="Deep Dive from this song"></button>
                   <button class="wrapped-piece-btn" data-action="artist" data-tip="Open the artist in Wrapped">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                   </button>
-                  <button class="wrapped-piece-btn" data-action="playlist" data-tip="Create a playlist from this song">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>
+                  <button class="wrapped-piece-btn" data-action="album" data-tip="Open the album in Wrapped">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
                   </button>
                 </div>
                 <!-- A Discover list's song: why it's there, and its thumbs
@@ -180,6 +182,11 @@
                     <button class="rate-btn down" data-vote="-1" aria-label="Thumbs down"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H20a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2.76a2 2 0 0 0-1.79 1.11L12 22a3.13 3.13 0 0 1-3-3.88Z"/></svg></button>
                     <button class="rate-btn up" data-vote="1" aria-label="Thumbs up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg></button>
                   </div>
+                </div>
+                <!-- A Deep Dive's song: the Deep Dive it's from and why it's
+                     there, no thumbs (wrapper.js, renderDivePiece) -->
+                <div id="wrapped-piece-dive" class="wrapped-piece-rate wrapped-piece-dive" hidden>
+                  <div class="wrapped-piece-why"></div>
                 </div>
               </div>
             </div>
@@ -423,7 +430,7 @@
       <div id="wrapped-btn" class="wrapped-btn" hidden>
         <div class="wrapped-face">
           <button id="wrapped-open" class="wrapped-open" title="Open Wrapped">Wrapped</button>
-          <button id="wrapped-arrow" class="wrapped-arrow" title="Wrapped menu">
+          <button id="wrapped-arrow" class="wrapped-arrow" title="Wrapped side menu">
             <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           </button>
         </div>
@@ -434,20 +441,30 @@
       <div id="wrapped-page-btn" class="wrapped-page-btn" hidden>
         <div class="wrapped-face">
           <button id="wrapped-page-open" class="wrapped-page-open">Wrapped</button>
-          <button id="wrapped-page-arrow" class="wrapped-page-arrow" title="Wrapped menu">
+          <button id="wrapped-page-arrow" class="wrapped-page-arrow" title="Wrapped side menu">
             <svg class="wrapped-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           </button>
         </div>
       </div>
-      <div id="wrapped-menu" class="wrapped-menu" hidden></div>
+      <!-- Wrapped's side menu: its pages as buttons, over Roon's sidebar
+           (the arrow on either Wrapped button drops it down and hides it) -->
+      <aside id="wrapped-side" class="wrapped-side" hidden></aside>
       <section id="wrapped" class="wrapped" hidden>
         <div class="wrapped-head">
+          <button id="wrapped-side-btn" class="icon-btn" title="Wrapped menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/></svg>
+          </button>
           <button id="wrapped-back" class="icon-btn" title="Back" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg>
           </button>
           <div class="wrapped-heading">
             <div id="wrapped-title" class="wrapped-title">Wrapped</div>
             <div id="wrapped-sub" class="wrapped-sub" hidden></div>
+          </div>
+          <nav id="wrapped-nav" class="wrapped-nav"></nav>
+          <div class="wrapped-bar-search">
+            <input id="wrapped-bar-input" class="wrapped-search wrapped-bar-input" type="search" placeholder="Search your library, Qobuz and TIDAL" autocomplete="off" spellcheck="false" />
+            <div id="wrapped-recent" class="wrapped-recent" hidden></div>
           </div>
           <button id="wrapped-close" class="icon-btn" title="Close">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>

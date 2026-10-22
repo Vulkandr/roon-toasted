@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use roon_library::Play;
+use roon_library::{LibraryTrack, Play};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -51,6 +51,9 @@ pub struct HistoryStatus {
     pub synced_at: Option<i64>,
     pub complete: bool,
     pub syncing: bool,
+    /// Last.fm scrobbles from before the oldest play Roon has (they join
+    /// the most-played lists; scrobbles.rs).
+    pub scrobbles: usize,
 }
 
 /// A sync's progress, sent to the pages as "wrapped-history".
@@ -148,6 +151,9 @@ pub struct WrappedSettings {
     /// The user's own Last.fm API key (last.fm/api/account/create); without
     /// it only MusicBrainz is asked for tags.
     pub lastfm_key: String,
+    /// The user's Last.fm username, optional: their scrobbles fill in the
+    /// listening from before Roon's history (scrobbles.rs).
+    pub lastfm_user: String,
     pub similar_by: SimilarBy,
     pub similar_scope: SimilarScope,
     /// Wrapped Discovery (discover.rs): the weekly lists, ratings, the
@@ -163,12 +169,23 @@ pub struct WrappedSettings {
     pub llm_model: String,
     pub llm_url: String,
     pub llm_mode: String,
+    /// The user's own Discogs token (discogs.com/settings/developers),
+    /// optional: Discogs' styles per album for tier 2.
+    pub discogs_token: String,
+    /// "Leave Ollama to me": Wrapped doesn't start or stop Ollama (by
+    /// default it does, see ollama.rs).
+    pub ollama_manual: bool,
+    /// Deep Dive's own model (dive.rs), on the same service: it reads far
+    /// more per playlist, so a bigger model pays off there. Empty: the
+    /// model above.
+    pub dive_model: String,
 }
 
 impl Default for WrappedSettings {
     fn default() -> Self {
         WrappedSettings {
             lastfm_key: String::new(),
+            lastfm_user: String::new(),
             similar_by: SimilarBy::default(),
             similar_scope: SimilarScope::default(),
             discovery: true,
@@ -177,6 +194,9 @@ impl Default for WrappedSettings {
             llm_model: String::new(),
             llm_url: String::new(),
             llm_mode: "light".into(),
+            discogs_token: String::new(),
+            ollama_manual: false,
+            dive_model: String::new(),
         }
     }
 }
@@ -220,6 +240,7 @@ pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value) -> Re
     }
     let next: WrappedSettings = serde_json::from_value(value).map_err(|e| format!("Bad value: {e}"))?;
     next.save(&app);
+    crate::ollama::settings_changed(&app, &current, &next);
     crate::discover::set_enabled(next.discovery);
     // (Toasted's Settings window shows Wrapped Discovery too)
     let _ = app.emit("wrapped-settings-changed", &next);
@@ -264,14 +285,16 @@ impl Wrapped {
         write_json(&path, &*self.store.lock().unwrap());
     }
 
-    fn status(&self) -> HistoryStatus {
+    fn status(&self, app: &AppHandle) -> HistoryStatus {
         let store = self.store.lock().unwrap();
+        let oldest = store.plays.last().map(|p| p.played_at).unwrap_or(i64::MAX);
         HistoryStatus {
             plays: store.plays.len(),
             total: store.total,
             synced_at: store.synced_at,
             complete: store.complete,
             syncing: self.syncing.load(Ordering::SeqCst),
+            scrobbles: crate::scrobbles::count_before(app, oldest),
         }
     }
 }
@@ -281,7 +304,7 @@ impl Wrapped {
 pub fn wrapped_history_status(app: AppHandle) -> HistoryStatus {
     let wrapped = app.state::<Wrapped>();
     wrapped.ensure_loaded(&app);
-    wrapped.status()
+    wrapped.status(&app)
 }
 
 /// Brings the copy up to date in the background: everything when it is
@@ -292,7 +315,7 @@ pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<Histor
     let wrapped = app.state::<Wrapped>();
     wrapped.ensure_loaded(&app);
     if wrapped.syncing.swap(true, Ordering::SeqCst) {
-        return Ok(wrapped.status());
+        return Ok(wrapped.status(&app));
     }
     let library = app.state::<Library>();
     let Some(client) = library.client() else {
@@ -345,17 +368,17 @@ pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<Histor
                 wrapped.save(&app2);
                 println!("[wrapped] history synced: {added} new plays");
                 wrapped.syncing.store(false, Ordering::SeqCst);
-                let status = wrapped.status();
+                let status = wrapped.status(&app2);
                 emit(status.plays, status.plays, true, Some(added), None, Some(status));
             }
             Err(e) => {
                 wrapped.syncing.store(false, Ordering::SeqCst);
-                let status = wrapped.status();
+                let status = wrapped.status(&app2);
                 emit(status.plays, status.plays, true, None, Some(format!("Reading the history failed: {e}")), Some(status));
             }
         }
     });
-    Ok(wrapped.status())
+    Ok(wrapped.status(&app))
 }
 
 /// Reads the plays newer than the copy from the Core and keeps them,
@@ -456,6 +479,34 @@ pub fn wrapped_history_top(app: AppHandle, what: String, days: Option<u32>, limi
             row.album_id = p.album_id;
         }
     }
+    // The Last.fm scrobbles from before Roon's history starts, when the
+    // window reaches back that far (nothing Roon knows is counted twice)
+    let oldest = store.plays.last().map(|p| p.played_at).unwrap_or(i64::MAX);
+    if since.is_none_or(|at| at < oldest) {
+        crate::scrobbles::with(&app, |s| {
+            for p in s.plays.iter().filter(|p| p.at < oldest && since.is_none_or(|at| p.at >= at)) {
+                let (key, name) = match what.as_str() {
+                    "artists" => (p.artist.to_lowercase(), p.artist.clone()),
+                    "albums" => (format!("{}\u{0}{}", p.album.to_lowercase(), p.artist.to_lowercase()), p.album.clone()),
+                    _ => (format!("{}\u{0}{}", p.title.to_lowercase(), p.artist.to_lowercase()), p.title.clone()),
+                };
+                if name.is_empty() {
+                    continue;
+                }
+                let row = rows.entry(key).or_insert_with(|| TopRow {
+                    name,
+                    artist: p.artist.clone(),
+                    plays: 0,
+                    last_played: p.at,
+                    album_id: None,
+                    performer_id: None,
+                    track_id: None,
+                    image_key: None,
+                });
+                row.plays += 1;
+            }
+        });
+    }
     let mut rows: Vec<TopRow> = rows.into_values().collect();
     rows.sort_by(|a, b| b.plays.cmp(&a.plays).then(b.last_played.cmp(&a.last_played)));
     rows.truncate(limit.unwrap_or(60));
@@ -473,11 +524,26 @@ pub struct LibraryArtist {
     pub album_count: Option<i32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryAlbum {
+    pub title: String,
+    pub artist: String,
+    pub album_id: Option<u64>,
+    pub performer_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub year: Option<u32>,
+    /// "local", "qobuz", "tidal", "streaming" or "other".
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct LibraryStore {
     synced_at: Option<i64>,
     artists: Vec<LibraryArtist>,
+    albums: Vec<LibraryAlbum>,
+    tracks: Vec<LibraryTrack>,
 }
 
 #[derive(Default)]
@@ -490,6 +556,8 @@ pub struct LibraryCopy {
 #[serde(rename_all = "camelCase")]
 pub struct LibraryStatus {
     pub artists: usize,
+    pub albums: usize,
+    pub tracks: usize,
     pub synced_at: Option<i64>,
     pub syncing: bool,
 }
@@ -514,9 +582,17 @@ impl LibraryCopy {
         self.with_store(app, |s| s.artists.iter().map(|a| a.name.to_lowercase()).collect())
     }
 
+    pub fn albums(&self, app: &AppHandle) -> Vec<LibraryAlbum> {
+        self.with_store(app, |s| s.albums.clone())
+    }
+
+    pub fn tracks(&self, app: &AppHandle) -> Vec<LibraryTrack> {
+        self.with_store(app, |s| s.tracks.clone())
+    }
+
     fn status(&self, app: &AppHandle) -> LibraryStatus {
-        let (artists, synced_at) = self.with_store(app, |s| (s.artists.len(), s.synced_at));
-        LibraryStatus { artists, synced_at, syncing: self.syncing.load(Ordering::SeqCst) }
+        let (artists, albums, tracks, synced_at) = self.with_store(app, |s| (s.artists.len(), s.albums.len(), s.tracks.len(), s.synced_at));
+        LibraryStatus { artists, albums, tracks, synced_at, syncing: self.syncing.load(Ordering::SeqCst) }
     }
 }
 
@@ -549,6 +625,67 @@ pub fn wrapped_library_status(app: AppHandle) -> LibraryStatus {
     app.state::<LibraryCopy>().status(&app)
 }
 
+/// The library's artists, as last read (the Artists page).
+#[tauri::command]
+pub fn wrapped_library_artists(app: AppHandle) -> Vec<LibraryArtist> {
+    app.state::<LibraryCopy>().artists(&app)
+}
+
+/// The library's albums, as last read (the Albums page).
+#[tauri::command]
+pub fn wrapped_library_albums(app: AppHandle) -> Vec<LibraryAlbum> {
+    app.state::<LibraryCopy>().albums(&app)
+}
+
+/// A Tracks page row: the track, and when it was added: Roon's import
+/// date, or the first Last.fm scrobble of the song when that is earlier (a
+/// library moved into Roon in one go has one import date for everything).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackRow {
+    #[serde(flatten)]
+    pub track: LibraryTrack,
+    /// Where `added_at` comes from: "roon", "lastfm" or "" (no date known).
+    pub added_from: String,
+}
+
+/// The library's tracks, as last read (the Tracks page).
+#[tauri::command]
+pub fn wrapped_library_tracks(app: AppHandle) -> Vec<TrackRow> {
+    let tracks = app.state::<LibraryCopy>().tracks(&app);
+    // The first scrobble of each song (artist and title, lower-cased)
+    let wanted: std::collections::HashSet<(String, String)> = tracks.iter().map(|t| (t.artist.to_lowercase(), t.title.to_lowercase())).collect();
+    let mut first: HashMap<(String, String), i64> = HashMap::new();
+    crate::scrobbles::with(&app, |s| {
+        // (newest first: the last one seen is the first scrobble)
+        for p in &s.plays {
+            let key = (p.artist.to_lowercase(), p.title.to_lowercase());
+            if wanted.contains(&key) {
+                first.insert(key, p.at);
+            }
+        }
+    });
+    tracks
+        .into_iter()
+        .map(|mut track| {
+            let scrobbled = first.get(&(track.artist.to_lowercase(), track.title.to_lowercase())).copied();
+            let added_from = match (track.added_at, scrobbled) {
+                (Some(roon), Some(lastfm)) if lastfm < roon => {
+                    track.added_at = Some(lastfm);
+                    "lastfm"
+                }
+                (Some(_), _) => "roon",
+                (None, Some(lastfm)) => {
+                    track.added_at = Some(lastfm);
+                    "lastfm"
+                }
+                (None, None) => "",
+            };
+            TrackRow { track, added_from: added_from.into() }
+        })
+        .collect()
+}
+
 /// Reads the library's artists from the Core in the background (progress
 /// as "wrapped-library" events) and keeps them beside the history copy.
 #[tauri::command]
@@ -566,7 +703,10 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
     tauri::async_runtime::spawn(async move {
         let copy = app2.state::<LibraryCopy>();
         let progress = |read: usize, total: usize| {
-            let _ = app2.emit("wrapped-library", serde_json::json!({ "read": read, "total": total, "done": false }));
+            let _ = app2.emit("wrapped-library", serde_json::json!({ "read": read, "total": total, "what": "artists", "done": false }));
+        };
+        let albums_progress = |read: usize, total: usize| {
+            let _ = app2.emit("wrapped-library", serde_json::json!({ "read": read, "total": total, "what": "albums", "done": false }));
         };
         match client.library_artists(&progress).await {
             Ok(cards) => {
@@ -575,16 +715,59 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
                     .map(|c| LibraryArtist { name: c.name, performer_id: c.performer_id, image_key: c.image_key, album_count: c.album_count })
                     .collect();
                 let n = artists.len();
+                // The albums too (a failure keeps the ones read before)
+                let albums: Option<Vec<LibraryAlbum>> = match client.library_albums(&albums_progress).await {
+                    Ok(cards) => Some(
+                        cards
+                            .into_iter()
+                            .map(|c| LibraryAlbum {
+                                title: c.title,
+                                artist: c.artist,
+                                album_id: c.album_id,
+                                performer_id: c.performer_id,
+                                image_key: c.image_key,
+                                year: c.year,
+                                source: c.source,
+                            })
+                            .collect(),
+                    ),
+                    Err(e) => {
+                        println!("[wrapped] library copy: albums unreadable ({e})");
+                        None
+                    }
+                };
+                let albums_n = albums.as_ref().map(|a| a.len());
+                let tracks_progress = |read: usize, total: usize| {
+                    let _ = app2.emit("wrapped-library", serde_json::json!({ "read": read, "total": total, "what": "tracks", "done": false }));
+                };
+                let tracks = match client.library_tracks(&tracks_progress).await {
+                    Ok(tracks) => Some(tracks),
+                    Err(e) => {
+                        println!("[wrapped] library copy: tracks unreadable ({e})");
+                        None
+                    }
+                };
+                let tracks_n = tracks.as_ref().map(|t| t.len());
                 copy.with_store(&app2, |s| {
                     s.artists = artists;
+                    if let Some(albums) = albums {
+                        s.albums = albums;
+                    }
+                    if let Some(tracks) = tracks {
+                        s.tracks = tracks;
+                    }
                     s.synced_at = Some(now_ms());
                 });
                 if let Some(path) = LibraryCopy::path(&app2) {
                     copy.with_store(&app2, |s| write_json(&path, s));
                 }
-                println!("[wrapped] library copy: {n} artists");
+                println!(
+                    "[wrapped] library copy: {n} artists, {} albums, {} tracks",
+                    albums_n.map(|n| n.to_string()).unwrap_or_else(|| "no".into()),
+                    tracks_n.map(|n| n.to_string()).unwrap_or_else(|| "no".into())
+                );
                 copy.syncing.store(false, Ordering::SeqCst);
-                let _ = app2.emit("wrapped-library", serde_json::json!({ "read": n, "total": n, "done": true }));
+                let _ = app2.emit("wrapped-library", serde_json::json!({ "read": n, "total": n, "what": "artists", "done": true }));
             }
             Err(e) => {
                 copy.syncing.store(false, Ordering::SeqCst);

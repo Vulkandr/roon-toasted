@@ -395,6 +395,10 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     if before.toaster_enabled && !updated.toaster_enabled {
         crate::hide_toaster(&app);
     }
+    // Turning toasts off also takes down one that's showing
+    if before.toasts_enabled && !updated.toasts_enabled {
+        crate::toast::toast_hide(app.clone());
+    }
     crate::wrapper::settings_changed(&app, &before, &updated);
     crate::library::settings_changed(&app, &before, &updated);
     crate::update::settings_changed(&app, &before, &updated);

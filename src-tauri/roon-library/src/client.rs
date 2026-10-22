@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::{broadcast, Notify};
 
 use crate::connection::{self, broker_id_from_core_id, ConnectError, DEFAULT_PORT};
-use crate::graph::{ObjectGraph, PropertyType, RoonObject, Value};
+use crate::graph::{InlineStruct, ObjectGraph, PropertyType, RoonObject, Value};
 use crate::remoting::{Remoting, RemotingError, StructField};
 use crate::wire::{Reader, Writer};
 
@@ -50,6 +50,9 @@ const SIG_CREATE_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::CreatePlaylistF
 const SIG_DELETE_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::Delete(Sooloos.Broker.Api.Playlist, Base.ResultCallback)";
 const SIG_RENAME_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::Rename(Sooloos.Broker.Api.Playlist, string, Base.ResultCallback)";
 const SIG_PLAY_PLAYLIST: &str = "Sooloos.Broker.Api.Transport::PlayPlaylist(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, Sooloos.Broker.Api.Playlist, Sooloos.Broker.Api.PlaylistItem, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
+/// Roon's Export: where library tracks' files are (the Core's path, and
+/// where its web server gives them out).
+const SIG_TRACK_EXPORT_INFO: &str = "Sooloos.Broker.Api.Library::GetTrackExportInfo(System.Collections.Generic.IEnumerable<long>, Base.ResultCallback<System.Collections.Generic.IList<Sooloos.Broker.Api.TrackExportInfo>>)";
 const SIG_GET_ALBUM_LITE: &str = "Sooloos.Broker.Api.Library::GetAlbumLite(long, Base.ResultCallback<Sooloos.Broker.Api.AlbumLite>)";
 const SIG_GET_PERFORMER_LITE: &str = "Sooloos.Broker.Api.Library::GetPerformerLite(long, Base.ResultCallback<Sooloos.Broker.Api.PerformerLite>)";
 const SIG_UNIFIED_SEARCH: &str = "Sooloos.Broker.Api.Library::UnifiedSearch(Sooloos.Broker.Api.SearchParameters, Base.ResultCallback<Sooloos.Broker.Api.UnifiedSearchResults>)";
@@ -72,6 +75,23 @@ const SIG_PERFORMER_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualPerformerQ
 const SIG_PERFORMER_QUERY_RETAIN: &str = "Sooloos.Broker.Api.VirtualPerformerLiteQuery::RetainPage(int, Base.ResultCallback)";
 const SIG_PERFORMER_QUERY_RELEASE: &str = "Sooloos.Broker.Api.VirtualPerformerLiteQuery::ReleasePage(int, Base.ResultCallback)";
 const SIG_PERFORMER_QUERY_DISPOSE: &str = "Sooloos.Broker.Api.VirtualPerformerLiteQuery::Dispose()";
+const SIG_ALBUM_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualAlbumQuery(System.Sooid, Sooloos.Broker.Api.AlbumQueryCriteria, Sooloos.Broker.Api.VirtualQueryParameters, Base.ResultCallback<Sooloos.Broker.Api.VirtualAlbumLiteQuery>)";
+const SIG_ALBUM_QUERY_RETAIN: &str = "Sooloos.Broker.Api.VirtualAlbumLiteQuery::RetainPage(int, Base.ResultCallback)";
+const SIG_ALBUM_QUERY_RELEASE: &str = "Sooloos.Broker.Api.VirtualAlbumLiteQuery::ReleasePage(int, Base.ResultCallback)";
+const SIG_ALBUM_QUERY_DISPOSE: &str = "Sooloos.Broker.Api.VirtualAlbumLiteQuery::Dispose()";
+const SIG_TRACK_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualTrackQuery(System.Sooid, Sooloos.Broker.Api.TrackQueryCriteria, Sooloos.Broker.Api.VirtualQueryParameters, Base.ResultCallback<Sooloos.Broker.Api.VirtualTrackLiteQuery>)";
+const SIG_TRACK_QUERY_RETAIN: &str = "Sooloos.Broker.Api.VirtualTrackLiteQuery::RetainPage(int, Base.ResultCallback)";
+const SIG_TRACK_QUERY_RELEASE: &str = "Sooloos.Broker.Api.VirtualTrackLiteQuery::ReleasePage(int, Base.ResultCallback)";
+const SIG_TRACK_QUERY_DISPOSE: &str = "Sooloos.Broker.Api.VirtualTrackLiteQuery::Dispose()";
+const SIG_PLAYLIST_ITEMS: &str = "Sooloos.Broker.Api.Playlist::GetItems(Base.ResultCallback<Sooloos.Broker.Api.Query<Sooloos.Broker.Api.PlaylistItem>>)";
+const SIG_PLAYLIST_REMOVE_ITEMS: &str = "Sooloos.Broker.Api.Playlists::RemoveItems(Sooloos.Broker.Api.Playlist, System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.PlaylistItem>)";
+const SIG_ALL_TAGS: &str = "Sooloos.Broker.Api.Library::GetAllTagLites(Sooloos.Broker.Api.Profile, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TagLite>>)";
+const SIG_GET_TAG: &str = "Sooloos.Broker.Api.Library::GetTag(Sooloos.Broker.Api.Profile, Sooloos.Broker.Api.TagBase, Base.ResultCallback<Sooloos.Broker.Api.Tag>)";
+const SIG_TAG_ITEMS: &str = "Sooloos.Broker.Api.ExplicitTag::GetItems(Sooloos.Broker.Api.TagItemQueryCriteria, Base.ResultCallback<Sooloos.Broker.Api.Query<Sooloos.Broker.Api.TagItem>>)";
+const SIG_LISTEN_LATER: &str = "Sooloos.Broker.Api.Library::GetListenLater(Sooloos.Broker.Api.Profile, System.Collections.Generic.IList<string>, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.ListenLaterItem>>)";
+const SIG_LISTEN_LATER_TRACK: &str = "Sooloos.Broker.Api.Library::SetListenLaterState(System.Sooid, Sooloos.Broker.Api.TrackBase, Sooloos.Broker.Api.ListenLaterState, Base.ResultCallback)";
+const SIG_LISTEN_LATER_ALBUM: &str = "Sooloos.Broker.Api.Library::SetListenLaterState(System.Sooid, Sooloos.Broker.Api.AlbumBase, Sooloos.Broker.Api.ListenLaterState, Base.ResultCallback)";
+const SIG_LISTEN_LATER_PERFORMER: &str = "Sooloos.Broker.Api.Library::SetListenLaterState(System.Sooid, Sooloos.Broker.Api.PerformerBase, Sooloos.Broker.Api.ListenLaterState, Base.ResultCallback)";
 const SIG_HISTORY_QUERY: &str = "Sooloos.Broker.Api.Library::VirtualHistoryQuery(System.Sooid, Sooloos.Broker.Api.HistoryQueryCriteria, Sooloos.Broker.Api.VirtualQueryParameters, Base.ResultCallback<Sooloos.Broker.Api.VirtualHistoryPlayQuery>)";
 const SIG_HISTORY_RETAIN: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::RetainPage(int, Base.ResultCallback)";
 const SIG_HISTORY_RELEASE: &str = "Sooloos.Broker.Api.VirtualHistoryPlayQuery::ReleasePage(int, Base.ResultCallback)";
@@ -214,6 +234,17 @@ pub struct AlbumTrack {
     /// The Core's ids (durable), to match against a zone's track later.
     pub track_id: Option<u64>,
     pub library_track_id: Option<u64>,
+}
+
+/// How to play something: now (the queue cleared, as Roon's Play Now),
+/// next (after the playing song), or at the end of the queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayHow {
+    #[default]
+    Now,
+    Next,
+    Queue,
 }
 
 /// One album of the playing artist's discography (see `artist_albums`).
@@ -370,6 +401,20 @@ pub struct History {
     pub plays: Vec<Play>,
 }
 
+/// Where a library track's file is, as Roon's Export finds it (see
+/// `track_files`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackFile {
+    /// The file as the Core knows it: a path on the Core's own machine, or
+    /// a share as the Core reaches it
+    /// ("/roon/sys/storage/smbmounts/RoonStorage_.../Bölzer/2016 - Hero/03 - Hero.flac").
+    pub file_path: String,
+    /// Where the Core's web server (the port its extensions connect to,
+    /// 9330 as a rule) gives the file out ("/file/<storage id>/<path>.flac").
+    pub http_path: String,
+}
+
 /// A track found by `search`.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -433,6 +478,86 @@ pub struct TopTrack {
     /// A compilation, anthology, split, soundtrack or such: Roon's
     /// IsCompilation on the album, or the words in its title.
     pub compilation: bool,
+}
+
+/// A track of the library's Tracks browser (see `library_tracks`): the
+/// durable ids only (handles don't outlive the session; `track_by_id`
+/// gets one back).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTrack {
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub track_id: Option<u64>,
+    pub album_id: Option<u64>,
+    pub performer_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub length_seconds: Option<i32>,
+    pub year: Option<u32>,
+    pub favorite: bool,
+    /// "local", "qobuz", "tidal", "streaming" or "other".
+    pub source: String,
+    /// When it came into the library (Roon's import date), Unix ms.
+    #[serde(default)]
+    pub added_at: Option<i64>,
+}
+
+/// A song in a list (a playlist, a tag, Listen Later): its handle for this
+/// session and what the Tracks page shows of it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackEntry {
+    pub handle: String,
+    #[serde(flatten)]
+    pub track: LibraryTrack,
+}
+
+/// A playlist's song: the playlist item (to play from or remove) and the
+/// song.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaylistEntry {
+    pub item_handle: String,
+    #[serde(flatten)]
+    pub entry: TrackEntry,
+}
+
+/// One of the profile's tags (Roon's Tags page).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagCard {
+    pub handle: String,
+    pub name: String,
+    pub count: Option<i32>,
+    pub image_key: Option<String>,
+}
+
+/// What a tag holds, by kind.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TagContents {
+    pub name: String,
+    pub albums: Vec<AlbumCard>,
+    pub artists: Vec<ArtistCard>,
+    pub tracks: Vec<TrackEntry>,
+    /// Items of other kinds (works, playlists...), not shown.
+    pub other: usize,
+    /// A smart tag (rules, no list of its own): not readable yet.
+    pub smart: bool,
+}
+
+/// One entry of Listen Later: an album, an artist or a song.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListenLaterEntry {
+    /// "album", "artist" or "track".
+    pub kind: String,
+    /// When it was added, Unix ms.
+    pub added_at: Option<i64>,
+    pub album: Option<AlbumCard>,
+    pub artist: Option<ArtistCard>,
+    pub track: Option<TrackEntry>,
 }
 
 /// One entry of Roon's Recent Activity (see `recents`): what you started
@@ -739,6 +864,72 @@ impl LibraryClient {
         self.inner.connected.store(false, Ordering::SeqCst);
         self.inner.remoting.close();
         self.inner.changed.notify_waiters();
+    }
+
+    /// Where the files of library tracks (by handle) are, as Roon's Export
+    /// finds them, in the handles' order. None: no file, as for a track
+    /// from a streaming service, even one added to the library (an album
+    /// you have on disk and from Qobuz is two albums in the library, the
+    /// streaming one a hidden duplicate, which a search can still land
+    /// on), or a handle that isn't a library track. Asked by the tracks'
+    /// library ids, all at once.
+    pub async fn track_files(&self, handles: &[String]) -> Result<Vec<Option<TrackFile>>, LibraryError> {
+        let (library, ids) = {
+            let g = self.inner.graph.lock().unwrap();
+            let ids: Vec<Option<u64>> = handles
+                .iter()
+                .map(|h| {
+                    let t = g.get(h.parse().ok()?)?;
+                    t.long_field("LibraryTrackId")
+                })
+                .collect();
+            (g.first_of_type("Library").map(|o| o.oid), ids)
+        };
+        let library = library.ok_or_else(|| LibraryError::UnsupportedCore("no Library service in the graph".into()))?;
+        let mut out: Vec<Option<TrackFile>> = vec![None; handles.len()];
+        let asked: Vec<u64> = ids.iter().flatten().copied().collect();
+        if asked.is_empty() {
+            return Ok(out);
+        }
+        let mut list = Writer::new();
+        list.flex_int(asked.len() as u32);
+        for id in &asked {
+            list.long(*id);
+        }
+        let mut args = Writer::new();
+        args.flex_int(list.len() as u32).bytes(list.as_bytes());
+        let res = self.inner.remoting.call(library, SIG_TRACK_EXPORT_INFO, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "GetTrackExportInfo".into(), status: res.status }.into());
+        }
+        if res.payload.is_empty() {
+            return Ok(out);
+        }
+        let g = self.inner.graph.lock().unwrap();
+        let values = g.decode_return_list(&res.payload).map_err(|_| LibraryError::Unconfirmed("could not read the tracks' files".into()))?;
+        let in_order = values.len() == asked.len();
+        for (n, value) in values.iter().enumerate() {
+            let Value::Inline(s) = value else { continue };
+            let text = |name: &str| s.field(name).and_then(Value::as_str).unwrap_or("").to_string();
+            let file = TrackFile { file_path: text("FilePath"), http_path: text("HttpPath") };
+            if file.file_path.is_empty() && file.http_path.is_empty() {
+                continue;
+            }
+            // (by the track it names, else by its place in the answer)
+            let named = g
+                .deref(s.field("Track"))
+                .and_then(|t| t.long_field("LibraryTrackId").or_else(|| t.long_field("TrackId")))
+                .filter(|id| asked.contains(id));
+            let id = named.or_else(|| in_order.then(|| asked[n]));
+            if let Some(id) = id {
+                for (at, mine) in ids.iter().enumerate() {
+                    if *mine == Some(id) && out[at].is_none() {
+                        out[at] = Some(file.clone());
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     pub fn is_connected(&self) -> bool {
@@ -1202,6 +1393,11 @@ impl LibraryClient {
         self.album_card(&oid.to_string()).ok_or_else(|| LibraryError::Unconfirmed(format!("album {album_id} vanished")))
     }
 
+    /// A track by the Core's track id (as the history knows it): its handle.
+    pub async fn track_by_id(&self, track_id: u64) -> Result<String, LibraryError> {
+        self.fetch_by_id(SIG_GET_TRACK_LITE, track_id, "track").await.map(|oid| oid.to_string())
+    }
+
     /// An artist by the Core's performer id.
     pub async fn artist_by_id(&self, performer_id: u64) -> Result<ArtistCard, LibraryError> {
         let oid = self.fetch_by_id(SIG_GET_PERFORMER_LITE, performer_id, "artist").await?;
@@ -1372,6 +1568,114 @@ impl LibraryClient {
             .filter(|p| p.has_field("Name"))
             .map(|p| describe_artist_card(&g, p, profile.as_deref()))
             .filter(|p| seen.insert(p.performer_id.map(|id| id.to_string()).unwrap_or_else(|| p.handle.clone())))
+            .collect())
+    }
+
+    /// Every album in the library (Roon's Albums browser, in its default order):
+    /// a VirtualAlbumQuery read page by page, like the artists.
+    pub async fn library_albums(&self, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<AlbumCard>, LibraryError> {
+        const PAGE: usize = 100;
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let field = |name: &'static str, prop_type: PropertyType, value: Vec<u8>| StructField { name, prop_type, value };
+        let mut lang = Writer::new();
+        lang.string(Some("en"));
+        let criteria = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.AlbumQueryCriteria",
+            &[field("string Sooloos.Broker.Api.AlbumQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes())],
+        )?;
+        let mut page_size = Writer::new();
+        page_size.integer(PAGE as i32);
+        let params = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.VirtualQueryParameters",
+            &[field("int Sooloos.Broker.Api.VirtualQueryParameters::PageSize", PropertyType::Int, page_size.into_bytes())],
+        )?;
+        let mut args = Writer::new();
+        args.sooid(&profile).bytes(&criteria).bytes(&params);
+        let res = self.inner.remoting.call(library, SIG_ALBUM_QUERY, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "VirtualAlbumQuery".into(), status: res.status }.into());
+        }
+        let query = Reader::new(&res.payload)
+            .flex_long()
+            .ok()
+            .filter(|oid| *oid != 0)
+            .ok_or_else(|| LibraryError::Unconfirmed("the album query did not open".into()))?;
+        let before: HashSet<u64> = self.inner.graph.lock().unwrap().find_by_type_prefix("VirtualQueryElement<").map(|o| o.oid).collect();
+        let result = self.query_pages(query, PAGE, &before, SIG_ALBUM_QUERY_RETAIN, SIG_ALBUM_QUERY_RELEASE, progress).await;
+        let _ = self.inner.remoting.call_no_reply(query, SIG_ALBUM_QUERY_DISPOSE, &[]);
+        let oids = result?;
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        let mut seen = HashSet::new();
+        Ok(oids
+            .into_iter()
+            .filter_map(|oid| g.get(oid))
+            .filter(|a| a.has_field("Title"))
+            .map(|a| describe_album_card(&g, a, profile.as_deref()))
+            .filter(|a| seen.insert(a.album_id.map(|id| id.to_string()).unwrap_or_else(|| a.handle.clone())))
+            .collect())
+    }
+
+    /// Every track in the library (Roon's Tracks browser): a
+    /// VirtualTrackQuery read page by page, like the artists and albums.
+    pub async fn library_tracks(&self, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<LibraryTrack>, LibraryError> {
+        const PAGE: usize = 200;
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let field = |name: &'static str, prop_type: PropertyType, value: Vec<u8>| StructField { name, prop_type, value };
+        let mut lang = Writer::new();
+        lang.string(Some("en"));
+        let criteria = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.TrackQueryCriteria",
+            &[field("string Sooloos.Broker.Api.TrackQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes())],
+        )?;
+        let mut page_size = Writer::new();
+        page_size.integer(PAGE as i32);
+        let params = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.VirtualQueryParameters",
+            &[field("int Sooloos.Broker.Api.VirtualQueryParameters::PageSize", PropertyType::Int, page_size.into_bytes())],
+        )?;
+        let mut args = Writer::new();
+        args.sooid(&profile).bytes(&criteria).bytes(&params);
+        let res = self.inner.remoting.call(library, SIG_TRACK_QUERY, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "VirtualTrackQuery".into(), status: res.status }.into());
+        }
+        let query = Reader::new(&res.payload)
+            .flex_long()
+            .ok()
+            .filter(|oid| *oid != 0)
+            .ok_or_else(|| LibraryError::Unconfirmed("the track query did not open".into()))?;
+        let before: HashSet<u64> = self.inner.graph.lock().unwrap().find_by_type_prefix("VirtualQueryElement<").map(|o| o.oid).collect();
+        let result = self.query_pages(query, PAGE, &before, SIG_TRACK_QUERY_RETAIN, SIG_TRACK_QUERY_RELEASE, progress).await;
+        let _ = self.inner.remoting.call_no_reply(query, SIG_TRACK_QUERY_DISPOSE, &[]);
+        let oids = result?;
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        // (once, what a TrackLite carries, for the import date's name)
+        if let Some(first) = oids.first().and_then(|oid| g.get(*oid)) {
+            let mut names: Vec<&str> = first.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k)).collect();
+            names.sort_unstable();
+            println!("[library] TrackLite fields: {}", names.join(", "));
+        }
+        let mut seen = HashSet::new();
+        Ok(oids
+            .into_iter()
+            .filter_map(|oid| g.get(oid))
+            .filter(|t| t.has_field("Title"))
+            .map(|t| describe_library_track(&g, t, profile.as_deref()))
+            .filter(|t| seen.insert(t.track_id.map(|id| id.to_string()).unwrap_or_else(|| format!("{}\u{0}{}", t.title, t.album))))
             .collect())
     }
 
@@ -2144,6 +2448,14 @@ impl LibraryClient {
         g.get(oid)?.str_field("Title").map(str::to_string)
     }
 
+    /// A track's album cover (its image key), by the track's handle.
+    pub fn track_image_of(&self, handle: &str) -> Option<String> {
+        let oid: u64 = handle.parse().ok()?;
+        let g = self.inner.graph.lock().unwrap();
+        let track = g.get(oid)?;
+        g.deref(track.field("Album")).and_then(|album| image_key(&g, album, "Image")).or_else(|| image_key(&g, track, "Image"))
+    }
+
     /// One playlist's current state by its handle.
     pub fn playlist_card(&self, handle: &str) -> Option<PlaylistCard> {
         let oid: u64 = handle.parse().ok()?;
@@ -2286,6 +2598,309 @@ impl LibraryClient {
         let res = self.inner.remoting.call(transport, SIG_PLAY_PLAYLIST, args.as_bytes()).await?;
         if !res.success() {
             return Err(RemotingError::Failed { method: "PlayPlaylist".into(), status: res.status }.into());
+        }
+        Ok(())
+    }
+
+    /// Plays a playlist from one of its items (`item`: a PlaylistEntry's
+    /// item handle), or from the start.
+    pub async fn play_playlist_from(&self, zone_id: &str, handle: &str, item: Option<&str>) -> Result<(), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
+        let from: u64 = match item {
+            Some(i) => i.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist item handle".into()))?,
+            None => 0,
+        };
+        let (transport, zone, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            let zone = self.zone_object(&g, zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into()))?;
+            if g.get(oid).is_none() {
+                return Err(LibraryError::Unconfirmed("unknown playlist handle".into()));
+            }
+            (g.first_of_type("Transport").map(|o| o.oid), zone.oid, self.profile_sooid(&g))
+        };
+        let (Some(transport), Some(profile)) = (transport, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
+        };
+        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        let mut args = Writer::new();
+        args.long(zone).sooid(&profile).bytes(&params).long(oid).long(from);
+        let res = self.inner.remoting.call(transport, SIG_PLAY_PLAYLIST, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "PlayPlaylist".into(), status: res.status }.into());
+        }
+        Ok(())
+    }
+
+    /// A playlist's songs, in order (Playlist::GetItems: a Query of
+    /// PlaylistItems, each with its Track).
+    pub async fn playlist_tracks(&self, handle: &str) -> Result<Vec<PlaylistEntry>, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
+        if self.inner.graph.lock().unwrap().get(oid).is_none() {
+            return Err(LibraryError::Unconfirmed("unknown playlist handle".into()));
+        }
+        let res = self.inner.remoting.call(oid, SIG_PLAYLIST_ITEMS, &[]).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "Playlist::GetItems".into(), status: res.status }.into());
+        }
+        let query = Reader::new(&res.payload)
+            .flex_long()
+            .ok()
+            .filter(|q| *q != 0)
+            .ok_or_else(|| LibraryError::Unconfirmed("the playlist's items did not come".into()))?;
+        // The list, then every item's song with its title
+        let ready = |g: &ObjectGraph| -> bool {
+            let Some(q) = g.get(query) else { return false };
+            let Some(items) = q.items.as_ref() else { return false };
+            let want = q.field("Count").and_then(Value::as_int).unwrap_or(0).max(0) as usize;
+            items.len() >= want
+                && items.iter().all(|i| g.get(*i).and_then(|it| g.deref(it.field("Track"))).is_some_and(|t| t.has_field("Title")))
+        };
+        self.wait_until(Duration::from_secs(6), ready).await;
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        let items = g.get(query).and_then(|q| q.items.clone()).unwrap_or_default();
+        Ok(items
+            .into_iter()
+            .filter_map(|i| {
+                let item = g.get(i)?;
+                let track = g.deref(item.field("Track"))?;
+                Some(PlaylistEntry {
+                    item_handle: item.oid.to_string(),
+                    entry: TrackEntry { handle: track.oid.to_string(), track: describe_library_track(&g, track, profile.as_deref()) },
+                })
+            })
+            .collect())
+    }
+
+    /// Takes songs out of a playlist (Playlists::RemoveItems; no answer
+    /// comes, so the playlist is read again to see them gone).
+    pub async fn remove_playlist_items(&self, handle: &str, items: &[String]) -> Result<(), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
+        let items: Vec<u64> = items.iter().filter_map(|i| i.parse().ok()).collect();
+        if items.is_empty() {
+            return Ok(());
+        }
+        let service = self
+            .inner
+            .graph
+            .lock()
+            .unwrap()
+            .first_of_type("Playlists")
+            .map(|o| o.oid)
+            .ok_or_else(|| LibraryError::UnsupportedCore("no Playlists service in the graph".into()))?;
+        let mut list = Writer::new();
+        list.flex_int(items.len() as u32);
+        for i in &items {
+            list.long(*i);
+        }
+        let mut args = Writer::new();
+        args.long(oid).flex_int(list.len() as u32).bytes(list.as_bytes());
+        self.inner.remoting.call_no_reply(service, SIG_PLAYLIST_REMOVE_ITEMS, args.as_bytes())?;
+        Ok(())
+    }
+
+    /// The profile's tags (Roon's Tags page).
+    pub async fn tags(&self) -> Result<Vec<TagCard>, LibraryError> {
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_object(&g).map(|o| o.oid))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        args.long(profile);
+        let res = self.inner.remoting.call(library, SIG_ALL_TAGS, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "GetAllTagLites".into(), status: res.status }.into());
+        }
+        let list = Reader::new(&res.payload).flex_long().ok().filter(|l| *l != 0).ok_or_else(|| LibraryError::Unconfirmed("the tags did not come".into()))?;
+        let ready = |g: &ObjectGraph| g.get(list).and_then(|l| l.items.as_ref()).is_some_and(|items| items.iter().all(|i| g.get(*i).is_some_and(|t| t.has_field("Name"))));
+        self.wait_until(Duration::from_secs(5), ready).await;
+        let g = self.inner.graph.lock().unwrap();
+        let items = g.get(list).and_then(|l| l.items.clone()).unwrap_or_default();
+        if let Some(first) = items.first().and_then(|i| g.get(*i)) {
+            let mut names: Vec<&str> = first.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k)).collect();
+            names.sort_unstable();
+            println!("[library] {} fields: {}", first.short_type(), names.join(", "));
+        }
+        let mut tags: Vec<TagCard> = items
+            .into_iter()
+            .filter_map(|i| g.get(i))
+            .filter(|t| t.has_field("Name"))
+            .map(|t| TagCard {
+                handle: t.oid.to_string(),
+                name: t.str_field("Name").unwrap_or_default().to_string(),
+                count: ["ItemCount", "Count", "TotalCount"].iter().find_map(|n| t.field(n).and_then(Value::as_int)),
+                image_key: image_key(&g, t, "Image"),
+            })
+            .collect();
+        tags.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        Ok(tags)
+    }
+
+    /// What a tag holds: its albums, artists and songs (Library::GetTag,
+    /// then ExplicitTag::GetItems; a smart tag says so instead).
+    pub async fn tag_contents(&self, handle: &str) -> Result<TagContents, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad tag handle".into()))?;
+        let (library, profile, name) = {
+            let g = self.inner.graph.lock().unwrap();
+            let name = g.get(oid).and_then(|t| t.str_field("Name")).unwrap_or_default().to_string();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_object(&g).map(|o| o.oid), name)
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        args.long(profile).long(oid);
+        let res = self.inner.remoting.call(library, SIG_GET_TAG, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "GetTag".into(), status: res.status }.into());
+        }
+        let tag = Reader::new(&res.payload).flex_long().ok().filter(|t| *t != 0).ok_or_else(|| LibraryError::Unconfirmed("the tag did not come".into()))?;
+        self.wait_until(Duration::from_secs(3), |g| g.get(tag).is_some()).await;
+        let kind = self.inner.graph.lock().unwrap().get(tag).map(|t| t.short_type().to_string()).unwrap_or_default();
+        println!("[library] tag {name}: {kind}");
+        if kind.contains("Smart") {
+            return Ok(TagContents { name, smart: true, ..Default::default() });
+        }
+        let field = |n: &'static str, prop_type: PropertyType, value: Vec<u8>| StructField { name: n, prop_type, value };
+        let mut lang = Writer::new();
+        lang.string(Some("en"));
+        let criteria = self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.TagItemQueryCriteria",
+            &[field("string Sooloos.Broker.Api.TagItemQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes())],
+        )?;
+        let res = self.inner.remoting.call(tag, SIG_TAG_ITEMS, &criteria).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "ExplicitTag::GetItems".into(), status: res.status }.into());
+        }
+        let query = Reader::new(&res.payload).flex_long().ok().filter(|q| *q != 0).ok_or_else(|| LibraryError::Unconfirmed("the tag's items did not come".into()))?;
+        // What an item points at (by reference or inline)
+        const KINDS: [&str; 3] = ["Album", "Performer", "Track"];
+        let targets = |g: &ObjectGraph| -> Vec<(&'static str, u64)> {
+            let Some(q) = g.get(query) else { return Vec::new() };
+            let mut out = Vec::new();
+            for i in q.items.iter().flatten() {
+                if let Some(item) = g.get(*i) {
+                    out.push(KINDS.iter().find_map(|k| item.ref_field(k).map(|r| (*k, r))).unwrap_or(("", 0)));
+                }
+            }
+            for s in q.structs.iter().flatten() {
+                out.push(KINDS.iter().find_map(|k| s.field(k).and_then(Value::as_ref_id).map(|r| (*k, r))).unwrap_or(("", 0)));
+            }
+            out
+        };
+        let ready = |g: &ObjectGraph| -> bool {
+            let Some(q) = g.get(query) else { return false };
+            let want = q.field("Count").and_then(Value::as_int).unwrap_or(0).max(0) as usize;
+            let t = targets(g);
+            t.len() >= want && t.iter().all(|(k, r)| k.is_empty() || g.get(*r).is_some_and(|o| o.has_field("Title") || o.has_field("Name")))
+        };
+        self.wait_until(Duration::from_secs(6), ready).await;
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        if let Some(first) = g.get(query).and_then(|q| q.items.as_ref()?.first().copied()).and_then(|i| g.get(i)) {
+            let mut names: Vec<&str> = first.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k)).collect();
+            names.sort_unstable();
+            println!("[library] {} fields: {}", first.short_type(), names.join(", "));
+        }
+        let mut out = TagContents { name, ..Default::default() };
+        for (kind, r) in targets(&g) {
+            let Some(o) = g.get(r).filter(|_| !kind.is_empty()) else {
+                out.other += 1;
+                continue;
+            };
+            match kind {
+                "Album" => out.albums.push(describe_album_card(&g, o, profile.as_deref())),
+                "Performer" => out.artists.push(describe_artist_card(&g, o, profile.as_deref())),
+                _ => out.tracks.push(TrackEntry { handle: o.oid.to_string(), track: describe_library_track(&g, o, profile.as_deref()) }),
+            }
+        }
+        Ok(out)
+    }
+
+    /// Listen Later: the albums, artists and songs the profile put aside,
+    /// newest first (the ones still waiting).
+    pub async fn listen_later(&self) -> Result<Vec<ListenLaterEntry>, LibraryError> {
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_object(&g).map(|o| o.oid))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        // Profile, the language preferences (a list of strings: "en")
+        let mut langs = Writer::new();
+        langs.flex_int(1).string(Some("en"));
+        let mut args = Writer::new();
+        args.long(profile).flex_int(langs.len() as u32).bytes(langs.as_bytes());
+        let res = self.inner.remoting.call(library, SIG_LISTEN_LATER, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "GetListenLater".into(), status: res.status }.into());
+        }
+        let list = Reader::new(&res.payload).flex_long().ok().filter(|l| *l != 0).ok_or_else(|| LibraryError::Unconfirmed("Listen Later did not come".into()))?;
+        let points = |s: &InlineStruct| -> Option<(&'static str, u64)> {
+            [("album", "Album"), ("artist", "Performer"), ("track", "Track")]
+                .iter()
+                .find_map(|(kind, field)| s.field(field).and_then(Value::as_ref_id).map(|r| (*kind, r)))
+        };
+        let ready = |g: &ObjectGraph| -> bool {
+            let Some(l) = g.get(list) else { return false };
+            let (Some(_), Some(structs)) = (l.items.as_ref(), l.structs.as_ref()) else { return false };
+            structs.iter().filter_map(points).all(|(_, r)| g.get(r).is_some_and(|o| o.has_field("Title") || o.has_field("Name")))
+        };
+        self.wait_until(Duration::from_secs(6), ready).await;
+        let g = self.inner.graph.lock().unwrap();
+        let profile = self.profile_sooid(&g);
+        let structs = g.get(list).and_then(|l| l.structs.clone()).unwrap_or_default();
+        if let Some(first) = structs.first() {
+            let mut names: Vec<&str> = first.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k)).collect();
+            names.sort_unstable();
+            println!("[library] ListenLaterItem fields: {}", names.join(", "));
+        }
+        let mut out: Vec<ListenLaterEntry> = structs
+            .iter()
+            // (Pending, or no state given; the played ones are done)
+            .filter(|s| s.field("State").and_then(Value::as_int).is_none_or(|st| st == 1))
+            .filter_map(|s| {
+                let (kind, r) = points(s)?;
+                let o = g.get(r)?;
+                let added_at = s.field("Timestamp").and_then(ticks_to_ms);
+                Some(ListenLaterEntry {
+                    kind: kind.into(),
+                    added_at,
+                    album: (kind == "album").then(|| describe_album_card(&g, o, profile.as_deref())),
+                    artist: (kind == "artist").then(|| describe_artist_card(&g, o, profile.as_deref())),
+                    track: (kind == "track").then(|| TrackEntry { handle: o.oid.to_string(), track: describe_library_track(&g, o, profile.as_deref()) }),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| b.added_at.cmp(&a.added_at));
+        Ok(out)
+    }
+
+    /// Takes something out of Listen Later (its state set to None):
+    /// `kind` "album", "artist" or "track", `handle` its object.
+    pub async fn listen_later_remove(&self, kind: &str, handle: &str) -> Result<(), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad handle".into()))?;
+        let sig = match kind {
+            "album" => SIG_LISTEN_LATER_ALBUM,
+            "artist" => SIG_LISTEN_LATER_PERFORMER,
+            _ => SIG_LISTEN_LATER_TRACK,
+        };
+        let (library, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+        };
+        let (Some(library), Some(profile)) = (library, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        args.sooid(&profile).long(oid).flex_int(0); // ListenLaterState::None
+        let res = self.inner.remoting.call(library, sig, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "SetListenLaterState".into(), status: res.status }.into());
         }
         Ok(())
     }
@@ -2620,6 +3235,123 @@ impl LibraryClient {
             .collect())
     }
 
+    /// Songs from an artist's own albums released from `from` to `to`
+    /// (Roon's discography, its main albums: no live albums, compilations
+    /// or demos), the albums nearest the middle of those years first, up to
+    /// `albums` albums and `per_album` songs each (no intros, interludes,
+    /// skits or the like). For when the artist's best-known songs all come
+    /// from other years than the ones wanted.
+    pub async fn songs_from_years(&self, performer_handle: &str, from: u32, to: u32, albums: usize, per_album: usize) -> Vec<TopTrack> {
+        let Ok(disco) = self.artist_albums_for(performer_handle, None).await else {
+            return Vec::new();
+        };
+        let middle = f64::from(from + to) / 2.0;
+        let mut chosen: Vec<&ArtistAlbum> = disco
+            .iter()
+            .filter(|a| a.group == "main" && a.year.is_some_and(|y| y >= from && y <= to))
+            .filter(|a| !looks_live(&a.title) && !looks_compilation(&a.title) && !looks_rough(&a.title))
+            .collect();
+        let distance = |a: &ArtistAlbum| (f64::from(a.year.unwrap_or(from)) - middle).abs();
+        chosen.sort_by(|a, b| distance(a).total_cmp(&distance(b)));
+        // (one edition of each album)
+        let mut titles: HashSet<String> = HashSet::new();
+        chosen.retain(|a| titles.insert(normalized_title(&a.title)));
+        let mut out = Vec::new();
+        for album in chosen.into_iter().take(albums) {
+            let Ok(tracks) = self.album_tracks_for("", &album.handle).await else {
+                continue;
+            };
+            let mut lengths: Vec<i32> = tracks.iter().filter_map(|t| t.length_seconds).collect();
+            lengths.sort_unstable();
+            let median = lengths.get(lengths.len() / 2).copied().unwrap_or(0);
+            let proper = |t: &&AlbumTrack| {
+                !looks_rough(&t.title)
+                    && !looks_live(&t.title)
+                    && t.length_seconds.is_none_or(|l| l >= 105 && !(median > 0 && l * 5 < median * 2) && !(t.track_number == Some(1) && l < 120))
+            };
+            for t in tracks.iter().filter(proper).take(per_album) {
+                out.push(TopTrack {
+                    handle: t.handle.clone(),
+                    track_id: t.track_id.map(|id| id.to_string()),
+                    title: t.title.clone(),
+                    album: album.title.clone(),
+                    album_key: album.album_id.map(|id| id.to_string()).unwrap_or_else(|| album.title.to_lowercase()),
+                    album_artist: album.artist.clone(),
+                    in_library: t.in_library,
+                    live: false,
+                    length_seconds: t.length_seconds,
+                    track_number: t.track_number,
+                    year: album.year,
+                    album_handle: Some(album.handle.clone()),
+                    compilation: false,
+                });
+            }
+        }
+        out
+    }
+
+    /// Deep Dive: an artist's albums to choose songs from, newest first, one
+    /// edition of each (the library's copy when there is one): the main
+    /// albums (the rest when there are none), no live, compilation or rough
+    /// ones, appearances on others' albums left out; only the library's
+    /// albums when `library_only`.
+    pub async fn albums_to_choose(&self, performer_handle: &str, library_only: bool) -> Vec<ArtistAlbum> {
+        let Ok(disco) = self.artist_albums_for(performer_handle, None).await else {
+            return Vec::new();
+        };
+        let fine = |a: &&ArtistAlbum| {
+            a.group != "appearance" && !looks_live(&a.title) && !looks_compilation(&a.title) && !looks_rough(&a.title) && (!library_only || a.in_library)
+        };
+        let mut chosen: Vec<&ArtistAlbum> = disco.iter().filter(fine).filter(|a| a.group == "main").collect();
+        if chosen.is_empty() {
+            chosen = disco.iter().filter(fine).collect();
+        }
+        chosen.sort_by(|a, b| b.in_library.cmp(&a.in_library));
+        let mut titles: HashSet<String> = HashSet::new();
+        chosen.retain(|a| titles.insert(normalized_title(&a.title)));
+        chosen.sort_by(|a, b| b.year.cmp(&a.year));
+        chosen.into_iter().cloned().collect()
+    }
+
+    /// Deep Dive: an album's proper songs in album order (no intros,
+    /// interludes, demos or live takes, as `songs_from_years` leaves out;
+    /// all of them when that would leave none).
+    pub async fn album_songs(&self, album: &ArtistAlbum) -> Vec<TopTrack> {
+        let Ok(tracks) = self.album_tracks_for("", &album.handle).await else {
+            return Vec::new();
+        };
+        let mut lengths: Vec<i32> = tracks.iter().filter_map(|t| t.length_seconds).collect();
+        lengths.sort_unstable();
+        let median = lengths.get(lengths.len() / 2).copied().unwrap_or(0);
+        let proper = |t: &&AlbumTrack| {
+            !looks_rough(&t.title)
+                && !looks_live(&t.title)
+                && t.length_seconds.is_none_or(|l| l >= 105 && !(median > 0 && l * 5 < median * 2) && !(t.track_number == Some(1) && l < 120))
+        };
+        let mut usable: Vec<&AlbumTrack> = tracks.iter().filter(proper).collect();
+        if usable.is_empty() {
+            usable = tracks.iter().collect();
+        }
+        usable
+            .into_iter()
+            .map(|t| TopTrack {
+                handle: t.handle.clone(),
+                track_id: t.track_id.map(|id| id.to_string()),
+                title: t.title.clone(),
+                album: album.title.clone(),
+                album_key: album.album_id.map(|id| id.to_string()).unwrap_or_else(|| album.title.to_lowercase()),
+                album_artist: album.artist.clone(),
+                in_library: t.in_library,
+                live: false,
+                length_seconds: t.length_seconds,
+                track_number: t.track_number,
+                year: album.year,
+                album_handle: Some(album.handle.clone()),
+                compilation: false,
+            })
+            .collect()
+    }
+
     /// Each artist's songs for a mix, in the artists' order: up to
     /// `per_artist` of their top songs (Roon's ranking), one per album
     /// first, the same song (by title) once, live recordings left out
@@ -2830,9 +3562,32 @@ impl LibraryClient {
         })
     }
 
+    /// PlayParameters for a play: empty for now (Roon's default), else its
+    /// Priority (PlayPriority: Now 0, Interrupt 1, PlayBefore 2, Next 3,
+    /// Queue 4).
+    fn play_parameters(&self, how: PlayHow) -> Result<Vec<u8>, LibraryError> {
+        let priority = match how {
+            PlayHow::Now => return Ok(self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?),
+            PlayHow::Next => 3,
+            PlayHow::Queue => 4,
+        };
+        let mut value = Writer::new();
+        value.flex_int(priority);
+        Ok(self.inner.remoting.inline_struct(
+            "Sooloos.Broker.Api.PlayParameters",
+            &[StructField { name: "Sooloos.Broker.Api.PlayPriority Sooloos.Broker.Api.PlayParameters::Priority", prop_type: PropertyType::Enum, value: value.into_bytes() }],
+        )?)
+    }
+
     /// Plays an album (by its handle) on the zone, right now, the way the Roon
     /// app's Play Now does.
     pub async fn play_album(&self, zone_id: &str, handle: &str) -> Result<(), LibraryError> {
+        self.play_album_how(zone_id, handle, PlayHow::Now).await
+    }
+
+    /// Plays an album (by its handle) on the zone: now, next, or at the
+    /// end of the queue, as the Roon app's Play Now, Add Next and Queue.
+    pub async fn play_album_how(&self, zone_id: &str, handle: &str, how: PlayHow) -> Result<(), LibraryError> {
         let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad album handle".into()))?;
         let (transport, zone, profile) = {
             let g = self.inner.graph.lock().unwrap();
@@ -2845,8 +3600,8 @@ impl LibraryClient {
         let (Some(transport), Some(profile)) = (transport, profile) else {
             return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
         };
-        // Zone, profile, default PlayParameters, the album, favorites only: no, include hidden: no.
-        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        // Zone, profile, PlayParameters (its priority), the album, favorites only: no, include hidden: no.
+        let params = self.play_parameters(how)?;
         let mut args = Writer::new();
         args.long(zone).sooid(&profile).bytes(&params).long(oid).boolean(false).boolean(false);
         let res = self.inner.remoting.call(transport, SIG_PLAY_ALBUM, args.as_bytes()).await?;
@@ -3142,11 +3897,6 @@ impl LibraryClient {
             let streaming = {
                 let g = self.inner.graph.lock().unwrap();
                 let largest = largest_streaming_version(&g, full_oid);
-                let ready = g.get(full_oid).and_then(|a| a.field("AlternateVersionsReady")).and_then(Value::as_bool);
-                println!(
-                    "[library] album {album}: {} tracks of its own; versions ready: {ready:?}; largest streaming version: {largest:?}",
-                    track_oids.len()
-                );
                 largest.filter(|(_, count)| *count as usize > track_oids.len()).map(|(oid, _)| oid)
             };
             if let Some(version) = streaming {
@@ -3249,6 +3999,12 @@ impl LibraryClient {
     /// Plays one of the album's tracks (by its handle from `album_tracks`) on
     /// the zone, right now, the way the Roon app does.
     pub async fn play_track(&self, zone_id: &str, handle: &str) -> Result<(), LibraryError> {
+        self.play_track_how(zone_id, handle, PlayHow::Now).await
+    }
+
+    /// Plays a track (by its handle) on the zone: now, next, or at the end
+    /// of the queue.
+    pub async fn play_track_how(&self, zone_id: &str, handle: &str, how: PlayHow) -> Result<(), LibraryError> {
         let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad track handle".into()))?;
         let (transport, zone, profile) = {
             let g = self.inner.graph.lock().unwrap();
@@ -3261,8 +4017,8 @@ impl LibraryClient {
         let (Some(transport), Some(profile)) = (transport, profile) else {
             return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
         };
-        // Zone, profile, default PlayParameters (an empty inline struct), the track.
-        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        // Zone, profile, PlayParameters (its priority), the track.
+        let params = self.play_parameters(how)?;
         let mut args = Writer::new();
         args.long(zone).sooid(&profile).bytes(&params).long(oid);
         let res = self.inner.remoting.call(transport, SIG_PLAY_TRACK, args.as_bytes()).await?;
@@ -3623,6 +4379,42 @@ fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) 
     }
 }
 
+fn describe_library_track(g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]>) -> LibraryTrack {
+    let album = g.deref(t.field("Album"));
+    let performer = album.and_then(|a| g.deref(a.field("MainPerformers"))).and_then(|list| list.items.as_ref()?.first().copied());
+    let artist = t
+        .str_field("PerformedBy")
+        .filter(|s| !s.is_empty())
+        .or_else(|| album.and_then(|a| a.str_field("PerformedBy")))
+        .unwrap_or_default();
+    LibraryTrack {
+        title: t.str_field("Title").unwrap_or_default().to_string(),
+        artist: strip_credit_markup(artist),
+        album: album.and_then(|a| a.str_field("Title")).unwrap_or_default().to_string(),
+        track_id: t.long_field("LibraryTrackId").or_else(|| t.long_field("TrackId")),
+        album_id: album.and_then(|a| a.long_field("AlbumId")),
+        performer_id: performer.and_then(|oid| g.get(oid)).and_then(|p| p.long_field("PerformerId")),
+        image_key: album.and_then(|a| image_key(g, a, "Image")),
+        length_seconds: t.field("LengthSeconds").and_then(Value::as_int),
+        year: album.and_then(|a| year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate")))),
+        favorite: read_state(t.field("IsFavorite"), profile),
+        source: source_name(t.field("Source").and_then(Value::as_int)),
+        added_at: ["ImportDate", "DateAdded", "AddedDate", "ImportTime"]
+            .iter()
+            .find_map(|name| t.field(name).or_else(|| album.and_then(|a| a.field(name))).and_then(ticks_to_ms)),
+    }
+}
+
+/// A .NET DateTime (ticks since year 1, the top two bits its kind) as
+/// Unix milliseconds.
+fn ticks_to_ms(v: &Value) -> Option<i64> {
+    const TICKS_MASK: u64 = (1 << 62) - 1;
+    const UNIX_EPOCH_TICKS: i64 = 621_355_968_000_000_000;
+    let t = v.as_long()?;
+    let ms = ((t & TICKS_MASK) as i64 - UNIX_EPOCH_TICKS) / 10_000;
+    (ms > 0).then_some(ms)
+}
+
 fn describe_playlist(g: &ObjectGraph, p: &RoonObject) -> PlaylistCard {
     let kind = match p.field("Type").and_then(Value::as_int) {
         Some(1) => "itunes",
@@ -3683,9 +4475,11 @@ fn search_lists(g: &ObjectGraph, r: &RoonObject) -> (Vec<u64>, Vec<u64>, Vec<u64
     let list = |name: &str| -> Vec<u64> { g.deref(r.field(name)).and_then(|l| l.items.clone()).unwrap_or_default() };
     let mut artists: Vec<u64> = ["TopLibraryPerformer", "TopPerformer"].iter().filter_map(|n| r.ref_field(n)).collect();
     artists.extend(list("Performers"));
-    let mut albums: Vec<u64> = ["TopLibraryAlbum", "TopAlbum"].iter().filter_map(|n| r.ref_field(n)).collect();
+    // (the top album or track is a versions wrapper, without a title, when
+    // the library has several copies of it: its versions instead)
+    let mut albums: Vec<u64> = ["TopLibraryAlbum", "TopAlbum"].iter().filter_map(|n| r.ref_field(n)).flat_map(|oid| unwrap(oid, "AlbumLiteVersions", "Albums")).collect();
     albums.extend(list("Albums").into_iter().flat_map(|oid| unwrap(oid, "AlbumLiteVersions", "Albums")));
-    let mut tracks: Vec<u64> = ["TopLibraryTrack", "TopTrack"].iter().filter_map(|n| r.ref_field(n)).collect();
+    let mut tracks: Vec<u64> = ["TopLibraryTrack", "TopTrack"].iter().filter_map(|n| r.ref_field(n)).flat_map(|oid| unwrap(oid, "TrackLiteVersions", "Tracks")).collect();
     tracks.extend(list("Tracks").into_iter().flat_map(|oid| unwrap(oid, "TrackLiteVersions", "Tracks")));
     let dedupe = |v: Vec<u64>| -> Vec<u64> {
         let mut seen = HashSet::new();

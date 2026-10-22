@@ -232,6 +232,11 @@ fn field_by_suffix<'a>(fields: &'a HashMap<String, Value>, suffix: &str) -> Opti
     fields.iter().find(|(k, _)| k.ends_with(&wanted)).map(|(_, v)| v)
 }
 
+/// A `Query<T>` type name (a list the Core answers some calls with).
+fn is_query(type_name: &str) -> bool {
+    type_name.starts_with("Query<") || type_name.contains(".Query<")
+}
+
 /// The element type of a `DataList<T>` type name, when it is one.
 fn data_list_element(type_name: &str) -> Option<&str> {
     let start = type_name.find(".DataList<")? + ".DataList<".len();
@@ -352,6 +357,37 @@ impl ObjectGraph {
                     if codec == PropertyType::String {
                         strings = Some(texts);
                     } else {
+                        items = Some(list);
+                        structs = Some(values);
+                    }
+                } else if is_query(&type_name) {
+                    // A Query<T> (Playlist::GetItems, ExplicitTag::GetItems):
+                    // no declared members, but a built-in count at wire index
+                    // 1 (0 ends the header), then `count` items, each Object
+                    // encoded; the items can also come later on their own
+                    let mut count = 0;
+                    loop {
+                        match r.flex_int()? {
+                            0 => break,
+                            1 => count = r.integer()?.max(0) as usize,
+                            _ => break,
+                        }
+                    }
+                    fields.insert("int Query::Count".into(), Value::Int(count as i32));
+                    let mut list = Vec::with_capacity(count.min(100_000));
+                    let mut values = Vec::new();
+                    for _ in 0..count {
+                        if r.remaining() == 0 {
+                            break;
+                        }
+                        match self.read_value(r, PropertyType::Object) {
+                            Ok(Value::Ref(oid)) => list.push(oid),
+                            Ok(Value::Inline(s)) => values.push(s),
+                            Ok(_) => {}
+                            Err(_) => break,
+                        }
+                    }
+                    if !list.is_empty() || !values.is_empty() || count == 0 {
                         items = Some(list);
                         structs = Some(values);
                     }

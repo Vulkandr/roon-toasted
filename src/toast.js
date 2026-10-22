@@ -107,6 +107,11 @@ async function close() {
   await invoke("toast_hide");
 }
 
+// A page that has only just loaded has nothing on it, so its window shouldn't
+// be showing. The dev server reloads every page when a file changes, and a
+// toast that was up at that moment used to be left behind as an empty box.
+invoke("toast_hide").catch(() => {});
+
 listen("toast-show", (event) => show(event.payload));
 
 // Time's up

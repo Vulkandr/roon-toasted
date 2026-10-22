@@ -67,7 +67,8 @@ const wrappedArrow = $("#wrapped-arrow");
 const wrappedPageBtn = $("#wrapped-page-btn");
 const wrappedPageOpen = $("#wrapped-page-open");
 const wrappedPageArrow = $("#wrapped-page-arrow");
-const wrappedMenu = $("#wrapped-menu");
+const wrappedSide = $("#wrapped-side");
+const wrappedSideBtn = $("#wrapped-side-btn");
 const wrapped = $("#wrapped");
 const wrappedTitle = $("#wrapped-title");
 const wrappedSub = $("#wrapped-sub");
@@ -94,6 +95,8 @@ let headerColor = null; // Roon's own header background, behind the content-head
 let sidebarSeen = false; // whether skin.rs has reported a sidebar at least once
 let roonNav = { page: "", albumId: null, lastAlbumId: null, available: false, navCount: 0 };
 let wrappedStack = [];
+// The pages gone back from (the mouse's forward button, newest last)
+let wrappedForward = [];
 
 // ===== Helpers =============================================================
 
@@ -140,7 +143,7 @@ function reportHole() {
   const rect = hole.getBoundingClientRect();
   const covers = [];
   const radii = []; // a cover's rounded corners are cut too, so Roon shows there
-  for (const element of [zoneMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedMenu, wrapped]) {
+  for (const element of [zoneMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedSide, wrapped]) {
     if (element.hidden) continue;
     const r = element.getBoundingClientRect();
     // The cut-out has hard edges, so the buttons keep theirs square and paint
@@ -166,7 +169,7 @@ holeWatcher.observe(queuePanel);
 holeWatcher.observe(stage);
 holeWatcher.observe(wrappedBtn);
 holeWatcher.observe(wrappedPageBtn);
-holeWatcher.observe(wrappedMenu);
+holeWatcher.observe(wrappedSide);
 holeWatcher.observe(wrapped);
 reportHole();
 
@@ -204,6 +207,7 @@ let lastZones = null; // the last zones payload, to render again when the queue 
 function render(payload) {
   lastZones = payload;
   zoneList = payload.zones;
+  noteZoneSongs(payload.zones);
   zone = payload.zones.find((z) => z.zoneId === payload.selectedZoneId) ?? null;
   const np = zone?.nowPlaying;
   // Stopped with nothing loaded (Roon's output came back after Roon was
@@ -2184,11 +2188,15 @@ const RATE_HELP = rateBox.title;
 // song is there; the info piece's thumbs step aside while it shows)
 const pieceRate = $("#wrapped-piece-rate");
 const pieceWhy = pieceRate.querySelector(".wrapped-piece-why");
+// (a Deep Dive's song gets its own line there: the Deep Dive and why)
+const pieceDive = $("#wrapped-piece-dive");
+const pieceDiveWhy = pieceDive.querySelector(".wrapped-piece-why");
 
 // Wrapped Discovery (Wrapped's Settings): off, the star, the thumbs and
 // the Discover page go away (the html element's "no-discovery" class)
 async function discoveryEnabled() {
   if (!wrappedSettings) wrappedSettings = await invoke("wrapped_settings_get").catch(() => null);
+  paintPieceDive();
   return wrappedSettings?.discovery !== false;
 }
 
@@ -2234,29 +2242,124 @@ discoverBtn.addEventListener("click", () => openWrappedPage({ page: "discover" }
 listen("wrapped-settings-changed", (event) => {
   const was = wrappedSettings?.discovery !== false;
   wrappedSettings = event.payload;
+  paintPieceDive();
   if ((wrappedSettings?.discovery !== false) === was) return;
   loadDiscoverRatings();
-  if (!wrapped.hidden && ["settings", "discover", "home"].includes(wrappedStack.at(-1)?.page)) renderWrapped();
+  if (wrapped.hidden) return;
+  if (wrappedStack.at(-1)?.page === "settings") redrawSettingsInPlace();
+  else if (["discover", "home"].includes(wrappedStack.at(-1)?.page)) renderWrapped();
 });
 
+// The song before the one playing, per zone: zone id -> { key, cur, before }
+// ({ title, artist } each), for telling a list's song played from the list
+// apart from the same song played from anywhere else
+const zoneSongs = new Map();
+function noteZoneSongs(zones) {
+  for (const z of zones) {
+    const np = z.nowPlaying;
+    if (!np?.title) continue;
+    const key = `${np.title}|${np.artist || ""}|${np.album || ""}`;
+    const was = zoneSongs.get(z.zoneId);
+    if (was?.key === key) continue;
+    zoneSongs.set(z.zoneId, { key, cur: { title: np.title, artist: np.artist || "" }, before: was ? was.cur : null });
+  }
+}
+
 // The list song playing now, or null: by Roon's track id, else by title
-// and artist (a stream may come back under another id)
+// and artist (a stream may come back under another id). Only when it's
+// played from its list: the song before or after it is on the same list.
+// The same song in a Deep Dive or any other playlist is ordinary listening
+// (the history has it), with no thumbs and nothing counted for the lists.
 function discoverSongNow() {
   const track = zone ? libraryTracks[zone.zoneId] : null;
   const np = zone?.nowPlaying;
   if (!np || !discoverRatings.songs.length) return null;
   const id = track?.trackId != null ? String(track.trackId) : null;
-  return (
-    discoverRatings.songs.find((s) => id && s.trackId === id) ||
-    discoverRatings.songs.find(
-      (s) => s.title && s.title === (track?.title || np.title) && (np.artist || "").toLowerCase().includes(s.artist.toLowerCase()),
-    ) ||
-    null
-  );
+  const isIt = (s, title, artist) => !!s.title && s.title === title && (artist || "").toLowerCase().includes(s.artist.toLowerCase());
+  const here = discoverRatings.songs.filter((s) => (id && s.trackId === id) || isIt(s, track?.title || np.title, np.artist));
+  if (!here.length) return null;
+  const near = [zoneSongs.get(zone.zoneId)?.before];
+  if (queue?.zoneId === zone.zoneId && queue.items?.[0]?.title === np.title) near.push(queue.items[1]);
+  const sameList = (s, n) => discoverRatings.songs.some((o) => o !== s && o.which === s.which && o.builtAt === s.builtAt && isIt(o, n.title, n.artist));
+  return here.find((s) => near.some((n) => n && sameList(s, n))) || null;
+}
+
+// The Deep Dives made so far (dive.rs, the last 12), for the player
+let diveLists = [];
+async function loadDiveLists() {
+  try {
+    diveLists = (await invoke("wrapped_dive_status")).dives || [];
+  } catch {
+    return;
+  }
+  renderDivePiece();
+}
+
+// The Deep Dive song playing now ({ dive, song }), or null: by title and
+// artist, and only when it's played from its playlist (the song before or
+// after it is on the same Deep Dive), as with the Discover lists' songs
+function diveSongNow() {
+  const np = zone?.nowPlaying;
+  if (!np || !diveLists.length) return null;
+  const track = libraryTracks[zone.zoneId];
+  const lower = (t) => (t || "").toLowerCase();
+  const isIt = (s, title, artist) => !!s.title && lower(s.title) === lower(title) && lower(artist).includes(lower(s.artist));
+  const near = [zoneSongs.get(zone.zoneId)?.before];
+  if (queue?.zoneId === zone.zoneId && queue.items?.[0]?.title === np.title) near.push(queue.items[1]);
+  for (const dive of diveLists) {
+    const song = (dive.songs || []).find((s) => isIt(s, track?.title || np.title, np.artist));
+    if (!song) continue;
+    if (near.some((n) => n && dive.songs.some((o) => o !== song && isIt(o, n.title, n.artist)))) return { dive, song };
+  }
+  return null;
+}
+
+// Under the Wrapped piece's buttons, while a Deep Dive's song plays: "From
+// your Deep Dive", its name (opens it on Deep Dive's page) and why the
+// song is there, the same short line as on the page. No thumbs: Deep Dive
+// songs are ordinary listening.
+function renderDivePiece() {
+  const found = diveSongNow();
+  const key = found ? `${found.dive.builtAt}|${found.song.title}|${found.song.artist}` : "";
+  if (pieceDive.dataset.key === key) return;
+  pieceDive.dataset.key = key;
+  pieceDive.hidden = !found;
+  // (its size changed: the pieces placed again)
+  if (!stage.hidden) requestAnimationFrame(() => layoutStage());
+  if (!found) return;
+  const { dive, song } = found;
+  const lead = document.createElement("div");
+  lead.className = "wrapped-piece-why-lead";
+  lead.textContent = `From your Deep Dive · ${song.inLibrary ? "in your library" : "new to you"}`;
+  const big = document.createElement("div");
+  big.className = "wrapped-piece-why-names";
+  const name = document.createElement("button");
+  name.className = "wrapped-piece-link";
+  name.textContent = dive.name;
+  name.title = "Open it on Deep Dive's page";
+  name.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    if (editing) return;
+    await closeStage();
+    if (!stage.hidden) return;
+    deepDiveTab = "dive";
+    diveOpen.add(dive.builtAt);
+    openWrappedPage({ page: "deepdive" });
+  });
+  big.append(name);
+  pieceDiveWhy.replaceChildren(lead, big);
+  if (song.why) {
+    const line = document.createElement("div");
+    line.className = "wrapped-piece-why-text";
+    line.textContent = song.why;
+    pieceDiveWhy.append(line);
+  }
 }
 
 let heartSent = "";
 function renderRating() {
+  // (and the Deep Dive line next to it, which follows the same changes)
+  renderDivePiece();
   const song = discoverSongNow();
   const inPiece = !stage.hidden && layout?.pieces?.wrapped?.visible !== false;
   rateBox.hidden = !song || inPiece;
@@ -2398,6 +2501,7 @@ function setLibraryStatus(status) {
   if (libraryReady && !was) {
     loadQueueHistory(true);
     loadDiscoverRatings();
+    loadDiveLists();
   }
 }
 
@@ -2611,6 +2715,8 @@ function renderQueue(payload, fromHistory = false) {
     scroller.scrollTop += top.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 4;
   }
   if (!fromHistory) loadQueueHistory();
+  // (the next song tells a list's song played from its list)
+  if (ratingReady) renderRating();
 }
 
 // "+ N more tracks not shown" when the queue is longer than the 100 shown
@@ -2757,7 +2863,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (dialogOpen()) cancelDialog();
   else if (!zoneMenu.hidden) closeZoneMenu();
-  else if (!wrappedMenu.hidden) closeWrappedMenu();
+  else if (!wrappedSide.hidden) setWrappedSide(false);
   else if (!queueSaveForm.hidden) hideQueueSave();
   else if (!queuePanel.hidden) setQueueOpen(false);
   else if (editing) finishEditing();
@@ -2907,8 +3013,10 @@ function layoutWrapped() {
   // the rounded face can't be told from Roon)
   wrappedPageBtn.style.setProperty("--surround", headerColor ? `rgb(${headerColor.join(", ")})` : "transparent");
 
-  wrapped.style.left = `${contentLeft}px`;
-  if (!wrappedMenu.hidden) placeWrappedMenu();
+  // (with the sidebar collapsed, the page makes room for the side menu)
+  wrapped.style.left = `${contentLeft + (collapsed && !wrappedSide.hidden ? ROON_SIDEBAR : 0)}px`;
+  wrappedBtn.classList.toggle("page-on", !wrapped.hidden);
+  placeWrappedSide();
   // A move alone doesn't reach the hole's ResizeObserver (same size, new
   // place), so the covers are reported here
   reportHole();
@@ -2917,7 +3025,24 @@ new ResizeObserver(layoutWrapped).observe(hole);
 
 // ----- The menu -----
 
+// Deep Dive's mark: a brain with a magnifying glass in front of it. Each
+// copy gets its own clip id (a page shows several)
+const DIVE_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><defs><clipPath id="dive-cut"><path clip-rule="evenodd" d="M-2 -2h28v28H-2z M16.5 10.2a6.3 6.3 0 1 0 0 12.6a6.3 6.3 0 1 0 0-12.6z"/></clipPath></defs><g clip-path="url(#dive-cut)"><g transform="scale(0.75)" stroke-width="2.67"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></g></g><circle cx="16.5" cy="16.5" r="4.3"/><path d="m22 22-2.4-2.4"/></svg>';
+let diveIconN = 0;
+function diveIcon() {
+  return DIVE_SVG.replace(/dive-cut/g, `dive-cut-${++diveIconN}`);
+}
+
 const WRAPPED_ICONS = {
+  // (Lucide "clock-plus" and "tag")
+  listenlater: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 6v6l3.644 1.822"/><path d="M16 19h6"/><path d="M19 16v6"/><path d="M21.92 13.267a10 10 0 1 0-8.653 8.653"/></svg>',
+  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5" fill="currentColor"/></svg>',
+  // (Lucide "tags")
+  genres: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 5 6.3 6.3a2.4 2.4 0 0 1 0 3.4L17 19"/><path d="M9.586 5.586A2 2 0 0 0 8.172 5H3a1 1 0 0 0-1 1v5.172a2 2 0 0 0 .586 1.414L8.29 18.29a2.426 2.426 0 0 0 3.42 0l3.58-3.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="6.5" cy="9.5" r=".5" fill="currentColor"/></svg>',
+  track: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>',
+  get deepdive() {
+    return diveIcon();
+  },
   // (Lucide "sparkles")
   discover: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg>',
   radio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1"/></svg>',
@@ -2926,7 +3051,7 @@ const WRAPPED_ICONS = {
   artist: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>',
   search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg>',
   playlists: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>',
-  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>',
+  settings: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>',
   history: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg>',
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
 };
@@ -2975,112 +3100,170 @@ function wrappedHere() {
   return null;
 }
 
-function wrappedMenuItems() {
-  const items = [{ page: "home", label: "Home", icon: "home" }];
+// ----- The side menu -----
+// Wrapped's own version of Roon's sidebar: its pages as real buttons (so
+// it's told from Roon's at a glance), dropped down from the Wrapped
+// button's arrow and hidden by it again; independent of the page (it
+// opens over Roon's sidebar with the page closed, beside the page with it
+// open)
+
+function wrappedSideGroups() {
+  const browse = [{ page: "home", label: "Home", icon: "home" }];
   const here = wrappedHere();
-  if (here) items.push(here);
-  items.push({ page: "search", label: "Search", icon: "search" });
-  if (wrappedSettings?.discovery !== false) items.push({ page: "discover", label: "Discover", icon: "discover" });
-  items.push({ page: "radio", label: "Radio", icon: "radio" });
-  items.push({ page: "playlists", label: "Playlists", icon: "playlists" });
-  items.push({ page: "history", label: "History", icon: "history" });
-  items.push({ page: "settings", label: "Settings", icon: "settings" });
-  if (!wrapped.hidden) items.push({ close: true, label: "Close Wrapped", icon: "close" });
-  return items;
+  if (here) browse.push(here);
+  if (wrappedSettings?.discovery !== false) browse.push({ page: "discover", label: "Discover", icon: "discover" });
+  // (with tier 2, Radio lives inside Deep Dive)
+  browse.push(tier2Ready() ? { page: "deepdive", label: "Deep Dive", icon: "deepdive" } : { page: "radio", label: "Radio", icon: "radio" });
+  browse.push({ page: "history", label: "History", icon: "history" });
+  browse.push({ page: "settings", label: "Settings", icon: "settings" });
+  const library = [
+    { page: "genres", label: "Genres", icon: "genres" },
+    { page: "artists", label: "Artists", icon: "artist" },
+    { page: "albums", label: "Albums", icon: "album" },
+    { page: "tracks", label: "Tracks", icon: "track" },
+    { page: "playlists", label: "Playlists", icon: "playlists" },
+    { page: "listenlater", label: "Listen Later", icon: "listenlater" },
+    { page: "tags", label: "Tags", icon: "tag" },
+  ];
+  return [
+    ["Wrapped Features", browse],
+    ["Your library", library],
+  ];
 }
 
-function fillWrappedMenu() {
-  wrappedMenu.replaceChildren();
-  for (const item of wrappedMenuItems()) {
-    const option = document.createElement("button");
-    option.className = "wrapped-option";
-    option.insertAdjacentHTML("beforeend", WRAPPED_ICONS[item.icon]);
+function fillWrappedSide() {
+  wrappedSide.replaceChildren();
+  const current = wrapped.hidden ? null : wrappedStack.at(-1)?.page;
+  for (const [caption, items] of wrappedSideGroups()) {
+    const head = document.createElement("div");
+    head.className = "wrapped-side-caption";
+    head.textContent = caption;
+    wrappedSide.append(head);
+    for (const item of items) {
+      const option = document.createElement("button");
+      option.className = `wrapped-side-btn${item.page === current ? " selected" : ""}`;
+      option.insertAdjacentHTML("beforeend", WRAPPED_ICONS[item.icon]);
+      const label = document.createElement("span");
+      label.textContent = item.label;
+      option.append(label);
+      option.addEventListener("click", () => {
+        if (item.find) wrappedFindOnScreen();
+        else openWrappedPage(item);
+      });
+      wrappedSide.append(option);
+    }
+  }
+  // Roon's playlists, like Roon's sidebar lists them (Wrapped's own first,
+  // as the Playlists page does); one plays on click
+  const lists = document.createElement("div");
+  lists.className = "wrapped-side-lists";
+  wrappedSide.append(lists);
+  if (libraryReady) {
+    const fill = ++wrappedSideFill;
+    invoke("library_playlists")
+      .then((list) => {
+        if (fill !== wrappedSideFill || !list.length) return;
+        const head = document.createElement("div");
+        head.className = "wrapped-side-caption";
+        head.textContent = "Playlists";
+        lists.append(head);
+        const sorted = [...list.filter(isWrappedPlaylist), ...list.filter((p) => !isWrappedPlaylist(p))];
+        for (const p of sorted) {
+          const option = document.createElement("button");
+          option.className = "wrapped-side-btn wrapped-side-list";
+          option.insertAdjacentHTML("beforeend", WRAPPED_ICONS.playlists);
+          const label = document.createElement("span");
+          label.textContent = p.name;
+          option.append(label);
+          option.title = p.name;
+          if (current === "playlist" && wrappedStack.at(-1)?.handle === p.handle) option.classList.add("selected");
+          option.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
+          lists.append(option);
+        }
+      })
+      .catch(() => {});
+  }
+  if (!wrapped.hidden) {
+    const close = document.createElement("button");
+    close.className = "wrapped-side-btn wrapped-side-close";
+    close.insertAdjacentHTML("beforeend", WRAPPED_ICONS.close);
     const label = document.createElement("span");
-    label.textContent = item.label;
-    option.append(label);
-    if (item.page && wrappedStack.at(-1)?.page === item.page && !wrapped.hidden) option.classList.add("selected");
-    option.addEventListener("click", () => {
-      closeWrappedMenu();
-      if (item.close) setWrappedOpen(false);
-      else if (item.find) wrappedFindOnScreen();
-      else openWrappedPage(item);
-    });
-    wrappedMenu.append(option);
+    label.textContent = "Close Wrapped";
+    close.append(label);
+    close.addEventListener("click", () => setWrappedOpen(false));
+    wrappedSide.append(close);
   }
 }
+let wrappedSideFill = 0; // (a fill's playlists are dropped when the menu was filled again meanwhile)
 
-// Under the button; to the right of the sidebar when the filter is over
-// the button (the menu would be recolored under it too)
-let wrappedMenuAnchor = wrappedBtn; // which button the menu hangs from
-function placeWrappedMenu() {
-  const b = wrappedMenuAnchor.getBoundingClientRect();
+// Over Roon's sidebar, under the Wrapped button (as wide as the sidebar).
+// With the sidebar collapsed: under Roon's header row while the page is
+// closed, and beside the page (which moves over for it) while it's open
+function placeWrappedSide() {
+  if (wrappedSide.hidden) return;
   const h = hole.getBoundingClientRect();
   const width = sidebarWidth();
-  if (wrappedMenuAnchor === wrappedBtn && width !== null && sidebarColor !== null) {
-    wrappedMenu.style.left = `${h.left + width + 8}px`;
-    wrappedMenu.style.top = `${b.top}px`;
-  } else {
-    wrappedMenu.style.left = `${b.left}px`;
-    wrappedMenu.style.top = `${b.bottom + 6}px`;
+  const collapsed = width === null;
+  wrappedSide.style.left = `${h.left}px`;
+  wrappedSide.style.width = `${collapsed ? ROON_SIDEBAR : width}px`;
+  // Over the sidebar it shows through skin.rs's color filter, like the
+  // Wrapped button: drawn in Roon's own colors so the filter turns them
+  // into ours (our colors would come out shifted)
+  const filtered = !collapsed && sidebarColor !== null;
+  wrappedSide.classList.toggle("through-filter", filtered);
+  if (filtered) {
+    const [r, g, b] = sidebarColor;
+    wrappedSide.style.setProperty("--roon-bg", `rgb(${r}, ${g}, ${b})`);
+    wrappedSide.style.setProperty("--roon-card", `rgb(${r + 10}, ${g + 10}, ${b + 10})`);
+    wrappedSide.style.setProperty("--roon-hover", `rgb(${r + 22}, ${g + 22}, ${b + 22})`);
+    wrappedSide.style.setProperty("--roon-border", `rgb(${r + 30}, ${g + 30}, ${b + 30})`);
+    wrappedSide.style.setProperty("--roon-text", ROON_TEXT);
+    wrappedSide.style.setProperty("--roon-bright", ROON_BRIGHT);
+    wrappedSide.style.setProperty("--roon-accent", ROON_ACCENT);
   }
+  const top = !collapsed ? ROON_LOGO.y + ROON_LOGO.height + 6 : wrapped.hidden ? ROON_HEADER.y + ROON_HEADER.height + 6 : 0;
+  wrappedSide.style.top = `${h.top + top}px`;
 }
 
-function openWrappedMenu(anchor = wrappedBtn) {
-  wrappedMenuAnchor = anchor;
-  fillWrappedMenu();
-  wrappedMenu.hidden = false;
-  anchor.classList.add("on");
-  placeWrappedMenu();
-  reportHole();
+function setWrappedSide(open) {
+  if (open) fillWrappedSide();
+  wrappedSide.hidden = !open;
+  wrappedBtn.classList.toggle("on", open);
+  wrappedPageBtn.classList.toggle("on", open);
+  wrappedSideBtn.classList.toggle("on", open);
+  layoutWrapped();
 }
 
-function closeWrappedMenu() {
-  if (wrappedMenu.hidden) return;
-  wrappedMenu.hidden = true;
-  wrappedBtn.classList.remove("on");
-  wrappedPageBtn.classList.remove("on");
-  reportHole();
+function toggleWrappedSide() {
+  setWrappedSide(wrappedSide.hidden);
 }
 
 // A split button: the name opens the Wrapped page (and closes it again),
-// the arrow opens the menu; a right-click anywhere on it opens the menu too
-wrappedOpen.addEventListener("click", () => {
-  closeWrappedMenu();
-  setWrappedOpen(wrapped.hidden);
-});
-wrappedArrow.addEventListener("click", () => {
-  if (wrappedMenu.hidden) openWrappedMenu();
-  else closeWrappedMenu();
-});
+// the arrow drops the side menu down (and hides it again); a right-click
+// anywhere on it does the same
+wrappedOpen.addEventListener("click", () => setWrappedOpen(wrapped.hidden));
+wrappedArrow.addEventListener("click", toggleWrappedSide);
 wrappedBtn.addEventListener("contextmenu", (event) => {
   event.preventDefault();
-  if (wrappedMenu.hidden) openWrappedMenu();
+  toggleWrappedSide();
 });
 // The content-header button: the name opens Roon's current album or artist
-// in Wrapped (or the page itself when Roon is elsewhere), the arrow the menu
+// in Wrapped (or the page itself when Roon is elsewhere), the arrow the
+// side menu
 wrappedPageOpen.addEventListener("click", () => {
-  closeWrappedMenu();
   const here = wrappedHere();
   if (here?.find) wrappedFindOnScreen();
   else if (here) openWrappedPage(here);
   else setWrappedOpen(wrapped.hidden);
 });
-wrappedPageArrow.addEventListener("click", () => {
-  if (wrappedMenu.hidden) openWrappedMenu(wrappedPageBtn);
-  else closeWrappedMenu();
-});
+wrappedPageArrow.addEventListener("click", toggleWrappedSide);
 wrappedPageBtn.addEventListener("contextmenu", (event) => {
   event.preventDefault();
-  if (wrappedMenu.hidden) openWrappedMenu(wrappedPageBtn);
+  toggleWrappedSide();
 });
-
-document.addEventListener("pointerdown", (event) => {
-  if (wrappedMenu.hidden) return;
-  if (wrappedMenu.contains(event.target) || wrappedBtn.contains(event.target) || wrappedPageBtn.contains(event.target)) return;
-  closeWrappedMenu();
-});
-window.addEventListener("resize", closeWrappedMenu);
-window.addEventListener("blur", closeWrappedMenu);
+// The page's own menu button (for when Roon's sidebar, and the button over
+// it, are out of the picture)
+wrappedSideBtn.addEventListener("click", toggleWrappedSide);
 
 // ----- The page -----
 
@@ -3110,8 +3293,11 @@ function openWrappedPage(entry) {
     if (wrapped.hidden) setWrappedOpen(true);
     return;
   }
-  // Home and Search are single: going there again goes back to them
+  // Home is single: going there again goes back to it
   if (entry.page === "home") wrappedStack = [];
+  // (Deep Dive always opens on Deep Dive; Radio is the other tab)
+  if (entry.page === "deepdive") deepDiveTab = "dive";
+  wrappedForward = [];
   wrappedStack.push({
     page: entry.page,
     albumId: entry.albumId,
@@ -3129,10 +3315,36 @@ function openWrappedPage(entry) {
   reportHole();
 }
 
+// Back: the page before; from the first page, back to Roon (the pages
+// stay, so Forward or the Wrapped button opens it where it was)
 function wrappedBackPage() {
+  if (wrapped.hidden) return;
   if (wrappedStack.length <= 1) return setWrappedOpen(false);
-  wrappedStack.pop();
+  wrappedForward.push(wrappedStack.pop());
   renderWrapped();
+}
+
+function wrappedForwardPage() {
+  if (wrapped.hidden) {
+    if (wrappedStack.length) setWrappedOpen(true);
+    return;
+  }
+  const next = wrappedForward.pop();
+  if (!next) return;
+  wrappedStack.push(next);
+  renderWrapped();
+}
+
+// The mouse's back and forward buttons (the webview would otherwise try
+// to navigate the page itself)
+for (const type of ["mousedown", "mouseup", "auxclick"]) {
+  document.addEventListener(type, (event) => {
+    if (event.button !== 3 && event.button !== 4) return;
+    event.preventDefault();
+    if (type !== "mouseup") return;
+    if (event.button === 3) wrappedBackPage();
+    else wrappedForwardPage();
+  });
 }
 
 function renderWrapped() {
@@ -3140,6 +3352,10 @@ function renderWrapped() {
   const entry = wrappedStack.at(-1);
   if (!entry) return;
   wrappedBack.hidden = wrappedStack.length <= 1;
+  fillWrappedNav();
+  if (!wrappedSide.hidden) fillWrappedSide();
+  // (the bar shows the search this page is, else nothing)
+  if (document.activeElement !== wrappedBarInput) wrappedBarInput.value = entry.page === "search" ? entry.query || "" : "";
   wrappedTrackRows = [];
   wrappedAlbumTracks = [];
   wrappedBody.replaceChildren();
@@ -3153,6 +3369,9 @@ function wrappedHeading(title, sub) {
   wrappedTitle.textContent = title;
   wrappedSub.textContent = sub || "";
   wrappedSub.hidden = !sub;
+  // (the whole line on hover, when the bar cuts it short)
+  wrappedTitle.title = title || "";
+  wrappedSub.title = sub || "";
 }
 
 function wrappedNote(text, className = "wrapped-note") {
@@ -3208,8 +3427,13 @@ function wrappedArt(imageKey, size, name, round) {
 function wrappedInitials(name) {
   const el = document.createElement("div");
   el.className = "wrapped-initials";
-  const words = (name || "").split(/\s+/).filter(Boolean);
-  el.textContent = words.slice(0, 2).map((w) => w[0].toUpperCase()).join("") || "♪";
+  // (each word's first letter or digit: an emoji or a sign in front is
+  // skipped, not cut in half)
+  const firsts = (name || "")
+    .split(/\s+/)
+    .map((w) => w.match(/[\p{L}\p{N}]/u)?.[0])
+    .filter(Boolean);
+  el.textContent = firsts.slice(0, 2).map((c) => c.toUpperCase()).join("") || "♪";
   return el;
 }
 
@@ -3263,21 +3487,128 @@ function wrappedIconButton(icon, title, onClick, className = "") {
 // The radio button: Roon Radio on the zone, started from this song, album
 // or artist (`seeds`: { tracks, albums, artists, genres, libraryOnly }, handles)
 function wrappedRadio(what, seeds) {
-  const btn = wrappedIconButton(RADIO_ICON, `Wrapped radio from this ${what}`, async () => {
-    if (!zone) return wrappedToast("Pick a zone first.");
-    btn.classList.add("busy");
-    try {
-      await invoke("library_play_radio", { zoneId: zone.zoneId, seeds });
-      wrappedToast(`Radio from this ${what} on ${zone.name}`);
-    } catch (err) {
-      console.error("library_play_radio", err);
-      wrappedToast(typeof err === "string" ? err : "Roon didn't start the radio.");
-    } finally {
-      btn.classList.remove("busy");
-    }
-  }, "wrapped-radio");
+  const btn = wrappedIconButton(RADIO_ICON, `Wrapped radio from this ${what}`, () => startRoonRadio(what, seeds, btn), "wrapped-radio");
   return btn;
 }
+
+async function startRoonRadio(what, seeds, btn) {
+  if (!zone) return wrappedToast("Pick a zone first.");
+  btn.classList.add("busy");
+  try {
+    await invoke("library_play_radio", { zoneId: zone.zoneId, seeds });
+    wrappedToast(`Radio from this ${what} on ${zone.name}`);
+  } catch (err) {
+    console.error("library_play_radio", err);
+    wrappedToast(typeof err === "string" ? err : "Roon didn't start the radio.");
+  } finally {
+    btn.classList.remove("busy");
+  }
+}
+
+// ----- Deep Dive (with tier 2; Radio without it) -----
+// The picks it works from (songs, albums, artists; up to DIVE_MAX), what's
+// typed, which tab is open and which pick the Radio tab starts from
+const DIVE_MAX = 5;
+let diveSeeds = [];
+let diveText = "";
+// Where the songs come from: "new", "library" or "both" (the toggle under
+// the words; remembered)
+let diveSource = "both";
+try {
+  diveSource = ["new", "library", "both"].includes(localStorage.getItem("wrapped-dive-source")) ? localStorage.getItem("wrapped-dive-source") : "both";
+} catch {}
+let deepDiveTab = "dive";
+let diveRadioAt = -1;
+
+// Tier 2 set up: a key, or Ollama with a model
+function tier2Ready() {
+  const s = wrappedSettings;
+  if (!s) return false;
+  if ((s.llmProvider || "anthropic") === "ollama") return ollamaState ? !!ollamaState.modelReady : !!s.llmModel;
+  return !!s.llmKey;
+}
+
+// Where the radio button was: with tier 2, Deep Dive's button (adds this
+// song, album or artist to the picks and opens Deep Dive); without it,
+// the radio button as it was
+function wrappedDive(seed, radio) {
+  if (!tier2Ready()) return radio();
+  const what = seed.kind === "song" ? "song" : seed.kind;
+  return wrappedIconButton(diveIcon(), `Deep Dive from this ${what}`, () => divePickAdd(seed), "wrapped-radio wrapped-dive");
+}
+
+// Adds a pick to Deep Dive and opens it
+function divePickAdd(seed) {
+  const key = (s) => `${s.kind}|${s.title}|${s.artist || ""}`.toLowerCase();
+  if (!diveSeeds.some((s) => key(s) === key(seed))) {
+    if (diveSeeds.length >= DIVE_MAX) wrappedToast(`Deep Dive takes up to ${DIVE_MAX} picks: remove one first.`);
+    else diveSeeds.push(seed);
+  }
+  diveRadioAt = -1;
+  openWrappedPage({ page: "deepdive" });
+}
+
+// The play choices for a song or an album (Roon's: Play Now, Add Next,
+// Queue, Start Radio), with Deep Dive: a menu by `anchor`.
+// `what`: "song" or "album"; `handle` its Roon handle; `seed` the Deep
+// Dive pick (null for none); `radio` the radio seeds.
+const MENU_ICONS = {
+  play: WRAPPED_PLAY_ICON,
+  next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 14l5-5-5-5"/><path d="M4 20v-7a4 4 0 0 1 4-4h12"/></svg>',
+  queue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13"/><path d="M3 12h13"/><path d="M3 18h9"/><path d="m16 16 3 3 3-3"/><path d="M19 10v9"/></svg>',
+};
+function wrappedPlayMenu(anchor, { what, handle, seed, radio }) {
+  closePlayMenu();
+  const menu = document.createElement("div");
+  menu.className = "wrapped-popmenu";
+  const item = (icon, label, run) => {
+    const btn = document.createElement("button");
+    btn.className = "wrapped-popmenu-item";
+    btn.insertAdjacentHTML("beforeend", icon);
+    const text = document.createElement("span");
+    text.textContent = label;
+    btn.append(text);
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closePlayMenu();
+      run();
+    });
+    menu.append(btn);
+  };
+  const play = (how) => {
+    if (!zone) return wrappedToast("Pick a zone first.");
+    const cmd = what === "album" ? "library_play_album" : "library_play_track";
+    invoke(cmd, { zoneId: zone.zoneId, handle, how }).catch((err) => wrappedToast(String(err)));
+  };
+  item(MENU_ICONS.play, "Play Now", () => play("now"));
+  item(MENU_ICONS.next, "Add Next", () => play("next"));
+  item(MENU_ICONS.queue, "Queue", () => play("queue"));
+  if (radio) item(RADIO_ICON, "Start Radio", () => startRoonRadio(what, radio, anchor));
+  if (seed && tier2Ready()) item(diveIcon(), "Deep Dive", () => divePickAdd(seed));
+  wrapped.append(menu);
+  // (under the anchor, kept inside the page)
+  const a = anchor.getBoundingClientRect();
+  const w = wrapped.getBoundingClientRect();
+  const m = menu.getBoundingClientRect();
+  let left = a.left - w.left;
+  let top = a.bottom - w.top + 4;
+  if (left + m.width > w.width - 8) left = Math.max(8, w.width - 8 - m.width);
+  if (top + m.height > w.height - 8) top = Math.max(8, a.top - w.top - m.height - 4);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.querySelector("button")?.focus({ preventScroll: true });
+}
+
+function closePlayMenu() {
+  wrapped.querySelector(".wrapped-popmenu")?.remove();
+}
+document.addEventListener("pointerdown", (event) => {
+  const menu = wrapped.querySelector(".wrapped-popmenu");
+  if (menu && !menu.contains(event.target)) closePlayMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closePlayMenu();
+});
 
 // A line at the bottom of the page for a few seconds
 let wrappedToastTimer = null;
@@ -3316,6 +3647,7 @@ function wrappedCard(item, onClick) {
     sub.textContent = item.sub;
     tile.append(sub);
   }
+  if (item.why) tile.title = item.why;
   tile.addEventListener("click", onClick);
   return tile;
 }
@@ -3366,38 +3698,24 @@ function wrappedFailed(err) {
 // ----- The pages -----
 
 const WRAPPED_PAGES = {
+  // Home: artists for you (new to you, by what you play), new albums from
+  // the artists you listen to, and from those suggested (home.rs)
   home() {
     wrappedHeading("Wrapped", "Playlists, radio and discovery, built on your Roon library");
-    const grid = document.createElement("div");
-    grid.className = "wrapped-grid";
     const here = wrappedHere();
-    grid.append(
-      ...(wrappedSettings?.discovery === false
-        ? []
-        : [
-            wrappedTile("Discover", "🌟 Discover Weekly and 💎 Library Rediscover: new artists from what you play, and the ones your library has that you never do.", () =>
-              openWrappedPage({ page: "discover" }),
-            ),
-          ]),
-      wrappedTile("Radio", "Roon Radio seeded with the artists that share an artist's sound, from your library or outside it.", () =>
-        openWrappedPage({ page: "radio" }),
-      ),
-      wrappedTile("Playlists", "The playlists Wrapped keeps for you.", () => openWrappedPage({ page: "playlists" })),
-      wrappedTile("Search", "Find an artist or album to start from.", () => openWrappedPage({ page: "search" })),
-      wrappedTile("History", "What you've played, and what you play most.", () => openWrappedPage({ page: "history" })),
-    );
-    wrappedBody.append(grid);
     if (here) {
-      wrappedBody.append(wrappedTile(here.label, "Open what Roon is showing now.", () => openWrappedPage(here)));
-    } else if (!roonNav.available) {
-      wrappedBody.append(wrappedNote("Roon's log wasn't found, so Wrapped can't tell which page Roon is on."));
+      const open = document.createElement("button");
+      open.className = "wrapped-button small wrapped-here";
+      open.innerHTML = `${WRAPPED_ICONS[here.icon] || ""}<span>${here.label}</span>`;
+      open.title = "Open what Roon is showing now";
+      open.addEventListener("click", () => (here.find ? wrappedFindOnScreen() : openWrappedPage(here)));
+      wrappedBody.append(open);
     }
-    if (libraryReady) {
-      const extras = document.createElement("div");
-      extras.className = "wrapped-extras";
-      wrappedBody.append(extras);
-      wrappedHomeExtras(extras, ++wrappedTicket);
-    }
+    if (wrappedNeedsLibrary()) return;
+    const holder = document.createElement("div");
+    holder.className = "wrapped-home";
+    wrappedBody.append(holder);
+    wrappedHome(holder, ++wrappedTicket);
   },
 
   // An album: by the Core's id (from Roon's log) or by a session handle
@@ -3436,7 +3754,7 @@ const WRAPPED_PAGES = {
     }
     if (ticket !== wrappedTicket) return;
     wrappedAlbumTracks = tracks;
-    list.replaceChildren(...trackRows(tracks));
+    list.replaceChildren(...trackRows(tracks, card));
     wrappedTrackRows = [...list.querySelectorAll(".wrapped-track")].map((row, i) => ({
       row,
       ids: [tracks[i].trackId, tracks[i].libraryTrackId].filter((id) => id != null),
@@ -3517,49 +3835,61 @@ const WRAPPED_PAGES = {
     await wrappedArtistExtras(extras, picks, card, ticket);
   },
 
-  search(entry) {
-    wrappedHeading("Search", "Artists, albums and tracks, from Roon's own search");
+  // Search: what the bar's search found (the bar is the input)
+  async search(entry) {
+    const query = (entry.query || "").trim();
+    wrappedHeading("Search", query ? `"${query}" in your library, Qobuz and TIDAL` : "Artists, albums and tracks, from Roon's own search");
     if (wrappedNeedsLibrary()) return;
-    const input = document.createElement("input");
-    input.className = "wrapped-search";
-    input.type = "search";
-    input.placeholder = "Search your library, Qobuz and TIDAL";
-    input.value = entry.query || "";
     const results = document.createElement("div");
     results.className = "wrapped-results";
-    wrappedBody.append(input, results);
-    let timer = null;
-    const run = async () => {
-      const query = input.value.trim();
-      entry.query = query;
-      if (!query) {
-        results.replaceChildren();
-        return;
-      }
-      const ticket = ++wrappedTicket;
-      results.replaceChildren(wrappedNote("Searching..."));
-      let hits;
-      try {
-        hits = await invoke("library_search", { query });
-      } catch (err) {
-        if (ticket === wrappedTicket) results.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
-        return;
-      }
-      if (ticket !== wrappedTicket || input.value.trim() !== query) return;
-      results.replaceChildren(...searchResults(hits));
-    };
-    input.addEventListener("input", () => {
-      clearTimeout(timer);
-      timer = setTimeout(run, 350);
-    });
-    input.addEventListener("keydown", (event) => {
-      if (event.key === "Enter") {
-        clearTimeout(timer);
-        run();
-      }
-    });
-    if (entry.query) run();
-    setTimeout(() => input.focus(), 50);
+    wrappedBody.append(results);
+    if (!query) {
+      results.append(wrappedNote("Type in the bar above to search."));
+      return;
+    }
+    const ticket = wrappedTicket;
+    results.replaceChildren(wrappedNote("Searching..."));
+    let hits;
+    try {
+      hits = await invoke("library_search", { query });
+    } catch (err) {
+      if (ticket === wrappedTicket) results.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    results.replaceChildren(...searchResults(hits, query));
+  },
+
+  // Deep Dive: a playlist made to order from the picks (songs, albums,
+  // artists from their brain buttons) and what you ask for; the Radio tab
+  // is the radio page for one of the picks. Without tier 2: the radio page.
+  deepdive() {
+    if (!tier2Ready()) return WRAPPED_PAGES.radio({});
+    wrappedHeading("Deep Dive", "A playlist made to order from what you pick and what you ask for");
+    if (wrappedNeedsLibrary()) return;
+    const tabs = document.createElement("div");
+    tabs.className = "wrapped-tabs dive-tabs";
+    for (const [value, label] of [
+      ["dive", "Deep Dive"],
+      ["radio", "Radio"],
+    ]) {
+      const tab = document.createElement("button");
+      tab.className = `wrapped-tab${deepDiveTab === value ? " selected" : ""}`;
+      tab.textContent = label;
+      tab.addEventListener("click", () => {
+        if (deepDiveTab === value) return;
+        deepDiveTab = value;
+        renderWrapped();
+      });
+      tabs.append(tab);
+    }
+    wrappedBody.append(tabs);
+    if (deepDiveTab === "radio") return diveRadioTab();
+    wrappedBody.append(divePicks());
+    const check = soundCheckBox();
+    if (check) wrappedBody.append(check);
+    wrappedBody.append(diveAsk());
+    wrappedBody.append(diveMade());
   },
 
   // Roon Radio seeded with an artist (or album) and the artists that share
@@ -3604,8 +3934,8 @@ const WRAPPED_PAGES = {
     const lists = document.createElement("div");
     lists.className = "discover-lists";
     lists.append(
-      discoverColumn("weekly", "🌟 Discover Weekly", "Artists you don't have and have never played, found through the listeners of what you've played most lately. One song each.", status.weekly, status.building, status.weeklyError),
-      discoverColumn("rediscover", "💎 Library Rediscover", "Artists in your library you've never played, and a quarter you haven't for a year or more. One song each.", status.rediscover, status.building, status.rediscoverError),
+      discoverColumn("weekly", "🌟 Discover Weekly", "Artists you don't have and have never played, found through the listeners of what you've played most lately. One song each.", status.weekly, status.building, status.weeklyError, status),
+      discoverColumn("rediscover", "💎 Library Rediscover", "Forgotten gems: old favorites you haven't played in a year or more, and a third from artists in your library you've never played.", status.rediscover, status.building, status.rediscoverError),
     );
     wrappedBody.append(lists, discoverResetRow(!!status.building));
   },
@@ -3623,7 +3953,7 @@ const WRAPPED_PAGES = {
       return;
     }
     if (ticket !== wrappedTicket) return;
-    wrappedBody.replaceChildren();
+    wrappedBody.replaceChildren(wrappedCorner("Ban list", () => openWrappedPage({ page: "banlist" })));
     const mine = list.filter(isWrappedPlaylist);
     const others = list.filter((p) => !isWrappedPlaylist(p));
     if (mine.length) {
@@ -3633,7 +3963,69 @@ const WRAPPED_PAGES = {
     }
     if (others.length) wrappedBody.append(wrappedSection("Your other playlists"), playlistRows(others, false));
   },
+
+  // The ban list: artists never suggested again (a thumbs down on a
+  // Discover song, or the X on a Home card)
+  async banlist() {
+    wrappedHeading("Ban list", "Artists Wrapped never suggests: not on Home, not by Discover, Deep Dive or the radio");
+    wrappedBody.append(wrappedCorner("Playlists", () => openWrappedPage({ page: "playlists" })));
+    const ticket = ++wrappedTicket;
+    let list;
+    try {
+      list = await invoke("wrapped_ban_list");
+    } catch (err) {
+      if (ticket === wrappedTicket) wrappedFailed(err);
+      return;
+    }
+    if (ticket !== wrappedTicket) return;
+    const holder = document.createElement("div");
+    wrappedBody.append(holder);
+    const paint = (list) => {
+      holder.replaceChildren();
+      if (!list.length) return holder.append(wrappedNote("Nobody's banned. The X on an artist or album on Home adds one; so does a thumbs down on a Discover song."));
+      const rows = document.createElement("div");
+      rows.className = "wrapped-ban-rows";
+      for (const b of list) {
+        const row = document.createElement("div");
+        row.className = "wrapped-ban-row";
+        const name = document.createElement("span");
+        name.className = "wrapped-ban-name";
+        name.textContent = b.name;
+        const when = document.createElement("span");
+        when.className = "wrapped-ban-when";
+        when.textContent = b.at ? historyWhen(b.at) : "";
+        const x = document.createElement("button");
+        x.className = "wrapped-button small";
+        x.textContent = "Unban";
+        x.addEventListener("click", async () => {
+          try {
+            paint(await invoke("wrapped_ban_remove", { artist: b.name }));
+            wrappedToast(`${b.name} can be suggested again.`);
+          } catch (err) {
+            wrappedToast(String(err));
+          }
+        });
+        row.append(name, when, x);
+        rows.append(row);
+      }
+      holder.append(rows);
+    };
+    paint(list);
+  },
 };
+
+// A button in the page's top right corner (the Playlists page's "Ban
+// list", the ban list's "Playlists")
+function wrappedCorner(label, onClick) {
+  const row = document.createElement("div");
+  row.className = "wrapped-corner";
+  const btn = document.createElement("button");
+  btn.className = "wrapped-button small";
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  row.append(btn);
+  return row;
+}
 
 // ----- Roon's picks (the "one box" calls its own pages are built from) -----
 
@@ -3852,6 +4244,690 @@ function wrappedRadioBuilder(what, entry) {
   }, "wrapped-radio");
 }
 
+// Deep Dive's picks, each with an x, and a [+] after them: back to where
+// you came from to pick another (the brain button there adds it)
+function divePicks() {
+  const box = document.createElement("section");
+  box.className = "dive-picks";
+  const head = document.createElement("div");
+  head.className = "dive-picks-head";
+  const title = document.createElement("h4");
+  title.textContent = diveSeeds.length ? `Your picks (${diveSeeds.length} of ${DIVE_MAX})` : "Your picks";
+  head.append(title);
+  box.append(head);
+  const row = document.createElement("div");
+  row.className = "dive-pick-row";
+  const kinds = { song: "Song", album: "Album", artist: "Artist" };
+  diveSeeds.forEach((seed, i) => {
+    const pick = document.createElement("div");
+    pick.className = "dive-pick";
+    const art = wrappedArt(seed.imageKey, 96, seed.title, seed.kind === "artist");
+    art.classList.add("small");
+    const text = document.createElement("div");
+    text.className = "dive-pick-text";
+    const name = document.createElement("span");
+    name.className = "dive-pick-title";
+    name.textContent = seed.title;
+    const sub = document.createElement("span");
+    sub.className = "dive-pick-sub";
+    sub.textContent = [kinds[seed.kind], seed.kind === "artist" ? null : seed.artist].filter(Boolean).join(" · ");
+    text.append(name, sub);
+    const remove = document.createElement("button");
+    remove.className = "discover-ask-x";
+    remove.innerHTML = CLOSE_ICON;
+    remove.setAttribute("aria-label", `Take ${seed.title} out`);
+    remove.addEventListener("click", () => {
+      diveSeeds.splice(i, 1);
+      renderWrapped();
+    });
+    pick.append(art, text, remove);
+    row.append(pick);
+  });
+  if (diveSeeds.length < DIVE_MAX) {
+    const add = document.createElement("button");
+    add.className = "dive-add";
+    add.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>';
+    add.title = "Pick another: back to where you were, then its brain button";
+    add.setAttribute("aria-label", "Pick another");
+    // (nothing picked yet: the bar's search, to find the first; after a
+    // pick, back to where it came from)
+    add.addEventListener("click", () => {
+      const before = wrappedStack.at(-2);
+      if (diveSeeds.length && before && before.page !== "deepdive") wrappedBackPage();
+      else wrappedBarInput.focus();
+    });
+    row.append(add);
+  }
+  box.append(row);
+  if (!diveSeeds.length) {
+    box.append(wrappedNote(`Pick up to ${DIVE_MAX} songs, albums or artists with the brain button next to them, or just describe the playlist below.`, "wrapped-note small"));
+  }
+  return box;
+}
+
+// What the playlist should be, in your own words. Make the playlist starts
+// a talk with tier 2 (diveChatPanel): a question at a time, yours answered
+// too; once it's settled, the talk goes away and the playlist is made
+let diveSlot = null; // where the talk shows, under the words
+let diveGo = null; // Make the playlist (hidden while talking)
+function diveAsk() {
+  const box = document.createElement("section");
+  box.className = "dive-ask";
+  const label = document.createElement("h4");
+  label.textContent = "What should it be?";
+  const input = document.createElement("textarea");
+  input.className = "wrapped-search dive-input";
+  input.rows = 3;
+  input.maxLength = 500;
+  input.placeholder = diveSeeds.length ? "e.g. the guitars of these, but heavier and from the 90s" : "e.g. the heaviest death metal, songs I've never heard";
+  input.value = diveText;
+  const go = document.createElement("button");
+  go.className = "wrapped-play dive-go";
+  go.innerHTML = `${diveIcon()}<span>Make the playlist</span>`;
+  const paint = () => {
+    go.disabled = !diveText.trim() && !diveSeeds.length;
+    go.title = go.disabled ? "Pick something, or say what the playlist should be" : "";
+  };
+  input.addEventListener("input", () => {
+    diveText = input.value;
+    paint();
+  });
+  paint();
+  go.addEventListener("click", () => {
+    diveChat = { turns: [], plan: null, waiting: false, error: "", draft: "" };
+    diveTalk();
+  });
+  // Where from: the toggle, so the talk needn't ask
+  const from = document.createElement("div");
+  from.className = "dive-from";
+  const fromLabel = document.createElement("span");
+  fromLabel.className = "dive-from-label";
+  fromLabel.textContent = "Songs from";
+  const fromTabs = document.createElement("div");
+  fromTabs.className = "wrapped-tabs small";
+  from.append(fromLabel, fromTabs);
+  const chips = [];
+  for (const [value, text] of [["new", "New to you"], ["library", "Your library"], ["both", "Both"]]) {
+    const chip = document.createElement("button");
+    chip.className = `wrapped-tab${diveSource === value ? " selected" : ""}`;
+    chip.textContent = text;
+    chip.addEventListener("click", () => {
+      diveSource = value;
+      try {
+        localStorage.setItem("wrapped-dive-source", value);
+      } catch {}
+      chips.forEach((c) => c.classList.toggle("selected", c === chip));
+      if (diveChat?.plan) {
+        diveChat.plan.source = value;
+        diveChatRedraw();
+      }
+    });
+    chips.push(chip);
+    fromTabs.append(chip);
+  }
+  const slot = document.createElement("div");
+  slot.className = "dive-chat-slot";
+  diveSlot = slot;
+  diveGo = go;
+  box.append(label, input, from, go, slot);
+  diveChatRedraw();
+  return box;
+}
+
+// The picks as dive.rs takes them
+function divePicksPayload() {
+  return diveSeeds.map((s) => ({
+    kind: s.kind,
+    handle: s.handle,
+    title: s.title,
+    artist: s.artist || "",
+    album: s.album || "",
+    albumHandle: s.albumHandle || null,
+    artistHandle: (s.kind === "artist" ? s.handle : s.radio?.handle) || null,
+    imageKey: s.imageKey || null,
+  }));
+}
+
+// The talk before building: { turns: [{ from: "listener" | "dive" |
+// "note", text }], plan (what tier 2 last said is settled), waiting, error,
+// draft, asking (its question waits for you: the bubble flashes), follows
+// (the Deep Dive it's about, when taken up again: its build time) }
+let diveChat = null;
+// The turns tier 2 reads (the page's own notes left out)
+const diveHistory = (chat) => chat.turns.filter((t) => t.from !== "note");
+
+// A Deep Dive at work (tier 2 thinking, or the playlist being made): Roon's
+// own page changes don't close Wrapped meanwhile
+let diveBuilding = false;
+function diveHolding() {
+  return diveBuilding || !!diveChat?.waiting;
+}
+
+// Deep Dive back in front when it needs you or is done: its page, Wrapped
+// opened on it from anywhere else (`render`: drawn again when it's already
+// showing); the taskbar button flashes when the window is minimized or
+// behind another
+function diveToFront(render = false) {
+  const showing = !wrapped.hidden && wrappedStack.at(-1)?.page === "deepdive";
+  if (!showing || deepDiveTab !== "dive" || render) {
+    deepDiveTab = "dive";
+    if (showing) renderWrapped();
+    else openWrappedPage({ page: "deepdive" });
+  }
+  if (document.hidden || !document.hasFocus()) invoke("wrapper_attention").catch(() => {});
+}
+const DIVE_SOURCES = { library: "from your library", new: "new to you", both: "your library and new to you" };
+
+function diveChatRedraw() {
+  if (diveGo) diveGo.hidden = !!diveChat;
+  if (!diveSlot?.isConnected && diveSlot?.parentNode == null) return;
+  diveSlot.replaceChildren(...(diveChat ? [diveChatPanel()] : []));
+}
+
+// Tier 2's next turn (its opening question when nothing's been said)
+async function diveTalk() {
+  const chat = diveChat;
+  if (!chat) return;
+  chat.waiting = true;
+  chat.error = "";
+  chat.asking = false;
+  diveChatRedraw();
+  try {
+    const reply = await invoke("wrapped_dive_chat", { picks: divePicksPayload(), text: diveText, source: diveSource, history: diveHistory(chat), follows: chat.follows ?? null });
+    if (diveChat !== chat) return;
+    chat.waiting = false;
+    chat.plan = { summary: reply.summary, source: diveSource, count: reply.count, perArtist: reply.perArtist };
+    if (reply.say) chat.turns.push({ from: "dive", text: reply.say });
+    if (reply.done) return diveBuild(reply.say);
+    chat.asking = true;
+  } catch (err) {
+    if (diveChat !== chat) return;
+    chat.waiting = false;
+    chat.error = String(err);
+  }
+  diveChatRedraw();
+  diveToFront();
+}
+
+function diveChatPanel() {
+  const chat = diveChat;
+  const panel = document.createElement("section");
+  panel.className = "dive-chat";
+  const log = document.createElement("div");
+  log.className = "dive-chat-log";
+  const message = (from, text, asking = false) => {
+    if (from === "note") return log.append(wrappedNote(text, "wrapped-note small dive-note"));
+    const row = document.createElement("div");
+    row.className = `dive-msg from-${from}${asking ? " asking" : ""}`;
+    if (from === "dive") row.insertAdjacentHTML("beforeend", diveIcon());
+    const bubble = document.createElement("div");
+    bubble.className = "dive-msg-text";
+    if (text == null) bubble.innerHTML = '<span class="dive-typing"><i></i><i></i><i></i></span>';
+    else bubble.textContent = text;
+    row.append(bubble);
+    log.append(row);
+  };
+  // (its question waiting for an answer flashes until you start on one)
+  chat.turns.forEach((t, i) => message(t.from, t.text, chat.asking && !chat.waiting && i === chat.turns.length - 1 && t.from === "dive"));
+  if (chat.waiting) message("dive", null);
+  panel.append(log);
+  if (chat.error) panel.append(wrappedNote(chat.error, "wrapped-note error small"));
+  if (chat.plan) {
+    const p = chat.plan;
+    panel.append(wrappedNote(`So far: ${DIVE_SOURCES[p.source] || DIVE_SOURCES.both} · ${p.count} songs · ${p.perArtist} per artist`, "wrapped-note small dive-chat-plan"));
+  }
+  const row = document.createElement("div");
+  row.className = "dive-chat-row";
+  const input = document.createElement("textarea");
+  input.className = "wrapped-search dive-chat-input";
+  input.rows = 2;
+  input.maxLength = 600;
+  input.placeholder = "Answer, ask what it means, or say more...";
+  input.value = chat.draft || "";
+  input.disabled = chat.waiting;
+  const stopAsking = () => {
+    if (!chat.asking) return;
+    chat.asking = false;
+    log.querySelector(".dive-msg.asking")?.classList.remove("asking");
+  };
+  input.addEventListener("input", () => {
+    chat.draft = input.value;
+    stopAsking();
+  });
+  input.addEventListener("pointerdown", stopAsking);
+  const send = document.createElement("button");
+  send.className = "wrapped-button";
+  send.textContent = chat.error && !chat.draft ? "Try again" : "Send";
+  send.disabled = chat.waiting;
+  const sendNow = () => {
+    const text = input.value.trim();
+    if (chat.waiting) return;
+    if (text) chat.turns.push({ from: "listener", text });
+    else if (!chat.error) return input.focus();
+    chat.draft = "";
+    diveTalk();
+  };
+  send.addEventListener("click", sendNow);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      sendNow();
+    }
+  });
+  row.append(input, send);
+  const actions = document.createElement("div");
+  actions.className = "dive-chat-actions";
+  const make = document.createElement("button");
+  make.className = "wrapped-play dive-go small";
+  make.innerHTML = `${diveIcon()}<span>Make it now</span>`;
+  make.title = "Skip the rest of the questions and make it with what's settled";
+  make.disabled = chat.waiting;
+  make.addEventListener("click", () => diveBuild());
+  const over = document.createElement("button");
+  over.className = "dive-chat-over";
+  over.textContent = "Start over";
+  over.addEventListener("click", () => {
+    diveChat = null;
+    diveChatRedraw();
+  });
+  actions.append(make, over);
+  panel.append(row, actions);
+  requestAnimationFrame(() => {
+    log.scrollTop = log.scrollHeight;
+    if (!chat.waiting && panel.isConnected) input.focus({ preventScroll: true });
+  });
+  return panel;
+}
+
+// Makes the Deep Dive from what the talk settled, with the builder's
+// progress over the page; the talk comes back if it fails
+async function diveBuild(said) {
+  const chat = diveChat;
+  const plan = { ...(chat?.plan || { summary: "", count: 30, perArtist: 1 }), source: diveSource };
+  const history = chat ? diveHistory(chat) : [];
+  const follows = chat?.follows ?? null;
+  diveChat = null;
+  diveChatRedraw();
+  diveBuilding = true;
+  wrappedBusy(said || "Making your Deep Dive...");
+  const unlisten = await listen("wrapped-dive", (event) => {
+    if (event.payload.text) wrappedBusy(event.payload.text);
+  });
+  try {
+    const status = await invoke("wrapped_dive_build", { picks: divePicksPayload(), text: diveText, plan, history, follows });
+    diveLists = status.dives;
+    renderDivePiece();
+    const made = status.dives[0];
+    // (the new one opens on its songs)
+    if (made) diveOpen.add(made.builtAt);
+    wrappedToast(`Made ${made?.name || "your Deep Dive"}.`);
+  } catch (err) {
+    wrappedToast(String(err));
+    if (chat) {
+      chat.error = `It didn't get made: ${err}`;
+      diveChat = chat;
+    }
+  } finally {
+    diveBuilding = false;
+    unlisten();
+    wrappedBusy(null);
+    // (back on Deep Dive, wherever you went meanwhile)
+    diveToFront(true);
+  }
+}
+
+// "Talk it over": a Deep Dive made earlier taken up again: its picks, its
+// words and its talk back, and tier 2 asks how it turned out; what you say
+// of its songs (the ones that hit the mark, the misses) leads the next one
+function diveTakeUp(d) {
+  diveSeeds = (d.pickList || []).map((p) => ({
+    kind: p.kind,
+    handle: p.handle,
+    title: p.title,
+    artist: p.artist,
+    album: p.album,
+    albumHandle: p.albumHandle,
+    imageKey: p.imageKey,
+    radio: p.kind === "artist" ? { name: p.title, handle: p.handle } : p.kind === "album" ? { name: p.artist, handle: p.artistHandle, album: p.title, albumHandle: p.handle } : undefined,
+  }));
+  diveText = d.request || "";
+  const p = d.plan;
+  if (["new", "library", "both"].includes(p?.source)) {
+    diveSource = p.source;
+    try {
+      localStorage.setItem("wrapped-dive-source", diveSource);
+    } catch {}
+  }
+  diveChat = {
+    turns: [
+      ...(d.talk || []),
+      { from: "note", text: `Made: ${d.name} · ${d.songs.length} songs` },
+      { from: "dive", text: "How did it turn out? Tell me which songs hit the mark and which missed, and I'll dig deeper from there." },
+    ],
+    plan: p ? { summary: p.summary || "", source: diveSource, count: p.count || 30, perArtist: p.perArtist || 1 } : null,
+    waiting: false,
+    error: "",
+    draft: "",
+    asking: true,
+    follows: d.builtAt,
+  };
+  deepDiveTab = "dive";
+  renderWrapped();
+  requestAnimationFrame(() => wrappedBody.querySelector(".dive-chat")?.scrollIntoView({ block: "center", behavior: "smooth" }));
+}
+
+// Sound check, tier 3's test on Deep Dive's page: with a song and an
+// album picked, the album's songs ranked by how close they sound to the
+// song, from their previews (sound.rs). Nothing is made or played. Kept
+// while you move around, until the picks change: { key (the picks), running,
+// done, total, result, error }
+let soundCheck = null;
+let soundCheckLabel = null;
+
+function soundCheckBox() {
+  if (!soundState?.ready) return null;
+  const key = JSON.stringify(diveSeeds.map((s) => [s.kind, s.title, s.artist || ""]));
+  if (soundCheck && soundCheck.key !== key && !soundCheck.running) soundCheck = null;
+  const songs = diveSeeds.filter((s) => s.kind === "song");
+  const albums = diveSeeds.filter((s) => s.kind === "album");
+  if (!soundCheck && (!songs.length || !albums.length)) return null;
+  const box = document.createElement("section");
+  box.className = "sound-check";
+  const head = document.createElement("div");
+  head.className = "sound-check-head";
+  const title = document.createElement("h4");
+  title.textContent = "Sound check";
+  const run = document.createElement("button");
+  run.className = "wrapped-button small";
+  run.textContent = soundCheck?.running ? "Listening..." : soundCheck?.result || soundCheck?.error ? "Run again" : "Run";
+  run.disabled = !!soundCheck?.running || !songs.length || !albums.length;
+  run.addEventListener("click", () => runSoundCheck(key));
+  head.append(title, run);
+  if (soundCheck && !soundCheck.running && (soundCheck.result || soundCheck.error)) {
+    const close = document.createElement("button");
+    close.className = "discover-ask-x";
+    close.innerHTML = CLOSE_ICON;
+    close.setAttribute("aria-label", "Close the Sound check");
+    close.addEventListener("click", () => {
+      soundCheck = { key, closed: true };
+      soundCheckRedraw();
+    });
+    head.append(close);
+  }
+  box.append(head);
+  const quoted = (list, many) => (list.length === 1 ? `"${list[0].title}"` : many);
+  if (!soundCheck || soundCheck.closed) {
+    box.append(
+      wrappedNote(
+        `Tier 3's test: the songs of ${quoted(albums, "the picked albums")} ranked by how close they sound to ${quoted(songs, "the picked songs")}, from your own files where Roon has them, else their 30-second previews. Nothing is made or played.`,
+        "wrapped-note small",
+      ),
+    );
+    return box;
+  }
+  if (soundCheck.running) {
+    soundCheckLabel = wrappedNote("", "wrapped-note small sound-check-progress");
+    box.append(soundCheckLabel);
+    paintSoundCheck();
+  }
+  if (soundCheck.error) box.append(wrappedNote(soundCheck.error, "wrapped-note small error"));
+  const r = soundCheck.result;
+  if (r) {
+    const rows = document.createElement("ul");
+    rows.className = "sound-check-rows";
+    const row = (song, rank, top) => {
+      const li = document.createElement("li");
+      li.className = `sound-check-row${song.heard ? "" : " missing"}${top ? " top" : ""}`;
+      const place = document.createElement("span");
+      place.className = "sound-check-rank";
+      place.textContent = rank;
+      const name = document.createElement("span");
+      name.className = "sound-check-title";
+      name.textContent = song.title;
+      name.title = `${song.artist} - ${song.title}${song.file ? " (your file, all of it)" : song.from ? ` (${song.from}'s preview)` : ""}`;
+      const bar = document.createElement("span");
+      bar.className = "sound-check-bar";
+      const value = document.createElement("span");
+      value.className = "sound-check-value";
+      if (song.closeness != null) {
+        // (0.6 and under shows empty: alike songs sit around 0.85 to 0.95)
+        const fill = document.createElement("i");
+        fill.style.width = `${Math.max(0, Math.min(1, (song.closeness - 0.6) / 0.4)) * 100}%`;
+        bar.append(fill);
+        value.textContent = song.closeness.toFixed(3);
+      }
+      const styles = document.createElement("span");
+      styles.className = "sound-check-styles";
+      styles.textContent = song.heard ? song.styles.join(", ") : "No file or preview found";
+      // What was heard: your file (all of the song) or its preview
+      const source = document.createElement("span");
+      source.className = `sound-check-source${song.file ? " file" : ""}`;
+      source.textContent = song.file ? "your file" : song.heard ? "preview" : "";
+      li.append(place, name, bar, value, styles, source);
+      return li;
+    };
+    const group = (heading, list, extra = "") => {
+      const g = document.createElement("div");
+      g.className = `sound-check-group${extra}`;
+      const h = document.createElement("h5");
+      h.textContent = heading;
+      g.append(h, list.children.length ? list : wrappedNote("Roon didn't list its songs.", "wrapped-note small"));
+      box.append(g);
+    };
+    const picked = document.createElement("ul");
+    picked.className = "sound-check-rows";
+    for (const s of r.picks) picked.append(row({ ...s, closeness: null }, "", false));
+    group(r.picks.length === 1 ? "Your song, as it sounds" : "Your songs, as they sound", picked, " picks");
+    for (const a of r.albums) {
+      const list = rows.cloneNode(false);
+      a.songs.forEach((s, i) => list.append(row(s, s.heard ? `${i + 1}` : "-", i === 0 && s.heard)));
+      group(`${a.title} by ${a.artist}, closest first`, list);
+    }
+    const n = r.heardNow;
+    const heard = [...r.picks, ...r.albums.flatMap((a) => a.songs)].filter((s) => s.heard).length;
+    const files = r.files ? ` · ${r.files} of the ${heard} from your own files` : "";
+    box.append(
+      wrappedNote(
+        `${n ? `${n} song${n === 1 ? "" : "s"} heard just now` : "Nothing new heard"} · ${Math.round(r.seconds)} s${files}. Closeness is the artist model's: 1 is alike, around 0.3 nothing alike.`,
+        "wrapped-note small",
+      ),
+    );
+  }
+  return box;
+}
+
+function paintSoundCheck() {
+  if (!soundCheck?.running || !soundCheckLabel?.isConnected) return;
+  const { done, total } = soundCheck;
+  soundCheckLabel.textContent = total ? `Listening: ${done} of ${total} song${total === 1 ? "" : "s"}...` : "Finding your files and the previews...";
+}
+
+// The Sound check drawn again where it is (when Deep Dive is showing)
+function soundCheckRedraw() {
+  const old = wrappedBody.querySelector(".sound-check");
+  if (wrapped.hidden || wrappedStack.at(-1)?.page !== "deepdive" || deepDiveTab !== "dive") return;
+  const fresh = soundCheckBox();
+  if (old && fresh) old.replaceWith(fresh);
+  else if (old) old.remove();
+  else if (fresh) wrappedBody.querySelector(".dive-picks")?.after(fresh);
+}
+
+async function runSoundCheck(key) {
+  if (soundCheck?.running) return;
+  const mine = { key, running: true, done: 0, total: 0, result: null, error: "" };
+  soundCheck = mine;
+  soundCheckRedraw();
+  const unlisten = await listen("sound-check", (event) => {
+    if (soundCheck !== mine) return;
+    mine.done = event.payload.done;
+    mine.total = event.payload.total;
+    paintSoundCheck();
+  });
+  try {
+    mine.result = await invoke("sound_check", { picks: divePicksPayload() });
+  } catch (err) {
+    mine.error = String(err);
+  } finally {
+    mine.running = false;
+    unlisten();
+    if (soundCheck === mine) soundCheckRedraw();
+  }
+}
+
+// The Deep Dives made so far (newest first): Play, the songs and why
+const diveOpen = new Set();
+function diveMade() {
+  const box = document.createElement("section");
+  box.className = "dive-made";
+  const ticket = wrappedTicket;
+  invoke("wrapped_dive_status")
+    .then((status) => {
+      diveLists = status.dives;
+      if (ticket !== wrappedTicket || !status.dives.length) return;
+      const head = document.createElement("h4");
+      head.textContent = "Made so far";
+      box.append(head);
+      for (const d of status.dives) {
+        const card = document.createElement("div");
+        card.className = `dive-made-card${diveOpen.has(d.builtAt) ? " open" : ""}`;
+        const top = document.createElement("div");
+        top.className = "dive-made-top";
+        const text = document.createElement("div");
+        text.className = "dive-made-text";
+        const name = document.createElement("span");
+        name.className = "dive-made-name";
+        name.textContent = d.name;
+        const sub = document.createElement("span");
+        sub.className = "dive-made-sub";
+        const date = new Date(d.builtAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+        sub.textContent = [`${d.songs.length} songs`, date, d.request ? `"${d.request}"` : d.picks.join(", ")].filter(Boolean).join(" · ");
+        text.append(name, sub);
+        top.append(text);
+        const talk = document.createElement("button");
+        talk.className = "wrapped-button small dive-talk";
+        talk.textContent = "Talk it over";
+        talk.title = "Tell it which songs hit the mark and which missed, and it digs deeper from there";
+        talk.addEventListener("click", (e) => {
+          e.stopPropagation();
+          diveTakeUp(d);
+        });
+        top.append(talk);
+        if (d.playlist) {
+          const play = document.createElement("button");
+          play.className = "wrapped-play discover-play small";
+          play.innerHTML = `${WRAPPED_PLAY_ICON}<span>Play</span>`;
+          play.addEventListener("click", (e) => {
+            e.stopPropagation();
+            if (!zone) return wrappedToast("Pick a zone first.");
+            invoke("library_play_playlist", { zoneId: zone.zoneId, handle: d.playlist.handle, clear: true })
+              .then(() => wrappedToast(`Playing ${d.name} on ${zone.name}`))
+              .catch((err) => wrappedToast(String(err)));
+          });
+          top.append(play);
+        }
+        const forget = document.createElement("button");
+        forget.className = "discover-ask-x";
+        forget.innerHTML = CLOSE_ICON;
+        forget.title = "Take it off this page";
+        forget.setAttribute("aria-label", "Take it off this page");
+        forget.addEventListener("click", async (e) => {
+          e.stopPropagation();
+          // Off the page, and the Roon playlist with it or not: asked first
+          const choice = await wrappedConfirm({
+            title: `Take "${d.name}" off this page?`,
+            text: d.playlist ? "The playlist in Roon can stay, or go with it. Deleting it from Roon can't be undone." : "Its playlist isn't in Roon any more.",
+            actions: d.playlist
+              ? [
+                  { value: "delete", label: "Delete the playlist too", kind: "danger" },
+                  { value: "keep", label: "Keep the playlist" },
+                  { value: null, label: "Cancel" },
+                ]
+              : [
+                  { value: "keep", label: "Take it off" },
+                  { value: null, label: "Cancel" },
+                ],
+          });
+          if (!choice) return;
+          try {
+            if (choice === "delete") await invoke("library_delete_playlist", { handle: d.playlist.handle });
+            diveLists = (await invoke("wrapped_dive_forget", { builtAt: d.builtAt })).dives;
+            renderDivePiece();
+            card.remove();
+            if (choice === "delete") wrappedToast(`Deleted "${d.name}" from Roon.`);
+          } catch (err) {
+            wrappedToast(String(err));
+          }
+        });
+        top.append(forget);
+        const list = document.createElement("ol");
+        list.className = "dive-made-songs";
+        for (const s of d.songs) {
+          const li = document.createElement("li");
+          const what = document.createElement("span");
+          what.className = "dive-made-song";
+          what.textContent = `${s.artist} - ${s.title}`;
+          const why = document.createElement("span");
+          why.className = "dive-made-why";
+          // (with tier 3: how close it sounds to the picks, from listening)
+          const sound = s.sound != null ? `sounds ${s.sound.toFixed(2)} like your picks` : null;
+          why.textContent = [s.inLibrary ? "In your library" : "New to you", s.album, s.why, sound].filter(Boolean).join(" · ");
+          li.append(what, why);
+          list.append(li);
+        }
+        top.addEventListener("click", () => {
+          if (diveOpen.has(d.builtAt)) diveOpen.delete(d.builtAt);
+          else diveOpen.add(d.builtAt);
+          card.classList.toggle("open");
+        });
+        card.append(top, list);
+        box.append(card);
+      }
+    })
+    .catch(() => {});
+  return box;
+}
+
+// The Radio tab: the radio page for one of the picks (the newest unless
+// another is chosen); a song plays Roon Radio from itself; no picks, a
+// search for an artist (which becomes a pick)
+function diveRadioTab() {
+  if (!diveSeeds.length) {
+    wrappedBody.append(wrappedNote("Start the radio from an artist, or pick songs, albums or artists with their brain buttons.", "wrapped-note small"));
+    return radioPickSeed((item) => {
+      diveSeeds.push({ kind: "artist", handle: item.handle, title: item.title, imageKey: item.imageKey, radio: { name: item.title, handle: item.handle } });
+      renderWrapped();
+    });
+  }
+  const at = diveRadioAt >= 0 && diveRadioAt < diveSeeds.length ? diveRadioAt : diveSeeds.length - 1;
+  if (diveSeeds.length > 1) {
+    const pills = radioPills(
+      diveSeeds.map((s, i) => [String(i), `${s.title} (${s.kind})`]),
+      (v) => Number(v) === at,
+      (v) => {
+        diveRadioAt = Number(v);
+        renderWrapped();
+      },
+    );
+    const from = radioControl("Start from", pills.row);
+    from.classList.add("dive-radio-from");
+    wrappedBody.append(from);
+  }
+  const seed = diveSeeds[at];
+  if (seed.kind === "song") {
+    const title = document.createElement("div");
+    title.className = "wrapped-radio-subject";
+    title.textContent = [seed.title, seed.artist].filter(Boolean).join(" · ");
+    const start = document.createElement("button");
+    start.className = "wrapped-play wrapped-radio-start";
+    start.innerHTML = `${RADIO_ICON}<span>Start radio</span>`;
+    start.addEventListener("click", () => startRoonRadio("song", { tracks: [seed.handle] }, start));
+    wrappedBody.append(title, wrappedNote("Roon Radio from this song.", "wrapped-note small"), start);
+    return;
+  }
+  if (!seed.radio?.name) return wrappedBody.append(wrappedNote("Roon didn't say who the artist is.", "wrapped-note error"));
+  wrappedRadioPage(seed.radio, ++wrappedTicket);
+}
+
 // A Roon handle for an artist row (Similar rows carry a performer id or
 // nothing): by id, else Roon's search, exact name only. A name can be
 // several artists: Last.fm's page for a name lumps them together, and
@@ -3906,8 +4982,9 @@ function roonGenres(handle) {
   return roonGenreCache.get(handle);
 }
 
-// No artist yet: Roon's search, artists only
-function radioPickSeed() {
+// No artist yet: Roon's search, artists only (`onPick`: what a click does;
+// the radio page for the artist by default)
+function radioPickSeed(onPick = (item) => openWrappedPage({ page: "radio", name: item.title, handle: item.handle })) {
   const input = document.createElement("input");
   input.className = "wrapped-search";
   input.type = "search";
@@ -3930,7 +5007,7 @@ function radioPickSeed() {
     }
     if (ticket !== wrappedTicket || input.value.trim() !== query) return;
     results.replaceChildren();
-    if (!wrappedPicks(results, "Artists", hits.artists.map(artistItem), (item) => openWrappedPage({ page: "radio", name: item.title, handle: item.handle }))) {
+    if (!wrappedPicks(results, "Artists", hits.artists.map(artistItem), onPick)) {
       results.append(wrappedNote("No artists by that name."));
     }
   };
@@ -4118,7 +5195,8 @@ async function wrappedRadioPage(entry, ticket) {
           ? await invoke("library_album_extras", { handle: entry.albumHandle })
           : await invoke("library_artist_extras", { handle: entry.handle });
         if (mine !== load || ticket !== wrappedTicket) return;
-        const list = (entry.albumHandle ? x.similarArtists : x.similar) || [];
+        const banned = new Set((await invoke("wrapped_ban_list").catch(() => [])).map((b) => b.name.toLowerCase()));
+        const list = ((entry.albumHandle ? x.similarArtists : x.similar) || []).filter((p) => !banned.has((p.name || "").toLowerCase()));
         return paint(list.slice(0, radioPrefs.count).map((p) => ({ name: p.name, handle: p.handle, imageKey: p.imageKey, performerId: p.performerId, why: [] })), 0);
       }
       const answer = await invoke("wrapped_similar", {
@@ -4358,16 +5436,184 @@ function wrappedDiscography(holder, albums, picks) {
   });
 }
 
-async function wrappedHomeExtras(holder, ticket) {
-  let artists;
+// The Home page's rows, from the last build; while a build runs, its
+// progress, and the rows again when it's done ("wrapped-home" events)
+let homeUnlisten = null;
+async function wrappedHome(holder, ticket, refresh = false) {
+  if (homeUnlisten) {
+    homeUnlisten();
+    homeUnlisten = null;
+  }
+  let status;
   try {
-    artists = await invoke("library_recommended_artists");
+    status = await invoke("wrapped_home", { refresh });
   } catch (err) {
-    console.warn("recommended artists", err);
+    if (ticket === wrappedTicket) holder.replaceChildren(wrappedNote(String(err), "wrapped-note error"));
     return;
   }
   if (ticket !== wrappedTicket) return;
-  wrappedPicks(holder, "Artists Roon recommends for you", artists.map(artistItem), openArtist);
+  paintHome(holder, status, ticket);
+  // (a build's progress and end, a ban, a daily look for albums: all
+  // come as events while the page shows)
+  homeUnlisten = await listen("wrapped-home", (event) => {
+    if (ticket !== wrappedTicket) {
+      homeUnlisten?.();
+      homeUnlisten = null;
+      return;
+    }
+    paintHome(holder, event.payload, ticket);
+  });
+}
+
+function paintHome(holder, status, ticket) {
+  // (the progress line only changes while the rows stay)
+  let note = holder.querySelector(".wrapped-home-progress");
+  if (status.building) {
+    if (!note) {
+      note = wrappedNote("", "wrapped-note small wrapped-home-progress");
+      holder.prepend(note);
+    }
+    note.textContent = status.progress || "Looking at what you listen to...";
+    if (holder.querySelector(".wrapped-home-rows")) return;
+  } else {
+    note?.remove();
+  }
+  const rows = document.createElement("div");
+  rows.className = "wrapped-home-rows";
+  const empty = !status.artists.length && !status.newFromFavorites.length && !status.newFromSuggested.length;
+  if (status.error && empty) rows.append(wrappedNote(status.error, "wrapped-note error"));
+  else if (empty && !status.building) {
+    rows.append(wrappedNote(wrappedSettings?.lastfmKey ? "Nothing to show yet: play some music and come back." : "Artists for you need a Last.fm key (Settings, tier 1); new albums come from your listening history."));
+  }
+  const albumItem = (a) => ({
+    albumId: a.albumId,
+    performerId: a.performerId,
+    artist: a.artist,
+    title: a.title,
+    sub: `${a.artist} · ${homeDate(a.released)}`,
+    imageKey: a.imageKey,
+    why: a.why,
+  });
+  const openHomeAlbum = (item) => openWrappedPage({ page: "album", albumId: item.albumId });
+  const ban = (artist) => async () => {
+    const choice = await wrappedConfirm({
+      title: `Add ${artist} to the ban list?`,
+      text: "Never suggested again: not here, not by Discover, Deep Dive or the radio. The ban list is on the Playlists page.",
+      actions: [
+        { value: "ban", label: "Add to ban list", kind: "danger" },
+        { value: null, label: "Cancel" },
+      ],
+    });
+    if (choice !== "ban") return;
+    try {
+      await invoke("wrapped_ban_add", { artist });
+      wrappedToast(`${artist} is on the ban list.`);
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  };
+  if (status.artists.length) {
+    rows.append(
+      homeRow(
+        "artists",
+        "Artists for you",
+        status.artists.map((a) => ({ performerId: a.performerId, title: a.name, artist: a.name, sub: a.seeds?.length ? `Like ${a.seeds.slice(0, 2).join(", ")}` : "", why: a.because, imageKey: a.imageKey, round: true })),
+        (item) => openWrappedPage({ page: "artist", performerId: item.performerId }),
+        ban,
+      ),
+    );
+  }
+  if (status.newFromFavorites.length) rows.append(homeRow("favorites", "New albums from artists you listen to", status.newFromFavorites.map(albumItem), openHomeAlbum, ban));
+  if (status.newFromSuggested.length) rows.append(homeRow("suggested", "New albums from artists you may like", status.newFromSuggested.map(albumItem), openHomeAlbum, ban));
+  const foot = document.createElement("div");
+  foot.className = "wrapped-home-foot";
+  if (status.builtAt) {
+    foot.append(wrappedNote(`Put together ${historyWhen(status.builtAt)}. Artists new to you that sound like your favorites over all time and your library (by tags, not the last few weeks like Discover), and albums from the last year.`, "wrapped-note small"));
+  }
+  if (!status.building) {
+    const again = document.createElement("button");
+    again.className = "wrapped-button small";
+    again.textContent = "Refresh";
+    again.addEventListener("click", () => wrappedHome(holder, ticket, true));
+    foot.append(again);
+  }
+  rows.append(foot);
+  holder.querySelector(".wrapped-home-rows")?.remove();
+  holder.append(rows);
+}
+
+// A Home row: one row of cards, as many as fit the width; its title opens
+// it to three rows, and "Keep looking" three more at a time. Each card's
+// X (on hover) bans the artist. `open` is remembered per row.
+const homeOpen = {};
+function homeRow(id, title, items, onOpen, ban) {
+  const box = document.createElement("section");
+  box.className = "wrapped-home-row";
+  const head = document.createElement("button");
+  head.className = "wrapped-home-head";
+  head.innerHTML = `<span>${title}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
+  head.title = "Show more";
+  const grid = document.createElement("div");
+  grid.className = "wrapped-cards";
+  const more = document.createElement("button");
+  more.className = "wrapped-button wrapped-home-more";
+  more.textContent = "Keep looking";
+  box.append(head, grid, more);
+  let rows = homeOpen[id] || 1;
+  let cols = 0;
+  const paint = () => {
+    const width = grid.clientWidth;
+    if (!width) return;
+    const fit = Math.max(1, Math.floor((width + 14) / (150 + 14)));
+    const shown = Math.min(items.length, fit * rows);
+    if (fit === cols && grid.childElementCount === shown) return;
+    cols = fit;
+    grid.replaceChildren(
+      ...items.slice(0, shown).map((item) => {
+        const wrap = document.createElement("div");
+        wrap.className = "wrapped-card-wrap";
+        wrap.append(wrappedCard(item, () => onOpen(item)));
+        if (item.artist) {
+          const x = document.createElement("button");
+          x.className = "discover-ask-x wrapped-card-ban";
+          x.innerHTML = CLOSE_ICON;
+          x.title = "Add to ban list";
+          x.setAttribute("aria-label", `Add ${item.artist} to the ban list`);
+          x.addEventListener("click", (event) => {
+            event.stopPropagation();
+            ban(item.artist)();
+          });
+          wrap.append(x);
+        }
+        return wrap;
+      }),
+    );
+    box.classList.toggle("open", rows > 1);
+    more.hidden = rows <= 1 || shown >= items.length;
+    head.title = rows > 1 ? "Show one row" : "Show more";
+  };
+  head.addEventListener("click", () => {
+    rows = rows > 1 ? 1 : 3;
+    homeOpen[id] = rows;
+    paint();
+  });
+  more.addEventListener("click", () => {
+    rows += 3;
+    homeOpen[id] = rows;
+    paint();
+  });
+  new ResizeObserver(paint).observe(grid);
+  requestAnimationFrame(paint);
+  return box;
+}
+
+// "2026-09-12" as "Sep 12, 2026" ("2026" alone when only the year is known)
+function homeDate(d) {
+  const [y, m, day] = (d || "").split("-").map(Number);
+  if (!y) return "";
+  if (!m) return String(y);
+  const name = new Date(Date.UTC(y, m - 1, day || 1)).toLocaleDateString(undefined, { month: "short", day: day ? "numeric" : undefined, year: "numeric", timeZone: "UTC" });
+  return name;
 }
 
 // Roon's play history, from Wrapped's own copy of it (wrapped.rs keeps it
@@ -4388,6 +5634,792 @@ function historyProgress(holder, p) {
   else if (!p.wanted) holder.replaceChildren(wrappedNote("Checking Roon for new plays..."));
   else holder.replaceChildren(wrappedNote(`Reading your history from Roon: ${n(p.loaded)} of ${n(p.wanted)} plays...`));
 }
+
+// ----- The library's artists and albums (the copy Settings reads) -----
+
+// A list that fills in as you scroll (a library holds thousands):
+// `make` turns an item into its element
+function wrappedLazyList(items, make, className, batch = 240) {
+  const holder = document.createElement("div");
+  const grid = document.createElement("div");
+  grid.className = className;
+  const more = document.createElement("div");
+  more.className = "wrapped-more-sentinel";
+  let shown = 0;
+  const fill = () => {
+    const next = items.slice(shown, shown + batch);
+    grid.append(...next.map(make));
+    shown += next.length;
+    if (shown >= items.length) more.remove();
+  };
+  fill();
+  holder.append(grid, more);
+  if (shown < items.length) {
+    const watcher = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) fill();
+        if (shown >= items.length) watcher.disconnect();
+      },
+      { root: wrappedBody, rootMargin: "600px" },
+    );
+    watcher.observe(more);
+  }
+  return holder;
+}
+
+function wrappedLazyGrid(items, onClick) {
+  return wrappedLazyList(items, (item) => wrappedCard(item, () => onClick(item)), "wrapped-cards");
+}
+
+// The library read from Roon on first use (Settings' "Read the library"),
+// with its progress; `done` runs once it is there
+function wrappedLibraryRead(ticket, done) {
+  const note = wrappedNote("Wrapped hasn't read your library yet.");
+  const read = document.createElement("button");
+  read.className = "wrapped-button";
+  read.textContent = "Read the library";
+  const progress = document.createElement("div");
+  read.addEventListener("click", async () => {
+    try {
+      await invoke("wrapped_library_sync");
+      read.disabled = true;
+      progress.replaceChildren(wrappedNote("Reading..."));
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  });
+  wrappedBody.append(note, read, progress);
+  listen("wrapped-library", (event) => {
+    if (ticket !== wrappedTicket) return;
+    const p = event.payload;
+    if (p.error) wrappedToast(p.error);
+    if (p.done) done();
+    else progress.replaceChildren(wrappedNote(`Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} ${p.what || "artists"}...`));
+  }).then((unlisten) => {
+    const stop = setInterval(() => {
+      if (ticket !== wrappedTicket) {
+        unlisten();
+        clearInterval(stop);
+      }
+    }, 2000);
+  });
+}
+
+// A filter box over a list, matching as you type
+function wrappedFilter(placeholder, onChange) {
+  const input = document.createElement("input");
+  input.className = "wrapped-search wrapped-filter";
+  input.type = "search";
+  input.placeholder = placeholder;
+  input.autocomplete = "off";
+  input.spellcheck = false;
+  let timer = null;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => onChange(input.value.trim().toLowerCase()), 150);
+  });
+  return input;
+}
+
+WRAPPED_PAGES.artists = async function (entry) {
+  wrappedHeading("Artists", "Every artist in your library");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  let artists;
+  try {
+    artists = await invoke("wrapped_library_artists");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  if (!artists.length) return wrappedLibraryRead(ticket, renderWrapped);
+  artists.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
+  wrappedHeading("Artists", `${artists.length.toLocaleString()} artists in your library`);
+  const holder = document.createElement("div");
+  const show = (filter) => {
+    const list = filter ? artists.filter((a) => a.name.toLowerCase().includes(filter)) : artists;
+    holder.replaceChildren(
+      wrappedLazyGrid(
+        list.map((a) => ({
+          title: a.name,
+          sub: a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "",
+          imageKey: a.imageKey,
+          round: true,
+          performerId: a.performerId,
+        })),
+        (a) => openWrappedPage({ page: "artist", performerId: a.performerId, name: a.title }),
+      ),
+    );
+    if (!list.length) holder.replaceChildren(wrappedNote("No artist by that name."));
+  };
+  entry.filter ||= "";
+  const filter = wrappedFilter("Filter artists", (text) => {
+    entry.filter = text;
+    show(text);
+  });
+  filter.value = entry.filter;
+  wrappedBody.append(filter, holder);
+  show(entry.filter);
+};
+
+WRAPPED_PAGES.albums = async function (entry) {
+  wrappedHeading("Albums", "Every album in your library");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  let albums;
+  try {
+    albums = await invoke("wrapped_library_albums");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  if (!albums.length) return wrappedLibraryRead(ticket, renderWrapped);
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const sorts = {
+    artist: (a, b) => byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0) || byName(a.title, b.title),
+    title: (a, b) => byName(a.title, b.title) || byName(a.artist, b.artist),
+    year: (a, b) => (b.year || 0) - (a.year || 0) || byName(a.artist, b.artist) || byName(a.title, b.title),
+  };
+  entry.sort ||= "artist";
+  entry.filter ||= "";
+  wrappedHeading("Albums", `${albums.length.toLocaleString()} albums in your library`);
+  const tabs = document.createElement("div");
+  tabs.className = "wrapped-tabs small";
+  const holder = document.createElement("div");
+  const show = () => {
+    for (const tab of tabs.querySelectorAll(".wrapped-tab")) tab.classList.toggle("selected", tab.dataset.sort === entry.sort);
+    const f = entry.filter;
+    const list = (f ? albums.filter((a) => a.title.toLowerCase().includes(f) || a.artist.toLowerCase().includes(f)) : albums.slice()).sort(sorts[entry.sort]);
+    holder.replaceChildren(
+      wrappedLazyGrid(
+        list.map((a) => ({
+          title: a.title,
+          sub: [a.artist, a.year].filter(Boolean).join(" \u00b7 "),
+          imageKey: a.imageKey,
+          albumId: a.albumId,
+        })),
+        (a) => openWrappedPage({ page: "album", albumId: a.albumId }),
+      ),
+    );
+    if (!list.length) holder.replaceChildren(wrappedNote("No album by that name."));
+  };
+  for (const [sort, label] of [
+    ["artist", "By artist"],
+    ["title", "By title"],
+    ["year", "By year"],
+  ]) {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.sort = sort;
+    tab.textContent = label;
+    tab.addEventListener("click", () => {
+      entry.sort = sort;
+      show();
+    });
+    tabs.append(tab);
+  }
+  const filter = wrappedFilter("Filter albums", (text) => {
+    entry.filter = text;
+    show();
+  });
+  filter.value = entry.filter;
+  const row = document.createElement("div");
+  row.className = "wrapped-tabs-row";
+  row.append(tabs, filter);
+  wrappedBody.append(row, holder);
+  show();
+};
+
+// A library track's handle for this session (the copy keeps ids), then
+// `then` with it; says so when Roon can't find the track
+async function withTrackHandle(track, then) {
+  if (track.handle == null && track.trackId == null) return wrappedToast("Roon gave no id for that track.");
+  try {
+    // (a list read this session carries its handle already)
+    const handle = track.handle ?? (await invoke("library_track_handle", { trackId: track.trackId }));
+    await then(handle);
+  } catch (err) {
+    wrappedToast(String(err));
+  }
+}
+
+// A song's row (the Tracks page, playlists, tags, Listen Later). `opts`:
+// `play` replaces what the play button does, `extra(row)` adds buttons at
+// the end, `menu` adds to the song's menu
+function libraryTrackRow(t, opts) {
+  opts = opts && typeof opts === "object" ? opts : {};
+  const row = document.createElement("div");
+  row.className = "wrapped-track wrapped-library-track";
+  row.append(
+    wrappedIconButton(WRAPPED_PLAY_ICON, opts.playTitle || "Play now", () => {
+      if (!zone) return wrappedToast("Pick a zone first.");
+      if (opts.play) return opts.play(t);
+      withTrackHandle(t, (handle) => send("library_play_track", { zoneId: zone.zoneId, handle }));
+    }, "wrapped-track-play"),
+  );
+  row.append(wrappedArt(t.imageKey, 80, t.album || t.title));
+  const title = document.createElement("span");
+  title.className = "wrapped-track-title link";
+  title.textContent = t.title;
+  title.addEventListener("click", (event) => {
+    event.stopPropagation();
+    withTrackHandle(t, (handle) =>
+      wrappedPlayMenu(title, {
+        what: "song",
+        handle,
+        seed: { kind: "song", handle, title: t.title, artist: (t.artist || "").split(/ \/ |, /)[0], album: t.album || "", imageKey: t.imageKey },
+        radio: { tracks: [handle] },
+      }),
+    );
+  });
+  const artist = document.createElement("span");
+  artist.className = `wrapped-track-by${t.performerId != null ? " link" : ""}`;
+  artist.textContent = t.artist;
+  if (t.performerId != null) artist.addEventListener("click", () => openWrappedPage({ page: "artist", performerId: t.performerId, name: t.artist }));
+  const album = document.createElement("span");
+  album.className = `wrapped-track-on${t.albumId != null ? " link" : ""}`;
+  album.textContent = t.album;
+  if (t.albumId != null) album.addEventListener("click", () => openWrappedPage({ page: "album", albumId: t.albumId }));
+  // The heart works on the copy's state and asks Roon for the handle on a
+  // click (the row then remembers Roon's answer)
+  const heart = wrappedHeart({ inLibrary: true, favorite: t.favorite }, async (favorite) => {
+    const handle = t.handle ?? (await invoke("library_track_handle", { trackId: t.trackId }));
+    const next = await invoke("library_track_heart", { handle, favorite });
+    t.favorite = next.favorite;
+    return { inLibrary: true, favorite: next.favorite };
+  });
+  const length = document.createElement("span");
+  length.className = "wrapped-track-length";
+  length.textContent = t.lengthSeconds ? formatTime(t.lengthSeconds) : "";
+  // Date added: Roon's, or the first Last.fm scrobble when that's earlier
+  // (marked); "Unknown" when neither says
+  const added = document.createElement("span");
+  added.className = "wrapped-track-added";
+  if (t.addedAt) {
+    added.textContent = new Date(t.addedAt).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    if (t.addedFrom === "lastfm") {
+      const tag = document.createElement("span");
+      tag.className = "wrapped-track-added-from";
+      tag.textContent = "Last.fm";
+      added.append(tag);
+      added.title = "First scrobbled on Last.fm (earlier than Roon's import date)";
+    } else added.title = "Added to Roon";
+  } else {
+    added.textContent = "Unknown";
+    added.classList.add("unknown");
+  }
+  const year = document.createElement("span");
+  year.className = "wrapped-track-year";
+  year.textContent = t.year || "";
+  row.append(title, artist, album, year, added, heart, length);
+  if (opts.extra) opts.extra(row);
+  wholeRowOpens(row, title);
+  return row;
+}
+
+// A click anywhere on a song's row (not on its buttons or links) does what
+// a click on its title does: the song's menu
+function wholeRowOpens(row, title) {
+  row.classList.add("clickable");
+  row.addEventListener("click", (event) => {
+    if (event.target.closest("button, a, input, .link")) return;
+    event.stopPropagation();
+    title.click();
+  });
+}
+
+// The Tracks page's sort, direction and hearts switch, kept between visits
+const TRACKS_VIEW_KEY = "wrapped-tracks-view";
+function loadTracksView() {
+  try {
+    return JSON.parse(localStorage.getItem(TRACKS_VIEW_KEY)) || {};
+  } catch {
+    return {};
+  }
+}
+function saveTracksView(entry) {
+  try {
+    localStorage.setItem(TRACKS_VIEW_KEY, JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts }));
+  } catch {}
+}
+
+WRAPPED_PAGES.tracks = async function (entry) {
+  wrappedHeading("Tracks", "Every track in your library");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  let tracks;
+  try {
+    tracks = await invoke("wrapped_library_tracks");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  if (!tracks.length) return wrappedLibraryRead(ticket, renderWrapped);
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  // Each ascending (A to Z, oldest first); a direction flips it. Tracks
+  // without a year or date stay at the end either way.
+  const last = (key) => (a, b) => (a[key] ? 0 : 1) - (b[key] ? 0 : 1);
+  const sorts = {
+    title: (a, b) => byName(a.title, b.title) || byName(a.artist, b.artist),
+    artist: (a, b) => byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0) || byName(a.album, b.album) || byName(a.title, b.title),
+    album: (a, b) => byName(a.album, b.album) || byName(a.artist, b.artist) || byName(a.title, b.title),
+    year: (a, b) => (a.year || 0) - (b.year || 0) || byName(a.artist, b.artist) || byName(a.album, b.album),
+    added: (a, b) => (a.addedAt || 0) - (b.addedAt || 0) || byName(a.artist, b.artist) || byName(a.album, b.album),
+    length: (a, b) => (a.lengthSeconds || 0) - (b.lengthSeconds || 0) || byName(a.title, b.title),
+  };
+  const missing = { year: last("year"), added: last("addedAt") };
+  // How each sort starts: names A to Z, years and dates newest first
+  const firstDir = { artist: "up", title: "up", album: "up", year: "down", added: "down", length: "down" };
+  const saved = loadTracksView();
+  entry.sort ||= sorts[saved.sort] ? saved.sort : "artist";
+  entry.dir ||= saved.dir === "up" || saved.dir === "down" ? saved.dir : firstDir[entry.sort];
+  entry.hearts ??= !!saved.hearts;
+  entry.filter ||= "";
+  const hearted = tracks.filter((t) => t.favorite).length;
+  const total = tracks.length.toLocaleString();
+  wrappedHeading("Tracks", hearted ? `${hearted.toLocaleString()} hearted tracks, of ${total} tracks in your library` : `${total} tracks in your library`);
+  // Column headers, like Roon's: a click sorts by the column, again
+  // reverses it (the arrow says which way)
+  const header = document.createElement("div");
+  header.className = "wrapped-track wrapped-library-track wrapped-track-header";
+  const spacer = (el) => {
+    el.classList.add("wrapped-header-spacer");
+    el.setAttribute("aria-hidden", "true");
+    el.tabIndex = -1;
+    return el;
+  };
+  header.append(spacer(wrappedIconButton(WRAPPED_PLAY_ICON, "", () => {}, "wrapped-track-play")), spacer(wrappedArt(null, 80, "")));
+  const columns = [
+    ["title", "Track", "wrapped-track-title"],
+    ["artist", "Artist", "wrapped-track-by"],
+    ["album", "Album", "wrapped-track-on"],
+    ["year", "Year", "wrapped-track-year"],
+    ["added", "Date added", "wrapped-track-added"],
+    [null, "", "heart"],
+    ["length", "Length", "wrapped-track-length"],
+  ];
+  for (const [sort, label, className] of columns) {
+    if (!sort) {
+      header.append(spacer(wrappedHeart({ inLibrary: true, favorite: false }, async () => ({}))));
+      continue;
+    }
+    const cell = document.createElement("button");
+    cell.className = `${className} wrapped-sort-head`;
+    cell.dataset.sort = sort;
+    const text = document.createElement("span");
+    text.textContent = label;
+    const dir = document.createElement("span");
+    dir.className = "wrapped-sort-dir";
+    cell.append(text, dir);
+    cell.addEventListener("click", () => {
+      if (entry.sort === sort) entry.dir = entry.dir === "up" ? "down" : "up";
+      else {
+        entry.sort = sort;
+        entry.dir = firstDir[sort];
+      }
+      saveTracksView(entry);
+      show();
+    });
+    header.append(cell);
+  }
+  const holder = document.createElement("div");
+  // Only the hearted ones (as the copy last saw them)
+  const hearts = document.createElement("button");
+  hearts.className = "wrapped-hearts-filter";
+  hearts.innerHTML = HEART_ICONS;
+  hearts.title = "Only hearted tracks";
+  const show = () => {
+    for (const cell of header.querySelectorAll(".wrapped-sort-head")) {
+      const on = cell.dataset.sort === entry.sort;
+      cell.classList.toggle("selected", on);
+      cell.querySelector(".wrapped-sort-dir").textContent = on ? (entry.dir === "up" ? "\u25B4" : "\u25BE") : "";
+      cell.title = on ? "Click again to reverse" : `Sort by ${cell.textContent.toLowerCase()}`;
+    }
+    hearts.classList.toggle("on", entry.hearts);
+    const f = entry.filter;
+    let list = entry.hearts ? tracks.filter((t) => t.favorite) : tracks.slice();
+    if (f) list = list.filter((t) => t.title.toLowerCase().includes(f) || t.artist.toLowerCase().includes(f) || t.album.toLowerCase().includes(f));
+    const by = sorts[entry.sort];
+    const flip = entry.dir === "down" ? -1 : 1;
+    const end = missing[entry.sort];
+    list.sort((a, b) => (end && end(a, b)) || flip * by(a, b));
+    holder.replaceChildren(wrappedLazyList(list, libraryTrackRow, "wrapped-tracks", 150));
+    if (!list.length) holder.replaceChildren(wrappedNote(entry.hearts ? "No hearted track matches." : "No track by that name."));
+  };
+  hearts.addEventListener("click", () => {
+    entry.hearts = !entry.hearts;
+    saveTracksView(entry);
+    show();
+  });
+  const filter = wrappedFilter("Filter tracks", (text) => {
+    entry.filter = text;
+    show();
+  });
+  filter.value = entry.filter;
+  const row = document.createElement("div");
+  row.className = "wrapped-tabs-row";
+  row.append(hearts, filter);
+  wrappedBody.append(row, header, holder);
+  show();
+};
+
+
+// ----- A playlist, Tags, Listen Later (Roon's own lists) -----
+
+// A song list's "Play" from its start
+function wrappedPlayAll(label, run) {
+  const btn = document.createElement("button");
+  btn.className = "wrapped-button small wrapped-play-all";
+  btn.innerHTML = `${WRAPPED_PLAY_ICON}<span>${label}</span>`;
+  btn.addEventListener("click", async () => {
+    if (!zone) return wrappedToast("Pick a zone first.");
+    btn.disabled = true;
+    try {
+      await run();
+    } catch (err) {
+      wrappedToast(String(err));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  return btn;
+}
+
+WRAPPED_PAGES.playlist = async function (entry) {
+  const name = (entry.name || "Playlist").startsWith(WRAPPED_PREFIX) ? entry.name.slice(WRAPPED_PREFIX.length) : entry.name || "Playlist";
+  wrappedHeading(name, "Playlist");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  wrappedBody.append(wrappedNote("Loading..."));
+  let songs;
+  let card = null;
+  try {
+    [songs, card] = await Promise.all([
+      invoke("library_playlist_tracks", { handle: entry.handle }),
+      invoke("library_playlists").then((all) => all.find((p) => p.handle === entry.handle) || null).catch(() => null),
+    ]);
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  const editable = card ? !card.readOnly : true;
+  const paint = () => {
+    const length = songs.reduce((sum, s) => sum + (s.lengthSeconds || 0), 0);
+    wrappedHeading(name, `${songs.length.toLocaleString()} song${songs.length === 1 ? "" : "s"}${length ? `, ${formatLongTime(length)}` : ""}`);
+    wrappedBody.replaceChildren();
+    const actions = document.createElement("div");
+    actions.className = "wrapped-actions";
+    actions.append(
+      wrappedPlayAll("Play", async () => {
+        await invoke("library_play_playlist_from", { zoneId: zone.zoneId, handle: entry.handle, item: null });
+        wrappedToast(`Playing ${name} on ${zone.name}`);
+      }),
+    );
+    wrappedBody.append(actions);
+    if (!songs.length) return wrappedBody.append(wrappedNote("This playlist is empty."));
+    // Play goes on through the playlist from the song; X takes it out
+    const remove = (song) =>
+      wrappedIconButton(CLOSE_ICON, "Remove from this playlist", async () => {
+        try {
+          songs = await invoke("library_playlist_remove", { handle: entry.handle, items: [song.itemHandle] });
+          wrappedToast(`Took "${song.title}" out of ${name}`);
+          if (ticket === wrappedTicket) paint();
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      }, "wrapped-row-remove");
+    wrappedBody.append(
+      wrappedLazyList(
+        songs,
+        (song) =>
+          libraryTrackRow(song, {
+            playTitle: "Play from here",
+            play: () =>
+              invoke("library_play_playlist_from", { zoneId: zone.zoneId, handle: entry.handle, item: song.itemHandle })
+                .then(() => wrappedToast(`Playing ${name} from "${song.title}"`))
+                .catch((err) => wrappedToast(String(err))),
+            extra: editable ? (row) => row.append(remove(song)) : null,
+          }),
+        "wrapped-tracks",
+        150,
+      ),
+    );
+  };
+  paint();
+};
+
+WRAPPED_PAGES.tags = async function () {
+  wrappedHeading("Tags", "Your Roon tags");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  wrappedBody.append(wrappedNote("Loading..."));
+  let tags;
+  try {
+    tags = await invoke("library_tags");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedBody.replaceChildren();
+  wrappedHeading("Tags", `${tags.length.toLocaleString()} tag${tags.length === 1 ? "" : "s"}`);
+  if (!tags.length) return wrappedBody.append(wrappedNote("You have no tags in Roon yet."));
+  wrappedBody.append(
+    wrappedGrid(
+      tags.map((t) => ({ title: t.name, sub: t.count != null ? `${t.count.toLocaleString()} item${t.count === 1 ? "" : "s"}` : "", imageKey: t.imageKey, handle: t.handle })),
+      (t) => openWrappedPage({ page: "tag", handle: t.handle, name: t.title }),
+    ),
+  );
+};
+
+// The albums, artists and songs of a list (a tag, Listen Later), each kind
+// its own section; `remove` (optional) puts an X on each
+function wrappedMixedSections(albums, artists, tracks, remove) {
+  const out = [];
+  const withX = (card, item, kind) => {
+    if (!remove) return card;
+    const wrap = document.createElement("div");
+    wrap.className = "wrapped-card-wrap";
+    wrap.append(card);
+    const x = document.createElement("button");
+    x.className = "discover-ask-x wrapped-card-ban";
+    x.innerHTML = CLOSE_ICON;
+    x.title = remove.title;
+    x.addEventListener("click", (event) => {
+      event.stopPropagation();
+      remove.run(kind, item, wrap);
+    });
+    wrap.append(x);
+    return wrap;
+  };
+  if (albums.length) {
+    out.push(wrappedSection(`Albums (${albums.length})`));
+    const grid = document.createElement("div");
+    grid.className = "wrapped-cards";
+    for (const a of albums) {
+      grid.append(withX(wrappedCard({ title: a.title, sub: [a.artist, a.year].filter(Boolean).join(" \u00b7 "), imageKey: a.imageKey }, () => openWrappedPage(a.albumId != null ? { page: "album", albumId: a.albumId } : { page: "album", handle: a.handle })), a, "album"));
+    }
+    out.push(grid);
+  }
+  if (artists.length) {
+    out.push(wrappedSection(`Artists (${artists.length})`));
+    const grid = document.createElement("div");
+    grid.className = "wrapped-cards";
+    for (const a of artists) {
+      grid.append(withX(wrappedCard({ title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: a.imageKey, round: true }, () => openWrappedPage({ page: "artist", handle: a.handle })), a, "artist"));
+    }
+    out.push(grid);
+  }
+  if (tracks.length) {
+    out.push(wrappedSection(`Songs (${tracks.length})`));
+    const list = document.createElement("div");
+    list.className = "wrapped-tracks";
+    for (const t of tracks) {
+      list.append(
+        libraryTrackRow(t, {
+          extra: remove
+            ? (row) =>
+                row.append(
+                  wrappedIconButton(CLOSE_ICON, remove.title, () => remove.run("track", t, row), "wrapped-row-remove"),
+                )
+            : null,
+        }),
+      );
+    }
+    out.push(list);
+  }
+  return out;
+}
+
+WRAPPED_PAGES.tag = async function (entry) {
+  wrappedHeading(entry.name || "Tag", "Tag");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  wrappedBody.append(wrappedNote("Loading..."));
+  let tag;
+  try {
+    tag = await invoke("library_tag_contents", { handle: entry.handle });
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedBody.replaceChildren();
+  if (tag.smart) return wrappedBody.append(wrappedNote("This is a smart tag (rules, not a list): Wrapped can't read those yet. Roon's Tags page shows it."));
+  const n = tag.albums.length + tag.artists.length + tag.tracks.length;
+  wrappedHeading(entry.name || tag.name, `${n.toLocaleString()} item${n === 1 ? "" : "s"}${tag.other ? `, and ${tag.other} of other kinds` : ""}`);
+  if (!n) return wrappedBody.append(wrappedNote(tag.other ? "This tag holds only things Wrapped doesn't show yet (works, playlists)." : "Nothing in this tag."));
+  wrappedBody.append(...wrappedMixedSections(tag.albums, tag.artists, tag.tracks, null));
+};
+
+WRAPPED_PAGES.listenlater = async function () {
+  wrappedHeading("Listen Later", "What you put aside in Roon");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  wrappedBody.append(wrappedNote("Loading..."));
+  let list;
+  try {
+    list = await invoke("library_listen_later");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedBody.replaceChildren();
+  wrappedHeading("Listen Later", `${list.length.toLocaleString()} waiting, newest first`);
+  if (!list.length) return wrappedBody.append(wrappedNote("Nothing in Listen Later. In Roon, an album's, artist's or song's menu has Listen Later."));
+  const albums = list.filter((e) => e.album).map((e) => e.album);
+  const artists = list.filter((e) => e.artist).map((e) => e.artist);
+  const tracks = list.filter((e) => e.track).map((e) => e.track);
+  wrappedBody.append(
+    ...wrappedMixedSections(albums, artists, tracks, {
+      title: "Remove from Listen Later",
+      run: async (kind, item, el) => {
+        try {
+          await invoke("library_listen_later_remove", { kind, handle: item.handle });
+          // (an emptied section goes, heading and all)
+          const parent = el.parentElement;
+          el.remove();
+          if (parent && !parent.children.length) {
+            if (parent.previousElementSibling?.classList.contains("wrapped-section")) parent.previousElementSibling.remove();
+            parent.remove();
+          }
+          wrappedToast(`Took "${item.title || item.name}" out of Listen Later`);
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      },
+    }),
+  );
+};
+
+// ----- Our genres: your library by the tags Wrapped keeps (tags.rs) -----
+
+const GENRE_KINDS = [
+  ["genre", "Genres"],
+  ["style", "Styles"],
+  ["scene", "Scenes"],
+];
+
+WRAPPED_PAGES.genres = async function (entry) {
+  wrappedHeading("Genres", "Your library by Wrapped's own tags, not Roon's");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  let rows;
+  try {
+    rows = await invoke("wrapped_genres");
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  if (!rows.length) {
+    wrappedBody.append(wrappedNote("Nothing tagged yet: Wrapped builds its genres from the tags it fetches for your artists. Read the library and start the tagging in Settings."));
+    const open = document.createElement("button");
+    open.className = "wrapped-button";
+    open.textContent = "Open Settings";
+    open.addEventListener("click", () => openWrappedPage({ page: "settings" }));
+    wrappedBody.append(open);
+    return;
+  }
+  entry.kind ||= "genre";
+  entry.filter ||= "";
+  const tabs = document.createElement("div");
+  tabs.className = "wrapped-tabs small";
+  const holder = document.createElement("div");
+  const show = () => {
+    for (const tab of tabs.querySelectorAll(".wrapped-tab")) tab.classList.toggle("selected", tab.dataset.kind === entry.kind);
+    const f = entry.filter;
+    const list = rows.filter((r) => r.kind === entry.kind && (!f || r.name.includes(f)));
+    const kind = GENRE_KINDS.find(([k]) => k === entry.kind)[1].toLowerCase();
+    wrappedHeading("Genres", `${list.length.toLocaleString()} ${f ? "matching " : ""}${kind} across your library, by Wrapped's own tags`);
+    holder.replaceChildren(
+      wrappedLazyGrid(
+        list.map((r) => ({ title: r.name, sub: `${r.artists} artist${r.artists === 1 ? "" : "s"}`, imageKey: r.imageKey, why: r.examples.join(", "), name: r.name })),
+        (r) => openWrappedPage({ page: "ourgenre", name: r.name }),
+      ),
+    );
+    if (!list.length) holder.replaceChildren(wrappedNote("Nothing by that name."));
+  };
+  for (const [kind, label] of GENRE_KINDS) {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.kind = kind;
+    tab.textContent = label;
+    tab.addEventListener("click", () => {
+      entry.kind = kind;
+      show();
+    });
+    tabs.append(tab);
+  }
+  const filter = wrappedFilter("Filter", (text) => {
+    entry.filter = text;
+    show();
+  });
+  filter.value = entry.filter;
+  const row = document.createElement("div");
+  row.className = "wrapped-tabs-row";
+  row.append(tabs, filter);
+  wrappedBody.append(row, holder);
+  show();
+};
+
+// One of our genres: the library's artists that carry the tag
+WRAPPED_PAGES.ourgenre = async function (entry) {
+  wrappedHeading(entry.name, "Artists in your library with this tag");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  let artists;
+  try {
+    artists = await invoke("wrapped_genre_artists", { name: entry.name });
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
+  wrappedHeading(entry.name, `${artists.length.toLocaleString()} artist${artists.length === 1 ? "" : "s"} in your library with this tag, the strongest first`);
+  if (!artists.length) return wrappedBody.append(wrappedNote("Nobody in your library carries this tag."));
+  const actions = document.createElement("div");
+  actions.className = "wrapped-actions";
+  const radio = document.createElement("button");
+  radio.className = "wrapped-button small";
+  radio.textContent = "Shuffle";
+  radio.title = "Roon shuffles the songs of this tag's strongest artists (up to 12)";
+  radio.addEventListener("click", async () => {
+    try {
+      const ids = artists.slice(0, 12).filter((a) => a.performerId != null);
+      const handles = [];
+      for (const a of ids) {
+        const card = await invoke("library_artist_by_id", { performerId: a.performerId });
+        handles.push(card.handle);
+      }
+      if (!handles.length) return wrappedToast("Roon gave no ids for these artists.");
+      // (several artists need limitToSeed: the Core then queues their own
+      // songs, shuffled; without it Roon's radio takes one artist only)
+      await startRoonRadio("genre", { artists: handles, limitToSeed: true, libraryOnly: true }, radio);
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  });
+  actions.append(radio);
+  wrappedBody.append(actions);
+  wrappedBody.append(
+    wrappedLazyGrid(
+      artists.map((a) => ({
+        title: a.name,
+        sub: a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "",
+        imageKey: a.imageKey,
+        round: true,
+        performerId: a.performerId,
+      })),
+      (a) => openWrappedPage({ page: "artist", performerId: a.performerId, name: a.title }),
+    ),
+  );
+};
 
 WRAPPED_PAGES.history = async function (entry) {
   wrappedHeading("History", "What Roon has logged for your profile");
@@ -4416,7 +6448,8 @@ WRAPPED_PAGES.history = async function (entry) {
   const heading = () => {
     const n = historyStatus.plays.toLocaleString();
     const when = historyStatus.syncedAt ? `, read ${historyWhen(historyStatus.syncedAt)}` : "";
-    wrappedHeading("History", historyStatus.plays ? `${n} plays${historyStatus.complete ? "" : " so far"}${when}` : "Not read from Roon yet");
+    const scrobbles = historyStatus.scrobbles ? ` and ${historyStatus.scrobbles.toLocaleString()} Last.fm scrobbles from before Roon` : "";
+    wrappedHeading("History", historyStatus.plays ? `${n} Roon plays${historyStatus.complete ? "" : " so far"}${scrobbles}${when}` : "Not read from Roon yet");
   };
   const show = async () => {
     for (const tab of tabs.querySelectorAll(".wrapped-tab[data-view]")) tab.classList.toggle("selected", tab.dataset.view === entry.view);
@@ -4469,11 +6502,13 @@ WRAPPED_PAGES.history = async function (entry) {
     historyProgress(progress, { loaded: 0, wanted: historyStatus.complete ? 0 : historyStatus.total || 0, done: false });
   };
   const reload = document.createElement("button");
-  reload.className = "wrapped-tab reload";
+  reload.className = "wrapped-button small reload";
   reload.textContent = historyStatus.plays ? "Check for new plays" : "Read from Roon";
   reload.addEventListener("click", () => sync(false));
-  tabs.append(reload);
-  wrappedBody.append(tabs, progress, holder);
+  const tabsRow = document.createElement("div");
+  tabsRow.className = "wrapped-tabs-row";
+  tabsRow.append(tabs, reload);
+  wrappedBody.append(tabsRow, progress, holder);
   // Progress of a sync (started here or elsewhere), while this page shows
   const unlisten = await listen("wrapped-history", (event) => {
     if (ticket !== wrappedTicket) return unlisten();
@@ -4617,7 +6652,7 @@ const SIMILAR_SCOPES = [
 ];
 
 WRAPPED_PAGES.settings = async function () {
-  wrappedHeading("Settings", "Wrapped's own settings; Toasted's are in the app's Settings window");
+  wrappedHeading("Settings", "Wrapped's own settings");
   const ticket = ++wrappedTicket;
   let tagCount = 0;
   try {
@@ -4625,13 +6660,33 @@ WRAPPED_PAGES.settings = async function () {
       invoke("wrapped_settings_get"),
       invoke("wrapped_history_status").catch(() => null),
       invoke("wrapped_tags_count").catch(() => 0),
+      fetchSoundState(),
     ]);
   } catch (err) {
     if (ticket === wrappedTicket) wrappedFailed(err);
     return;
   }
   if (ticket !== wrappedTicket) return;
+  // Ollama chosen for tier 2: the page draws with what's known and asks
+  // where the setup stands on the side, drawing again if that changed
+  if (wrappedSettings?.discovery !== false && wrappedSettings?.llmProvider === "ollama") {
+    if (!ollamaFetching && (!ollamaState || Date.now() - ollamaStateAt > 3000)) {
+      fetchOllamaState().then((changed) => {
+        if (changed) redrawSettingsInPlace();
+      });
+    }
+  }
   wrappedBody.replaceChildren();
+  // Two columns: general on the left; Wrapped Discovery, the keys and the
+  // picking tiers on the right
+  const columns = document.createElement("div");
+  columns.className = "wrapped-settings-columns";
+  const left = document.createElement("div");
+  left.className = "wrapped-settings-column";
+  const right = document.createElement("div");
+  right.className = "wrapped-settings-column";
+  columns.append(left, right);
+  wrappedBody.append(columns);
   const save = async (changes) => {
     try {
       wrappedSettings = await invoke("wrapped_settings_update", { changes });
@@ -4640,7 +6695,7 @@ WRAPPED_PAGES.settings = async function () {
       wrappedToast(String(err));
     }
   };
-  const field = (label, text) => {
+  const field = (label, text, where = left) => {
     const block = document.createElement("div");
     block.className = "wrapped-setting";
     const h = document.createElement("div");
@@ -4651,7 +6706,7 @@ WRAPPED_PAGES.settings = async function () {
     if (typeof text === "string") p.textContent = text;
     else p.append(...text);
     block.append(h, p);
-    wrappedBody.append(block);
+    where.append(block);
     return block;
   };
   // A link that opens in the browser, not in this window
@@ -4667,18 +6722,45 @@ WRAPPED_PAGES.settings = async function () {
     return a;
   };
 
-  const key = field("Last.fm API key", [
+  // Wrapped Discovery on or off: the weekly lists, the thumbs and the
+  // zone watching behind them (the menu, pages and radio stay either way)
+  const discovery = field(
+    "Wrapped Discovery",
+    "Discover Weekly and Library Rediscover, rating their songs, and \"Suggested because\" in the player. Off, none of it shows or runs; your ratings and the lists in Roon are kept.",
+    right,
+  );
+  const onOff = document.createElement("div");
+  onOff.className = "wrapped-tabs small";
+  const discoveryOn = wrappedSettings.discovery !== false;
+  for (const [value, label] of [
+    [false, "Off"],
+    [true, "On"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${discoveryOn === value ? " selected" : ""}`;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      if (discoveryOn === value) return;
+      await save({ discovery: value });
+      loadDiscoverRatings();
+      redrawSettingsInPlace();
+    });
+    onOff.append(pill);
+  }
+  discovery.append(onOff);
+
+  // The Last.fm key: inside Tier 1 while Wrapped Discovery is on (it's what
+  // switches tier 1 on), on its own otherwise (Similar and the radio use it
+  // too)
+  const keyWords = () => [
     'Tags like "melodic death metal" and "viking metal" come from Last.fm\'s listeners; Roon\'s own genres stop at "Death Metal". A key is free: ',
     link("https://www.last.fm/api/account/create", "create one here"),
     " (any name and description will do, ignore the rest; ",
     link("https://www.last.fm/api/accounts", "your existing keys"),
     "). Without one, only MusicBrainz is asked.",
-  ]);
-  // No key yet: the same slow glow as Toasted's Core card without a Core
-  const attention = () => key.classList.toggle("attention", !wrappedSettings.lastfmKey);
-  attention();
-  const row = document.createElement("div");
-  row.className = "wrapped-setting-row";
+  ];
+  const lastfmRow = document.createElement("div");
+  lastfmRow.className = "wrapped-setting-row";
   const input = document.createElement("input");
   input.className = "wrapped-search";
   input.type = "password";
@@ -4697,81 +6779,526 @@ WRAPPED_PAGES.settings = async function () {
   saveKey.textContent = "Save";
   saveKey.addEventListener("click", async () => {
     await save({ lastfmKey: input.value.trim() });
-    attention();
+    // (the tiers' badges and cards follow the key)
+    redrawSettingsInPlace();
   });
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter") saveKey.click();
   });
-  row.append(input, show, saveKey);
-  key.append(row);
-
-  // Wrapped Discovery on or off: the weekly lists, the thumbs and the
-  // zone watching behind them (the menu, pages and radio stay either way)
-  const discovery = field(
-    "Wrapped Discovery",
-    "Discover Weekly and Library Rediscover, rating their songs, and \"Suggested because\" in the player. Off, none of it shows or runs; your ratings and the lists in Roon are kept.",
-  );
-  const onOff = document.createElement("div");
-  onOff.className = "wrapped-tabs small";
-  const discoveryOn = wrappedSettings.discovery !== false;
-  for (const [value, label] of [
-    [false, "Off"],
-    [true, "On"],
-  ]) {
-    const pill = document.createElement("button");
-    pill.className = `wrapped-tab${discoveryOn === value ? " selected" : ""}`;
-    pill.textContent = label;
-    pill.addEventListener("click", async () => {
-      if (discoveryOn === value) return;
-      await save({ discovery: value });
-      loadDiscoverRatings();
-      renderWrapped();
-    });
-    onOff.append(pill);
+  lastfmRow.append(input, show, saveKey);
+  if (!discoveryOn) {
+    const key = field("Last.fm API key", keyWords(), right);
+    // No key yet: the same slow glow as Toasted's Core card without a Core
+    key.classList.toggle("attention", !wrappedSettings.lastfmKey);
+    key.append(lastfmRow);
   }
-  discovery.append(onOff);
+
+  // A tier's setup, folding open and shut under a button: open while the
+  // tier isn't working yet, folded once it is; kept as it was while the
+  // page redraws
+  // (`ready` null: not known yet, shut for now and decided when it is)
+  const setupFold = (name, ready, ...content) => {
+    if (settingsFolds[name] === undefined && ready !== null) settingsFolds[name] = !ready;
+    const toggle = document.createElement("button");
+    toggle.className = "wrapped-button small llm-setup-toggle";
+    const fold = document.createElement("div");
+    fold.className = `llm-fold${settingsFolds[name] ? " open" : ""}`;
+    const inner = document.createElement("div");
+    inner.className = "llm-fold-inner";
+    inner.append(...content);
+    fold.append(inner);
+    const label = () => {
+      toggle.textContent = settingsFolds[name] ? "Hide setup" : ready ? "Change setup" : "Set up";
+      toggle.setAttribute("aria-expanded", settingsFolds[name] ? "true" : "false");
+    };
+    label();
+    toggle.addEventListener("click", () => {
+      settingsFolds[name] = !settingsFolds[name];
+      fold.classList.toggle("open", settingsFolds[name]);
+      label();
+    });
+    return [toggle, fold];
+  };
 
   // How the Discover lists pick: three tiers, each adding to the one below
   if (discoveryOn) {
     const tiers = field(
       "How Discover picks",
       "Each level adds to the one below it, and your thumbs on the lists' songs count at every level.",
+      right,
     );
     const tierCards = document.createElement("div");
     tierCards.className = "picking-tiers";
+    // Each tier is a section; the ones switched on, from tier 1 down, share
+    // one card (a line between them), the rest stand on their own
+    const sections = [];
     const tier = (level, title, text, state, stateClass) => {
       const card = document.createElement("div");
-      card.className = `picking-tier ${stateClass}`;
+      card.className = `picking-tier-section ${stateClass}`;
+      sections.push({ el: card, on: stateClass === "on" });
       const head = document.createElement("div");
       head.className = "picking-tier-head";
       const name = document.createElement("span");
       name.className = "picking-tier-name";
-      name.textContent = `${level}. ${title}`;
+      name.textContent = `Tier ${level}: ${title}`;
       const badge = document.createElement("span");
       badge.className = "picking-tier-state";
       badge.textContent = state;
       head.append(name, badge);
       card.append(head, wrappedNote(text, "wrapped-note small"));
-      tierCards.append(card);
       return card;
     };
     const hasKey = !!wrappedSettings.lastfmKey;
-    tier(
+    const tagsCard = tier(
       1,
       "Tags",
-      "Artists your favorites' listeners also play, kept to the ones whose Last.fm genre tags sound like the artist they came from. Needs the Last.fm key above.",
-      hasKey ? "On" : "Needs a key",
+      "Artists your favorites' listeners also play, kept to the ones whose Last.fm genre tags sound like the artist they came from. Needs a Last.fm key (free).",
+      hasKey ? "Activated" : "Needs a key",
       hasKey ? "on" : "setup",
     );
+    const lastfmBox = document.createElement("div");
+    lastfmBox.className = "llm-setup";
+    const lastfmSection = document.createElement("div");
+    lastfmSection.className = "llm-section";
+    const lastfmTitle = document.createElement("div");
+    lastfmTitle.className = "llm-section-title";
+    lastfmTitle.textContent = "Last.fm API key";
+    const lastfmNote = document.createElement("p");
+    lastfmNote.className = "wrapped-note small";
+    lastfmNote.append(...keyWords());
+    lastfmSection.append(lastfmTitle, lastfmNote, lastfmRow);
+    lastfmBox.append(lastfmSection);
+    // Your Last.fm account: its scrobbles reach back before Roon's history
+    const userSection = document.createElement("div");
+    userSection.className = "llm-section";
+    const userTitle = document.createElement("div");
+    userTitle.className = "llm-section-title";
+    userTitle.textContent = "Last.fm username (optional)";
+    const userNote = wrappedNote(
+      "Roon's history only goes back as far as this Core's library. If you scrobble to Last.fm, your account's full history counts toward your favorites on Home (the scrobbles from before Roon's history starts). It's read once, then new ones daily.",
+      "wrapped-note small",
+    );
+    const userRow = document.createElement("div");
+    userRow.className = "wrapped-setting-row";
+    const userInput = document.createElement("input");
+    userInput.className = "wrapped-search";
+    userInput.placeholder = "Your Last.fm username";
+    userInput.value = wrappedSettings.lastfmUser || "";
+    userInput.autocomplete = "off";
+    const saveUser = document.createElement("button");
+    saveUser.className = "wrapped-button";
+    saveUser.textContent = "Save";
+    const userState = wrappedNote("", "wrapped-note small");
+    const paintScrobbles = (st) => {
+      if (!st || !st.user) return (userState.textContent = "");
+      const n = st.plays.toLocaleString();
+      const from = st.oldest ? ` back to ${new Date(st.oldest).toLocaleDateString()}` : "";
+      userState.textContent = st.error
+        ? st.error
+        : st.syncing
+          ? `Reading ${st.user}'s scrobbles... ${n} so far${from}`
+          : st.plays
+            ? `${n} scrobbles of ${st.user}${from}${st.complete ? "" : " (not all read yet: it goes on by itself, or Save reads now)"}`
+            : `Nothing read from ${st.user} yet.`;
+    };
+    saveUser.addEventListener("click", async () => {
+      await save({ lastfmUser: userInput.value.trim() });
+      if (userInput.value.trim()) paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: false }).catch(() => null));
+      else userState.textContent = "";
+    });
+    userInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") saveUser.click();
+    });
+    // (a read that stopped, or one to do over)
+    const again = document.createElement("button");
+    again.className = "wrapped-button";
+    again.textContent = "Rescan";
+    again.title = "Read the whole history from Last.fm again";
+    again.addEventListener("click", async () => {
+      if (!userInput.value.trim()) return;
+      paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: true }).catch(() => null));
+    });
+    userRow.append(userInput, saveUser, again);
+    userSection.append(userTitle, userNote, userRow, userState);
+    lastfmBox.append(userSection);
+    invoke("wrapped_scrobbles_status").then(paintScrobbles).catch(() => {});
+    scrobblesPaint = paintScrobbles;
+    // Scan all: the history's new plays, the library's artists, then the
+    // tags for them (the left column has each on its own)
+    const [lastfmToggle, lastfmFold] = setupFold("lastfm", hasKey, lastfmBox);
+    const scanRow = document.createElement("div");
+    scanRow.className = "wrapped-setting-row tier-actions";
+    const scan = document.createElement("button");
+    scan.className = "wrapped-button small";
+    scan.textContent = "Scan all";
+    scan.title = "Read your new plays from Roon, read your library's artists again, then tag them (the tagging carries on in the background)";
+    const scanText = document.createElement("span");
+    scanText.className = "llm-test-out";
+    const describe = async () => {
+      const [h, l, t] = await Promise.all([
+        invoke("wrapped_history_status").catch(() => null),
+        invoke("wrapped_library_status").catch(() => null),
+        invoke("wrapped_tags_status").catch(() => null),
+      ]);
+      const n = (x) => (x ?? 0).toLocaleString();
+      return [h ? `${n(h.plays)} plays` : null, l ? `${n(l.artists)} library artists` : null, t ? `${n(t.tagged)} of ${n(t.artists)} tagged${t.filling ? " (tagging...)" : ""}` : null]
+        .filter(Boolean)
+        .join(" · ");
+    };
+    describe().then((text) => {
+      if (!scan.disabled) scanText.textContent = text;
+    });
+    scan.addEventListener("click", async () => {
+      scan.disabled = true;
+      try {
+        scanText.textContent = "Reading your new plays from Roon...";
+        await wrappedScanStep("wrapped-history", () => invoke("wrapped_history_sync", { full: false }), (p) => {
+          if (p.error) throw new Error(p.error);
+          if (!p.done) scanText.textContent = `Reading your new plays from Roon... ${(p.loaded ?? 0).toLocaleString()}`;
+          return p.done;
+        });
+        scanText.textContent = "Reading your library's artists...";
+        await wrappedScanStep("wrapped-library", () => invoke("wrapped_library_sync"), (p) => {
+          if (p.error) throw new Error(p.error);
+          if (!p.done) scanText.textContent = `Reading your library's artists... ${(p.read ?? 0).toLocaleString()} of ${(p.total ?? 0).toLocaleString()}`;
+          return p.done;
+        });
+        await invoke("wrapped_tags_fill", { stop: false });
+        scanText.textContent = await describe();
+        wrappedToast("Scanned. Tagging carries on in the background (Wrapped's Settings shows how far it got).");
+      } catch (err) {
+        scanText.textContent = String(err?.message || err);
+      }
+      scan.disabled = false;
+    });
+    scanRow.append(lastfmToggle, scan, scanText);
+    tagsCard.append(scanRow, lastfmFold);
+    // Ollama on this PC, in three steps (install, a model, a test), each
+    // ticked off once it's done; ollama.rs does the work and reports back
+    const ollamaSteps = () => {
+      const st = ollamaState || {};
+      const busy = ollamaRunning();
+      const box = document.createElement("div");
+      box.className = "ollama-steps";
+      const step = (n, title, done, now, state) => {
+        const el = document.createElement("div");
+        el.className = `ollama-step ${done ? "done" : now ? "now" : "later"}`;
+        const head = document.createElement("div");
+        head.className = "ollama-step-head";
+        const mark = document.createElement("span");
+        mark.className = "ollama-step-mark";
+        mark.textContent = done ? "\u2713" : String(n);
+        const name = document.createElement("span");
+        name.className = "ollama-step-title";
+        name.textContent = title;
+        head.append(mark, name);
+        if (state) {
+          const s = document.createElement("span");
+          s.className = "ollama-step-state";
+          s.textContent = state;
+          head.append(s);
+        }
+        const body = document.createElement("div");
+        body.className = "ollama-step-body";
+        el.append(head, body);
+        box.append(el);
+        return body;
+      };
+      const button = (label, onClick, go = false) => {
+        const b = document.createElement("button");
+        b.className = `wrapped-button small${go ? " ollama-go" : ""}`;
+        b.textContent = label;
+        b.disabled = busy;
+        b.addEventListener("click", onClick);
+        return b;
+      };
+      const row = (...items) => {
+        const r = document.createElement("div");
+        r.className = "wrapped-setting-row ollama-row";
+        r.append(...items);
+        return r;
+      };
+      const note = (text) => wrappedNote(text, "wrapped-note small");
+      // The running job's bar, with Stop while it downloads
+      const progress = (job) => {
+        const view = document.createElement("div");
+        view.className = "ollama-progress";
+        const track = document.createElement("div");
+        track.className = "ollama-bar";
+        const fill = document.createElement("div");
+        fill.className = "ollama-bar-fill";
+        track.append(fill);
+        const label = document.createElement("span");
+        label.className = "ollama-progress-label";
+        const stop = document.createElement("button");
+        stop.className = "wrapped-button small";
+        stop.textContent = "Stop";
+        stop.addEventListener("click", () => invoke("ollama_cancel"));
+        view.append(track, row(label, stop));
+        ollamaProgressViews[job] = { box: view, fill, label, stop };
+        return view;
+      };
+      // How the step's last job ended, when it didn't work out
+      const ended = (job) => {
+        if (!ollamaJob || ollamaJob.job !== job || !["error", "stopped"].includes(ollamaJob.stage)) return null;
+        return wrappedNote(ollamaJob.label, `wrapped-note small${ollamaJob.stage === "error" ? " ollama-error" : ""}`);
+      };
+
+      // 1. Ollama installed (Wrapped starts it when needed), or answering
+      const up = !!st.running;
+      // (Wrapped runs Ollama unless "Leave Ollama to me" is ticked)
+      const auto = !wrappedSettings.ollamaManual && st.local !== false;
+      const there = up || (auto && !!st.installed);
+      // (not known yet: the first answer, or Windows' details, on the way)
+      const unsure = !ollamaState || (!up && st.checking && !st.installed);
+      const one = step(
+        1,
+        "Install Ollama",
+        there,
+        !there,
+        up
+          ? `Ollama ${st.version || ""} is running${st.local === false ? ` at ${st.url}` : ""}`
+          : unsure
+            ? "Checking..."
+            : there
+              ? "Installed. Wrapped starts it when needed"
+              : st.installed
+                ? "Installed, not running"
+                : "",
+      );
+      if (!there && !unsure) {
+        if (st.local === false) {
+          one.append(note(`Nothing answers at ${st.url}. Check that Ollama is running on that computer and lets other computers in (OLLAMA_HOST set to 0.0.0.0 there).`));
+        } else if (st.installed) {
+          one.append(note("Ollama is on this PC but isn't running."));
+          const start = button(
+            "Start Ollama",
+            async () => {
+              start.disabled = true;
+              start.textContent = "Starting...";
+              try {
+                await invoke("ollama_start");
+                ollamaJob = null;
+              } catch (err) {
+                ollamaJob = { job: "install", stage: "error", label: String(err) };
+              }
+              refreshOllama();
+            },
+            true,
+          );
+          one.append(row(start));
+        } else {
+          one.append(note("Ollama runs the model on this PC: nothing leaves it, and there's no key or account. Pick the drive for Ollama and its models (each model is 5 to 20 GB):"));
+          const drives = st.drives || [];
+          if (!drives.some((d) => d.letter === ollamaDrive)) {
+            ollamaDrive = drives.reduce((best, d) => (!best || d.freeGb > best.freeGb ? d : best), null)?.letter || null;
+          }
+          if (drives.length) {
+            const pills = document.createElement("div");
+            pills.className = "wrapped-tabs small ollama-pills";
+            for (const d of drives) {
+              const pill = document.createElement("button");
+              pill.className = `wrapped-tab${d.letter === ollamaDrive ? " selected" : ""}`;
+              pill.textContent = `${d.letter} ${ollamaGb(d.freeGb)} free`;
+              if (d.label) pill.title = d.label;
+              pill.disabled = busy;
+              pill.addEventListener("click", () => {
+                ollamaDrive = d.letter;
+                redrawSettingsInPlace();
+              });
+              pills.append(pill);
+            }
+            one.append(pills);
+          }
+          if (ollamaDrive) {
+            one.append(
+              note(
+                st.modelsDir
+                  ? `Ollama goes in ${ollamaDrive}\\Ollama\\app. Models go where you've set them already (${st.modelsDir}).`
+                  : `Ollama goes in ${ollamaDrive}\\Ollama\\app, its models in ${ollamaDrive}\\Ollama\\models.`,
+              ),
+            );
+          }
+          const install = button(
+            "Download and install",
+            () => {
+              ollamaJob = { job: "install", stage: "download", label: "Downloading Ollama", done: 0, total: 0 };
+              redrawSettingsInPlace();
+              invoke("ollama_install", { drive: ollamaDrive }).catch(ollamaNotStarted);
+            },
+            true,
+          );
+          install.disabled = busy || !ollamaDrive;
+          one.append(row(install));
+          one.append(
+            note(
+              auto
+                ? "Ollama's installer shows a small window of its own while it works. Then Wrapped closes Ollama again and starts it whenever it's needed, so there's nothing else to do."
+                : "Ollama's installer shows a small window of its own while it works. When it's done, Ollama opens its own window asking you to create an account: none is needed, so choose \"No thanks, I'll use Ollama locally\" and close that window.",
+            ),
+          );
+        }
+      }
+      if (!there && busy && ollamaJob.job === "install") one.append(progress("install"));
+      const oneEnded = ended("install");
+      if (oneEnded && !there) one.append(oneEnded);
+
+      // 2. A model Ollama has, tier 2's choice (read from Ollama's folder
+      // while it's closed)
+      const ready = there && !!st.modelReady;
+      const two = step(2, "Get a model", ready, there && !ready, ready ? st.model : "");
+      if (there) {
+        const have = st.models || [];
+        if (have.length) {
+          const menu = document.createElement("select");
+          menu.className = "ollama-select";
+          if (!ready) menu.append(new Option("Choose one...", ""));
+          for (const m of have) {
+            const same = m.name === st.model || m.name === `${st.model}:latest`;
+            menu.append(new Option(`${m.name} (${ollamaGb(m.gb)})`, m.name, false, same));
+          }
+          menu.disabled = busy;
+          menu.addEventListener("change", async () => {
+            if (!menu.value) return;
+            await save({ llmModel: menu.value });
+            ollamaTest = null;
+            refreshOllama();
+          });
+          two.append(row(labeled(ready ? "Using" : "Or use one Ollama has", menu)));
+        }
+        if ((!ready || ollamaMore) && st.checking) {
+          two.append(note("Checking your graphics card..."));
+        } else if (!ready || ollamaMore) {
+          const sizes = st.sizes || [];
+          if (!sizes.some((z) => z.name === ollamaPick)) ollamaPick = st.suggested || sizes[0]?.name;
+          const gpu = st.gpu;
+          two.append(
+            note(
+              st.local === false
+                ? "Ollama is on another computer: pick a size that fits its graphics card's memory."
+                : gpu && gpu.gb >= 7
+                  ? `Your ${gpu.name} has ${ollamaGb(gpu.gb)} of memory, so ${st.suggested} is the one to get.`
+                  : "No graphics card with enough memory was found, so the model will run on the processor and a build can take a long while. The smallest is suggested.",
+            ),
+          );
+          const pills = document.createElement("div");
+          pills.className = "wrapped-tabs small ollama-pills";
+          for (const z of sizes) {
+            const pill = document.createElement("button");
+            pill.className = `wrapped-tab${z.name === ollamaPick ? " selected" : ""}`;
+            pill.textContent = `${z.name} \u00b7 ${ollamaGb(z.downloadGb)}${z.name === st.suggested ? " (suggested)" : ""}`;
+            if (st.local !== false) pill.title = z.fits ? "Fits your graphics card" : "More than your graphics card holds: it would run slowly";
+            pill.disabled = busy;
+            pill.addEventListener("click", () => {
+              ollamaPick = z.name;
+              redrawSettingsInPlace();
+            });
+            pills.append(pill);
+          }
+          two.append(pills);
+          const get = button(
+            `Download ${ollamaPick}`,
+            () => {
+              ollamaJob = { job: "pull", stage: "pull", label: `Downloading ${ollamaPick}`, done: 0, total: 0 };
+              ollamaTest = null;
+              ollamaMore = false;
+              redrawSettingsInPlace();
+              invoke("ollama_pull", { model: ollamaPick }).catch(ollamaNotStarted);
+            },
+            true,
+          );
+          get.disabled = busy || !ollamaPick;
+          two.append(row(get));
+        } else {
+          const more = button("Download another size", () => {
+            ollamaMore = true;
+            redrawSettingsInPlace();
+          });
+          two.append(row(more));
+        }
+        if (busy && ollamaJob.job === "pull") two.append(progress("pull"));
+        const twoEnded = ended("pull");
+        if (twoEnded) two.append(twoEnded);
+      }
+
+      // 3. A test: the model answers
+      const tried = ollamaTest && ollamaTest.model === st.model ? ollamaTest : null;
+      const three = step(3, "Test", !!tried?.ok, ready && !tried?.ok, "");
+      if (ready) {
+        const out = document.createElement("span");
+        out.className = "llm-test-out";
+        const go = button(tried?.ok ? "Test again" : "Test", () => runOllamaTest(st.model), !tried?.ok);
+        if (tried?.running) {
+          go.disabled = true;
+          out.textContent = up
+            ? "Asking (the first answer loads the model into the graphics card, which can take a moment)..."
+            : "Starting Ollama and asking (the first answer loads the model into the graphics card, which can take a moment)...";
+        } else if (tried) {
+          out.textContent = tried.text;
+          if (!tried.ok) out.classList.add("ollama-error");
+        }
+        const r = row(go, out);
+        r.classList.add("llm-test");
+        three.append(r);
+      }
+      // (a job's bar starts from what's known so far)
+      queueMicrotask(paintOllamaProgress);
+      return box;
+    };
+    // Ollama on another computer (a server at home): its address
+    // Who runs Ollama: Wrapped (unticked, the default), or the user
+    const ollamaChoice = () => {
+      const label = document.createElement("label");
+      label.className = "ollama-manual";
+      const tick = document.createElement("input");
+      tick.type = "checkbox";
+      tick.checked = !!wrappedSettings.ollamaManual;
+      tick.disabled = ollamaRunning();
+      tick.addEventListener("change", async () => {
+        await save({ ollamaManual: tick.checked });
+        refreshOllama();
+      });
+      const words = document.createElement("span");
+      words.textContent = "Leave Ollama to me (Wrapped won't start or stop it)";
+      label.append(tick, words);
+      label.hidden = ollamaState?.local === false;
+      return label;
+    };
+    const ollamaAddress = () => {
+      const input = document.createElement("input");
+      input.className = "wrapped-search";
+      input.type = "text";
+      input.autocomplete = "off";
+      input.placeholder = "http://localhost:11434";
+      input.value = wrappedSettings.llmUrl || "";
+      const saveUrl = document.createElement("button");
+      saveUrl.className = "wrapped-button";
+      saveUrl.textContent = "Save";
+      saveUrl.addEventListener("click", async () => {
+        await save({ llmUrl: input.value.trim() });
+        ollamaTest = null;
+        refreshOllama();
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") saveUrl.click();
+      });
+      const r = document.createElement("div");
+      r.className = "wrapped-setting-row llm-key-row";
+      r.append(labeled("Ollama on another computer? Its address (optional)", input), saveUrl);
+      return r;
+    };
     // Tier 2: a service and its key (or Ollama's address), the model, Light
     // or Heavy, and a Test button
     const llmProvider = wrappedSettings.llmProvider || "anthropic";
-    const llmReady = llmProvider === "ollama" || !!wrappedSettings.llmKey;
+    const onPc = llmProvider === "ollama";
+    // (Ollama: answering, or installed for Wrapped to start, with the model)
+    const ollamaThere = !!(ollamaState?.running || (!wrappedSettings.ollamaManual && ollamaState?.local !== false && ollamaState?.installed));
+    const llmReady = onPc ? ollamaThere && !!ollamaState?.modelReady : !!wrappedSettings.llmKey;
     const llmCard = tier(
       2,
       "Language model",
-      "Reads what's written about each pick (Roon's reviews and bios, Last.fm) against the albums you played of the artist it came from, drops the ones that don't fit, and picks the song to open with. Light: tier 1 decides the order. Heavy (coming soon): also reorders and adds picks of its own.",
-      llmReady ? "On" : "Needs a key",
+      "Reads what's written about each pick (Roon's reviews and bios, Last.fm, Wikipedia, and Discogs' styles with a token) against the albums you played of the artist it came from, drops the ones that don't fit, and picks the song to open with. Light: tier 1 decides the order. Heavy: also brings in artists of its own (checked like the rest) and puts the list in order.",
+      llmReady ? "Activated" : onPc ? (ollamaState ? "Needs setup" : "Checking") : "Needs a key",
       llmReady ? "on" : "setup",
     );
     const llmBox = document.createElement("div");
@@ -4782,7 +7309,7 @@ WRAPPED_PAGES.settings = async function () {
       ["gemini", "Gemini"],
       ["ollama", "Ollama (on this PC)"],
     ];
-    const defaults = { anthropic: "claude-haiku-5-5", openai: "gpt-4o-mini", gemini: "gemini-2.5-flash", ollama: "llama3.1" };
+    const defaults = { anthropic: "claude-haiku-5-5", openai: "gpt-4o-mini", gemini: "gemini-2.5-flash", ollama: "gemma4:12b" };
     const providerRow = document.createElement("div");
     providerRow.className = "wrapped-tabs small";
     for (const [value, label] of providers) {
@@ -4791,12 +7318,44 @@ WRAPPED_PAGES.settings = async function () {
       pill.textContent = label;
       pill.addEventListener("click", async () => {
         if (llmProvider === value) return;
-        await save({ llmProvider: value });
-        renderWrapped();
+        // (lit at once; the card follows when the page is drawn again)
+        for (const other of providerRow.children) other.classList.toggle("selected", other === pill);
+        // (a model name only means something to its own service)
+        await save({ llmProvider: value, llmModel: "" });
+        redrawSettingsInPlace();
       });
+      // (Ollama's status asks Windows about the graphics card and drives,
+      // which takes a moment the first time: started on the way to a click)
+      if (value === "ollama" && llmProvider !== "ollama") {
+        pill.addEventListener("pointerenter", () => fetchOllamaState(), { once: true });
+      }
       providerRow.append(pill);
     }
-    llmBox.append(providerRow);
+    // Two parts: the model (service, key, model, Light / Heavy, Test), and
+    // the optional extra reading (Discogs), each with its own heading
+    const section = (title, text) => {
+      const box = document.createElement("div");
+      box.className = "llm-section";
+      const h = document.createElement("div");
+      h.className = "llm-section-title";
+      h.textContent = title;
+      box.append(h);
+      if (text) box.append(wrappedNote(text, "wrapped-note small"));
+      return box;
+    };
+    // An input with its name above it
+    const labeled = (label, input) => {
+      const box = document.createElement("label");
+      box.className = "llm-field";
+      const name = document.createElement("span");
+      name.className = "llm-field-label";
+      name.textContent = label;
+      box.append(name, input);
+      return box;
+    };
+    const modelSection = section("Model", "The service that reads the picks, and your key for it.");
+    modelSection.append(providerRow);
+    llmBox.append(modelSection);
     const keyRow = document.createElement("div");
     keyRow.className = "wrapped-setting-row";
     const keyInput = document.createElement("input");
@@ -4825,30 +7384,60 @@ WRAPPED_PAGES.settings = async function () {
       if (llmProvider === "ollama") changes.llmUrl = keyInput.value.trim();
       else changes.llmKey = keyInput.value.trim();
       await save(changes);
-      renderWrapped();
+      redrawSettingsInPlace();
     });
     for (const input of [keyInput, modelInput]) {
       input.addEventListener("keydown", (e) => {
         if (e.key === "Enter") saveLlm.click();
       });
     }
-    keyRow.append(keyInput, modelInput, saveLlm);
-    llmBox.append(keyRow);
-    if (llmProvider === "ollama") {
-      llmBox.append(
-        wrappedNote("Ollama runs the model on this PC: nothing leaves it and there's no key. Install it from ollama.com, then run \"ollama pull llama3.1\" (or the model named above).", "wrapped-note small"),
-      );
-    } else if (llmProvider === "openai") {
-      llmBox.append(wrappedNote("OpenAI hasn't been tested yet (no account to test with). If it misbehaves, please report it.", "wrapped-note small"));
+    keyRow.classList.add("llm-key-row");
+    keyRow.append(
+      labeled(llmProvider === "ollama" ? "Ollama's address" : `${providers.find((p) => p[0] === llmProvider)[1]} API key`, keyInput),
+      labeled("Model (optional)", modelInput),
+      saveLlm,
+    );
+    if (onPc) modelSection.append(ollamaSteps(), ollamaChoice(), ollamaAddress());
+    else modelSection.append(keyRow);
+    if (llmProvider === "openai") {
+      modelSection.append(wrappedNote("OpenAI hasn't been tested yet (no account to test with). If it misbehaves, please report it.", "wrapped-note small"));
     } else if (llmProvider === "gemini") {
-      llmBox.append(wrappedNote("Gemini's free tier allows a few calls a minute, so a build takes longer, and Google may use free-tier prompts to train its models.", "wrapped-note small"));
+      modelSection.append(wrappedNote("Gemini's free tier allows a few calls a minute, so a build takes longer, and Google may use free-tier prompts to train its models.", "wrapped-note small"));
     }
+    // Discogs (optional): styles per album, chosen by the people who
+    // catalogue them
+    const discogsRow = document.createElement("div");
+    discogsRow.className = "wrapped-setting-row";
+    const discogsInput = document.createElement("input");
+    discogsInput.className = "wrapped-search";
+    discogsInput.type = "password";
+    discogsInput.autocomplete = "off";
+    discogsInput.placeholder = "not set";
+    discogsInput.value = wrappedSettings.discogsToken || "";
+    const saveDiscogs = document.createElement("button");
+    saveDiscogs.className = "wrapped-button";
+    saveDiscogs.textContent = "Save";
+    saveDiscogs.addEventListener("click", () => save({ discogsToken: discogsInput.value.trim() }));
+    discogsInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") saveDiscogs.click();
+    });
+    discogsRow.classList.add("llm-key-row");
+    discogsRow.append(labeled("Discogs token", discogsInput), saveDiscogs);
+    const discogsNote = document.createElement("p");
+    discogsNote.className = "wrapped-note small";
+    discogsNote.append(
+      "Discogs lists styles for each album (\"Melodic Death Metal\" on one record, \"Power Metal\" on another), which helps pick the right era. A personal token is free: ",
+      link("https://www.discogs.com/settings/developers", "generate one here"),
+      " (tick \"I have read and agree to the Discogs API Terms of Use\" first, then Generate token, and paste it below).",
+    );
+    const readingSection = section("Extra reading (optional)", null);
+    readingSection.append(discogsNote, discogsRow);
     const modeRow = document.createElement("div");
     modeRow.className = "wrapped-tabs small";
     const llmMode = wrappedSettings.llmMode === "heavy" ? "heavy" : "light";
     for (const [value, label, soon] of [
       ["light", "Light", false],
-      ["heavy", "Heavy (coming soon)", true],
+      ["heavy", "Heavy", false],
     ]) {
       const pill = document.createElement("button");
       pill.className = `wrapped-tab${llmMode === value ? " selected" : ""}`;
@@ -4857,7 +7446,7 @@ WRAPPED_PAGES.settings = async function () {
       pill.addEventListener("click", async () => {
         if (llmMode === value) return;
         await save({ llmMode: value });
-        renderWrapped();
+        redrawSettingsInPlace();
       });
       modeRow.append(pill);
     }
@@ -4879,18 +7468,140 @@ WRAPPED_PAGES.settings = async function () {
       }
       test.disabled = false;
     });
-    testRow.append(modeRow, test, testOut);
-    llmBox.append(testRow);
-    llmCard.append(llmBox);
-    tier(
+    if (onPc) testRow.append(modeRow);
+    else testRow.append(modeRow, test, testOut);
+    modelSection.append(testRow);
+    // Deep Dive's own model (optional): it reads far more per playlist, so
+    // a bigger model pays off there
+    const diveSection = section(
+      "Deep Dive's model (optional)",
+      onPc
+        ? "Deep Dive reads a lot more per playlist than the weekly lists. Another model you've downloaded can do it (empty: the one above)."
+        : "Deep Dive reads a lot more per playlist than the weekly lists, so a bigger model pays off there: on Anthropic, claude-sonnet-5-5 or claude-opus-5-5 know far more bands and albums than Haiku, at a few times the cost. Empty: the model above.",
+    );
+    const diveRow = document.createElement("div");
+    diveRow.className = "wrapped-setting-row llm-key-row";
+    const diveInput = document.createElement("input");
+    diveInput.className = "wrapped-search";
+    diveInput.type = "text";
+    diveInput.autocomplete = "off";
+    diveInput.placeholder = onPc ? "same as above" : "same as above, e.g. claude-sonnet-5-5";
+    diveInput.value = wrappedSettings.diveModel || "";
+    const saveDive = document.createElement("button");
+    saveDive.className = "wrapped-button";
+    saveDive.textContent = "Save";
+    saveDive.addEventListener("click", async () => {
+      await save({ diveModel: diveInput.value.trim() });
+      wrappedToast(diveInput.value.trim() ? `Deep Dive uses ${diveInput.value.trim()}.` : "Deep Dive uses the model above.");
+    });
+    diveInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") saveDive.click();
+    });
+    diveRow.append(labeled("Model for Deep Dive", diveInput), saveDive);
+    diveSection.append(diveRow);
+    llmBox.append(diveSection);
+    llmBox.append(readingSection);
+    llmCard.append(...setupFold("llm", onPc && !ollamaState ? null : llmReady, llmBox));
+    // Tier 3: two models to download once (sound.rs), then songs are heard
+    // from your own files through Roon, else from their previews
+    const soundOn = !!soundState?.ready;
+    const soundCard = tier(
       3,
       "Sound",
-      "Listens to 30-second previews of the songs with a model that runs on this PC, so picks are compared by how they actually sound. Will be a one-time download.",
-      "Coming soon",
-      "soon",
+      "Listens to the songs with two models that run on this PC, so songs are compared by how they actually sound, not only by what's written about them: all of each song from your own files, wherever Roon keeps them, and the rest from their 30-second previews (Deezer's, else Apple's). To try it: Sound check on Deep Dive's page, with a song and an album picked.",
+      soundOn ? "Activated" : soundRunning() ? "Downloading" : soundState ? "Needs download" : "Checking",
+      soundOn ? "on" : "setup",
     );
+    const soundBox = document.createElement("div");
+    soundBox.className = "llm-setup";
+    const soundSection = document.createElement("div");
+    soundSection.className = "llm-section";
+    const soundTitle = document.createElement("div");
+    soundTitle.className = "llm-section-title";
+    soundTitle.textContent = "The models";
+    const soundMb = Math.round((soundState?.bytes || 36664655) / 1e6);
+    const soundAbout = document.createElement("p");
+    soundAbout.className = "wrapped-note small";
+    soundAbout.append(
+      "Discogs-EffNet, from the Music Technology Group at Universitat Pompeu Fabra (",
+      link("https://essentia.upf.edu/models.html#discogs-effnet", "Essentia's models"),
+      `), trained on Discogs: one knows 400 styles of music, the other which artists a song sounds like. A one-time download of ${soundMb} MB. They're free for non-commercial use (CC BY-NC-SA 4.0), as Toasted is.`,
+    );
+    soundSection.append(soundTitle, soundAbout);
+    if (soundRunning()) {
+      // The bar while it downloads, with Stop
+      const view = document.createElement("div");
+      view.className = "ollama-progress";
+      const track = document.createElement("div");
+      track.className = "ollama-bar";
+      const fill = document.createElement("div");
+      fill.className = "ollama-bar-fill";
+      track.append(fill);
+      const label = document.createElement("span");
+      label.className = "ollama-progress-label";
+      const stop = document.createElement("button");
+      stop.className = "wrapped-button small";
+      stop.textContent = "Stop";
+      stop.addEventListener("click", () => invoke("sound_cancel"));
+      const stopRow = document.createElement("div");
+      stopRow.className = "wrapped-setting-row ollama-row";
+      stopRow.append(label, stop);
+      view.append(track, stopRow);
+      soundView = { box: view, fill, label, stop };
+      soundSection.append(view);
+      paintSoundProgress();
+    } else if (soundOn) {
+      const n = soundState.heard || 0;
+      const files = soundState.files || 0;
+      const heard = n
+        ? `${n.toLocaleString()} song${n === 1 ? "" : "s"} heard so far${files ? ` (${files === n ? "all" : files.toLocaleString()} from your own files)` : ""}`
+        : "No songs heard yet";
+      soundSection.append(wrappedNote(`Downloaded and working. ${heard}; this PC hears ${soundState.workers} previews at a time.`, "wrapped-note small"));
+    } else {
+      if (soundJob?.stage === "error") soundSection.append(wrappedNote(soundJob.error, "wrapped-note small ollama-error"));
+      const goRow = document.createElement("div");
+      goRow.className = "wrapped-setting-row tier-actions";
+      const go = document.createElement("button");
+      go.className = "wrapped-button small";
+      go.textContent = soundJob ? "Try again" : `Download (${soundMb} MB)`;
+      go.addEventListener("click", () => {
+        soundJob = { stage: "download", done: 0, total: 0, error: "" };
+        redrawSettingsInPlace();
+        // (its events report how it goes and how it ends)
+        invoke("sound_download").catch((err) => {
+          if (String(err).includes("already")) wrappedToast(String(err));
+        });
+      });
+      goRow.append(go);
+      soundSection.append(goRow);
+    }
+    soundBox.append(soundSection);
+    soundCard.append(...setupFold("sound", soundState ? soundOn : null, soundBox));
+    // The on ones from the top together, then one card each
+    let i = 0;
+    const group = [];
+    while (i < sections.length && sections[i].on) group.push(sections[i++]);
+    const cards = group.length ? [group] : [];
+    for (; i < sections.length; i++) cards.push([sections[i]]);
+    for (const members of cards) {
+      const card = document.createElement("div");
+      const on = members.every((m) => m.on);
+      card.className = `picking-tier${on ? " on" : ""}${members.length > 1 ? " combined" : ""}`;
+      if (!on) card.classList.add(members[0].el.classList.contains("setup") ? "setup" : "soon");
+      card.append(...members.map((m) => m.el));
+      tierCards.append(card);
+    }
     tiers.append(tierCards);
   }
+
+  const toasted = field("Toasted's settings", "The Roon Core, the Toaster, hotkeys, toasts and the Wrapper live in the app's own Settings window.");
+  const openToasted = document.createElement("button");
+  openToasted.className = "wrapped-button";
+  openToasted.textContent = "Open Toasted's Settings";
+  openToasted.addEventListener("click", () => send("open_window", { window: "settings" }));
+  toasted.append(openToasted);
+  // (above Similar by, at the top of the left column)
+  left.prepend(toasted);
 
   const similar = field(
     "Similar by",
@@ -4950,7 +7661,7 @@ WRAPPED_PAGES.settings = async function () {
     libButton.textContent = st.syncing ? "Reading..." : st.artists ? "Read again" : "Read the library";
     libButton.disabled = st.syncing;
     libText.textContent = st.artists
-      ? `${st.artists.toLocaleString()} artists${st.syncedAt ? `, read ${historyWhen(st.syncedAt)}` : ""}`
+      ? `${st.artists.toLocaleString()} artists${st.albums ? `, ${st.albums.toLocaleString()} albums` : ""}${st.tracks ? `, ${st.tracks.toLocaleString()} tracks` : ""}${st.syncedAt ? `, read ${historyWhen(st.syncedAt)}` : ""}`
       : "Not read yet";
   };
   invoke("wrapped_library_status").then(showLibrary).catch(() => {});
@@ -4969,7 +7680,7 @@ WRAPPED_PAGES.settings = async function () {
       invoke("wrapped_library_status").then(showLibrary).catch(() => {});
       // The library's artists join the ones to tag
       invoke("wrapped_tags_status").then(showTagging).catch(() => {});
-    } else libText.textContent = `Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} artists...`;
+    } else libText.textContent = `Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} ${p.what || "artists"}...`;
   });
   libRow.append(libButton, libText);
   libraryField.append(libRow);
@@ -5069,6 +7780,55 @@ function wrappedOpenInRoon(text, pick) {
 }
 
 // A spinner over the Wrapped page while something takes a moment
+// A question over the page, like a warning: its title, a line of text
+// and the choices (`actions`: { value, label, kind "danger" }); resolves
+// to the chosen value (null for Cancel, Escape or a click outside)
+function wrappedConfirm({ title, text, actions }) {
+  return new Promise((resolve) => {
+    wrapped.querySelector(".wrapped-dialog-back")?.remove();
+    const back = document.createElement("div");
+    back.className = "wrapped-dialog-back";
+    const box = document.createElement("div");
+    box.className = "wrapped-dialog";
+    box.setAttribute("role", "alertdialog");
+    const head = document.createElement("div");
+    head.className = "wrapped-dialog-title";
+    head.textContent = title;
+    box.append(head);
+    if (text) box.append(wrappedNote(text, "wrapped-note small"));
+    const row = document.createElement("div");
+    row.className = "wrapped-dialog-actions";
+    const finish = (value) => {
+      document.removeEventListener("keydown", onKey, true);
+      back.remove();
+      resolve(value);
+    };
+    const onKey = (event) => {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        finish(null);
+      }
+    };
+    let first = null;
+    for (const a of actions) {
+      const btn = document.createElement("button");
+      btn.className = `wrapped-button${a.kind ? ` ${a.kind}` : ""}`;
+      btn.textContent = a.label;
+      btn.addEventListener("click", () => finish(a.value));
+      row.append(btn);
+      if (a.value == null) first = btn;
+    }
+    box.append(row);
+    back.append(box);
+    back.addEventListener("pointerdown", (event) => {
+      if (event.target === back) finish(null);
+    });
+    document.addEventListener("keydown", onKey, true);
+    wrapped.append(back);
+    (first || row.lastChild)?.focus();
+  });
+}
+
 function wrappedBusy(text) {
   let busy = wrapped.querySelector(".wrapped-busy");
   if (!text) {
@@ -5087,14 +7847,14 @@ function wrappedBusy(text) {
 // The playlists Wrapped makes are named with this, so they're told apart
 const WRAPPED_PREFIX = "Wrapped: ";
 // The weekly ones (discover.rs) carry their own names, dated copies too
-const WEEKLY_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover"];
+const WEEKLY_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover", "🧠 "];
 const isWrappedPlaylist = (p) => p.name.startsWith(WRAPPED_PREFIX) || WEEKLY_NAMES.some((n) => p.name.startsWith(n));
 const PLAYLIST_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>';
 const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
 
 // One weekly list on the Discover page: the two dated copies small on
 // top, the current one large with Play and Build now
-function discoverColumn(which, title, blurb, built, building, failed) {
+function discoverColumn(which, title, blurb, built, building, failed, status) {
   const column = document.createElement("section");
   column.className = "discover-column";
   const head = document.createElement("div");
@@ -5108,10 +7868,10 @@ function discoverColumn(which, title, blurb, built, building, failed) {
   if (older.length) {
     const row = document.createElement("div");
     row.className = "discover-old";
-    for (const copy of older) row.append(discoverCard(copy, false));
+    for (const copy of older) row.append(discoverCard(copy, false, which));
     column.append(row);
   }
-  if (current) column.append(discoverCard(current, true));
+  if (current) column.append(discoverCard(current, true, which));
   else column.append(wrappedNote("Not built yet: the first one comes next Monday, or build it now.", "wrapped-note discover-empty"));
 
   const build = document.createElement("button");
@@ -5124,36 +7884,202 @@ function discoverColumn(which, title, blurb, built, building, failed) {
   // (why the last build didn't make a new list; the details are in
   // discover-log.txt in the app data folder)
   if (failed && building !== which) column.append(wrappedNote(`The last build didn't finish: ${failed}`, "wrapped-note error"));
+  if (status) column.append(discoverAskPanel(status, which));
   return column;
 }
 
-function discoverCard(copy, large) {
+// ----- Fine Tuning: asking Discover Weekly for something -----
+// What's typed so far, per list (kept while the page redraws)
+const discoverAskText = { weekly: "", rediscover: "" };
+
+const TUNE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><defs><clipPath id="tune-cut"><path clip-rule="evenodd" d="M-2 -2h28v28H-2z M17 10.7a6.3 6.3 0 1 0 0 12.6a6.3 6.3 0 1 0 0-12.6z"/></clipPath></defs><g clip-path="url(#tune-cut)"><g transform="scale(0.75)" stroke-width="2.67"><path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/></g></g><g transform="translate(11 11.05) scale(0.5)" stroke-width="4"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></g></svg>';
+const CLOSE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+
+// Fine Tuning, under Build now: what you'd like the next Discover Weekly
+// to bring, in your own words; then the requests standing, each for the
+// next list or, with Permanent, every one
+function discoverAskPanel(status, which = "weekly") {
+  const panel = document.createElement("section");
+  panel.className = "discover-ask";
+  const redraw = (next) => panel.replaceWith(discoverAskPanel(next, which));
+  const rediscover = which === "rediscover";
+  const requests = rediscover ? status.rediscoverRequests : status.requests;
+  const button = (className, html, label, onClick) => {
+    const b = document.createElement("button");
+    b.className = className;
+    b.innerHTML = html;
+    if (label) b.setAttribute("aria-label", label);
+    b.addEventListener("click", onClick);
+    return b;
+  };
+
+  const head = document.createElement("div");
+  head.className = "discover-ask-head";
+  head.innerHTML = TUNE_ICON;
+  const title = document.createElement("h4");
+  title.textContent = "Fine Tuning";
+  head.append(title);
+  panel.append(
+    head,
+    wrappedNote(
+      rediscover
+        ? "Tell the next Library Rediscover what to dig up from your library, in your own words: a sound, an era, a mood. It takes a third of the list; say \"all\" or \"only\" and it takes the whole list."
+        : "Tell the next Discover Weekly what you'd like, in your own words: more of a sound, less of something, an era.",
+      "wrapped-note small",
+    ),
+  );
+
+  const row = document.createElement("div");
+  row.className = "discover-ask-row";
+  const input = document.createElement("input");
+  input.className = "wrapped-search";
+  input.type = "text";
+  input.maxLength = 300;
+  input.placeholder = rediscover ? "e.g. doom metal I haven't heard in a long time" : "e.g. more atmospheric black metal with clean vocals";
+  input.value = discoverAskText[which];
+  input.addEventListener("input", () => (discoverAskText[which] = input.value));
+  const add = document.createElement("button");
+  add.className = "wrapped-button";
+  add.textContent = "Add";
+  const send = async () => {
+    const text = input.value.trim();
+    if (!text) return input.focus();
+    add.disabled = true;
+    try {
+      const next = await invoke("wrapped_discover_request_add", { text, song: null, aspects: [], which });
+      discoverAskText[which] = "";
+      redraw(next);
+    } catch (err) {
+      wrappedToast(String(err));
+      add.disabled = false;
+    }
+  };
+  add.addEventListener("click", send);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      send();
+    }
+  });
+  row.append(input, add);
+  panel.append(row);
+  if (!status.tier2) {
+    panel.append(wrappedNote("Fine Tuning is read by tier 2, a language model (Wrapped's Settings). Until it's set up, what you add here waits.", "wrapped-note small"));
+  }
+
+  if (requests?.length) {
+    const list = document.createElement("ul");
+    list.className = "discover-requests";
+    for (const r of requests) {
+      const item = document.createElement("li");
+      item.className = "discover-request";
+      const text = document.createElement("div");
+      text.className = "discover-request-text";
+      text.textContent = r.said;
+      const when = document.createElement("span");
+      when.className = "discover-request-when";
+      when.textContent = r.permanent ? "Every list" : "Next list";
+      text.append(when);
+      const keep = button(`discover-request-keep${r.permanent ? " on" : ""}`, "", null, async () => {
+        try {
+          redraw(await invoke("wrapped_discover_request_keep", { id: r.id, permanent: !r.permanent }));
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      });
+      keep.textContent = "Permanent";
+      keep.setAttribute("aria-pressed", r.permanent ? "true" : "false");
+      keep.title = r.permanent ? "Kept for every list: click to use it for the next list only" : "Keep this for every list, not just the next one";
+      const remove = button("discover-ask-x", CLOSE_ICON, "Remove this", async () => {
+        try {
+          redraw(await invoke("wrapped_discover_request_remove", { id: r.id }));
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      });
+      item.append(text, keep, remove);
+      list.append(item);
+    }
+    panel.append(list);
+  }
+  return panel;
+}
+
+// Which cards show their track list (by list and build time), kept while
+// the page redraws
+const discoverOpen = new Set();
+const CHEVRON_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+
+// A part of a card that folds away or out (grid rows 1fr / 0fr)
+function discoverFold(className, ...children) {
+  const fold = document.createElement("div");
+  fold.className = `discover-fold ${className}`;
+  const inner = document.createElement("div");
+  inner.className = "discover-fold-inner";
+  inner.append(...children);
+  fold.append(inner);
+  return fold;
+}
+
+// One list's card: this week's large (cover, artists, Play), the dated
+// copies small. A click anywhere but Play swaps the cover and summary for
+// the numbered track list, and back.
+// A list's cover: Roon's own for the playlist, or (before Roon has made
+// one) the first songs' album covers, four in a square like Roon's
+function discoverCover(imageKey, covers, size, name) {
+  if (imageKey || covers.length < 4) return wrappedArt(imageKey || covers[0], size, name);
+  const box = document.createElement("div");
+  box.className = "wrapped-art discover-mosaic";
+  for (const key of covers.slice(0, 4)) {
+    const img = document.createElement("img");
+    img.loading = "lazy";
+    img.alt = "";
+    img.src = `${convertFileSrc(key, "roonimg")}?width=${Math.round(size / 2)}&height=${Math.round(size / 2)}&src=broker`;
+    box.append(img);
+  }
+  return box;
+}
+
+function discoverCard(copy, large, which) {
+  const key = `${which}-${copy.builtAt}`;
   const card = document.createElement("div");
-  card.className = large ? "discover-card large" : "discover-card";
+  card.className = `discover-card${large ? " large" : ""}${discoverOpen.has(key) ? " open" : ""}`;
+  card.tabIndex = 0;
+  card.setAttribute("role", "button");
+  card.setAttribute("aria-expanded", discoverOpen.has(key) ? "true" : "false");
+  card.title = "Show the songs";
   const p = copy.playlist;
-  const art = wrappedArt(p?.imageKey, large ? 400 : 120, copy.name);
+  const art = discoverCover(p?.imageKey, copy.covers || [], large ? 400 : 120, copy.name);
   const text = document.createElement("div");
   text.className = "discover-text";
+  const head = document.createElement("div");
+  head.className = "discover-card-head";
   const title = document.createElement("div");
   title.className = "discover-title";
   title.textContent = large ? `This week, ${copy.date}` : copy.date;
+  const chevron = document.createElement("span");
+  chevron.className = "discover-chevron";
+  chevron.innerHTML = CHEVRON_ICON;
+  head.append(title, chevron);
   const sub = document.createElement("div");
   sub.className = "discover-sub";
   const length = p?.lengthSeconds ? formatLongTime(p.lengthSeconds) : null;
   sub.textContent = [`${copy.songs} songs`, length, p ? null : "deleted in Roon"].filter(Boolean).join(" · ");
-  text.append(title, sub);
+  text.append(head, sub);
   if (large && copy.artists.length) {
     const who = document.createElement("div");
     who.className = "discover-artists";
     const shown = copy.artists.slice(0, 8).join(", ");
     who.textContent = copy.artists.length > 8 ? `${shown} and ${copy.artists.length - 8} more` : shown;
-    text.append(who);
+    text.append(discoverFold("summary", who));
   }
   if (p) {
     const play = document.createElement("button");
-    play.className = large ? "wrapped-play" : "wrapped-button small";
-    play.innerHTML = large ? `${WRAPPED_PLAY_ICON}<span>Play</span>` : "Play";
-    play.addEventListener("click", () => {
+    play.className = large ? "wrapped-play discover-play" : "wrapped-play discover-play small";
+    play.innerHTML = `${WRAPPED_PLAY_ICON}<span>Play</span>`;
+    play.title = `Play ${p.name}`;
+    play.addEventListener("click", (e) => {
+      e.stopPropagation();
       if (!zone) return wrappedToast("Pick a zone first.");
       invoke("library_play_playlist", { zoneId: zone.zoneId, handle: p.handle, clear: true })
         .then(() => wrappedToast(`Playing ${p.name} on ${zone.name}`))
@@ -5161,7 +8087,72 @@ function discoverCard(copy, large) {
     });
     text.append(play);
   }
-  card.append(art, text);
+  // The track list: number, title, artist, and why it's there
+  const list = document.createElement("ol");
+  list.className = "discover-tracklist";
+  (copy.tracks || []).forEach((t, i) => {
+    const row = document.createElement("li");
+    row.className = "discover-track";
+    const num = document.createElement("span");
+    num.className = "discover-track-num";
+    num.textContent = `${i + 1}.`;
+    const body = document.createElement("div");
+    body.className = "discover-track-body";
+    const name = document.createElement("div");
+    name.className = "discover-track-title";
+    name.textContent = t.title || "(untitled)";
+    const who = document.createElement("div");
+    who.className = "discover-track-artist";
+    who.textContent = t.artist;
+    body.append(name, who);
+    const why = t.why || t.reason;
+    if (why) {
+      const line = document.createElement("div");
+      line.className = "discover-track-why";
+      line.textContent = why;
+      line.title = why;
+      body.append(line);
+    }
+    row.append(num, body);
+    list.append(row);
+  });
+  if (!list.children.length) {
+    const none = document.createElement("li");
+    none.className = "discover-track empty";
+    none.textContent = "No songs saved for this list.";
+    list.append(none);
+  }
+  const face = large ? discoverFold("cover", art) : art;
+  card.append(face, text, discoverFold("tracks", list));
+  const toggle = () => {
+    const open = !card.classList.contains("open");
+    // (one open at a time in a column)
+    if (open) {
+      for (const other of card.closest(".discover-column")?.querySelectorAll(".discover-card.open") || []) {
+        if (other !== card) other.dispatchEvent(new CustomEvent("discover-close"));
+      }
+    }
+    card.classList.toggle("open", open);
+    card.setAttribute("aria-expanded", open ? "true" : "false");
+    card.title = open ? "Hide the songs" : "Show the songs";
+    if (open) discoverOpen.add(key);
+    else discoverOpen.delete(key);
+  };
+  card.addEventListener("discover-close", () => {
+    card.classList.remove("open");
+    card.setAttribute("aria-expanded", "false");
+    card.title = "Show the songs";
+    discoverOpen.delete(key);
+  });
+  card.addEventListener("click", (e) => {
+    if (e.target.closest("button")) return;
+    toggle();
+  });
+  card.addEventListener("keydown", (e) => {
+    if (e.target !== card || (e.key !== "Enter" && e.key !== " ")) return;
+    e.preventDefault();
+    toggle();
+  });
   return card;
 }
 
@@ -5253,6 +8244,8 @@ function playlistRows(list, mine) {
       .filter(Boolean)
       .join(" · ");
     text.append(title, sub);
+    title.classList.add("link");
+    title.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
     row.append(art, text);
     if (mine && !p.readOnly) {
       const del = wrappedIconButton(TRASH_ICON, "Delete this playlist", async () => {
@@ -5311,27 +8304,41 @@ function albumHeader(card) {
   outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
+  // Play now, and the other ways to play it (Add Next, Queue, Start
+  // Radio, Deep Dive) behind its arrow
+  const radioSeed = { name: (card.artist || "").split(/ \/ |, /)[0], handle: card.performerHandle, album: card.title, albumHandle: card.handle };
+  const split = document.createElement("div");
+  split.className = "wrapped-split";
   const play = document.createElement("button");
   play.className = "wrapped-play";
   play.innerHTML = `${WRAPPED_PLAY_ICON}<span>Play now</span>`;
   play.addEventListener("click", () => {
-    if (!zone) return;
-    send("library_play_album", { zoneId: zone.zoneId, handle: card.handle });
+    if (!zone) return wrappedToast("Pick a zone first.");
+    send("library_play_album", { zoneId: zone.zoneId, handle: card.handle, how: "now" });
   });
+  const more = document.createElement("button");
+  more.className = "wrapped-play wrapped-split-more";
+  more.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>';
+  more.title = "More ways to play it";
+  more.addEventListener("click", (event) => {
+    event.stopPropagation();
+    wrappedPlayMenu(split, {
+      what: "album",
+      handle: card.handle,
+      seed: { kind: "album", handle: card.handle, title: card.title, artist: radioSeed.name, imageKey: card.imageKey, radio: radioSeed },
+      radio: { albums: [card.handle] },
+    });
+  });
+  split.append(play, more);
   actions.append(
-    play,
+    split,
     wrappedHeart({ inLibrary: card.inLibrary, favorite: card.favorite }, async (favorite) => {
       const next = card.inLibrary || favorite
         ? await invoke("library_album_heart_for", { handle: card.handle, favorite })
         : await invoke("library_album_add_for", { handle: card.handle });
       return { inLibrary: next.inLibrary, favorite: next.favorite };
     }),
-    wrappedRadioBuilder("album", {
-      name: (card.artist || "").split(/ \/ |, /)[0],
-      handle: card.performerHandle,
-      album: card.title,
-      albumHandle: card.handle,
-    }),
+    wrappedDive({ kind: "album", handle: card.handle, title: card.title, artist: radioSeed.name, imageKey: card.imageKey, radio: radioSeed }, () => wrappedRadioBuilder("album", radioSeed)),
     wrappedOpenInRoon(`${card.artist} ${card.title}`.trim(), card.title),
     wrappedIconButton(PLAYLIST_ICON, "Save this album as a Wrapped playlist", async () => {
       if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
@@ -5366,7 +8373,11 @@ function artistHeader(card) {
   outside.className = "wrapped-genres outside";
   const actions = document.createElement("div");
   actions.className = "wrapped-actions";
-  actions.append(wrappedRadioBuilder("artist", { name: card.name, handle: card.handle }), wrappedOpenInRoon(card.name, card.name));
+  const radio = { name: card.name, handle: card.handle };
+  actions.append(
+    wrappedDive({ kind: "artist", handle: card.handle, title: card.name, imageKey: card.imageKey, radio }, () => wrappedRadioBuilder("artist", radio)),
+    wrappedOpenInRoon(card.name, card.name),
+  );
   info.append(name, facts, genres, outside, actions);
   head.append(info);
   return head;
@@ -5423,6 +8434,236 @@ async function wrappedOutsideTags(holder, name, ticket, album) {
 }
 
 let wrappedSettings = null;
+// One step of Scan all: listens for `event`, starts the job, and resolves
+// once `done(payload)` says it finished (a throw in it rejects), or after
+// ten minutes
+async function wrappedScanStep(event, start, done) {
+  let unlisten = () => {};
+  try {
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("That took too long; try again.")), 600_000);
+      listen(event, (e) => {
+        try {
+          if (done(e.payload)) {
+            clearTimeout(timer);
+            resolve();
+          }
+        } catch (err) {
+          clearTimeout(timer);
+          reject(err);
+        }
+      }).then((u) => {
+        unlisten = u;
+        start().catch((err) => {
+          clearTimeout(timer);
+          reject(err);
+        });
+      });
+    });
+  } finally {
+    unlisten();
+  }
+}
+
+// The tiers' setups on the Settings page: open or folded, by name (unset:
+// decided by whether the tier is working yet)
+const settingsFolds = {};
+
+// Tier 3's setup (sound.rs): whether the models are here, the download
+// running or just ended (its "sound-download" events), and its bar on the
+// Settings page, updated in place while it runs
+let soundState = null;
+let soundJob = null;
+let soundView = null;
+const soundRunning = () => !!(soundJob && ["download", "check"].includes(soundJob.stage));
+
+function fetchSoundState() {
+  return invoke("sound_status")
+    .then((st) => {
+      soundState = st;
+      // (a download that was running before the page loaded)
+      if (st.job && ["download", "check"].includes(st.job.stage) && !soundRunning()) soundJob = st.job;
+      return st;
+    })
+    .catch((err) => {
+      console.warn("sound status", err);
+      return null;
+    });
+}
+
+function paintSoundProgress() {
+  if (!soundJob || !soundView?.box.isConnected) return;
+  const { done = 0, total = 0, stage } = soundJob;
+  const counting = stage === "download" && total > 0;
+  soundView.box.classList.toggle("waiting", !counting);
+  soundView.fill.style.width = counting ? `${Math.min(100, (done / total) * 100)}%` : "";
+  const mb = (bytes) => `${(bytes / 1e6).toFixed(1)} MB`;
+  soundView.label.textContent =
+    stage === "check" ? "Loading the models once, to be sure they run here..." : counting ? `Downloading the models: ${mb(done)} of ${mb(total)}` : "Downloading the models...";
+  soundView.stop.hidden = stage !== "download";
+}
+
+// The scrobbles' reading, for the Settings page's line about it
+let scrobblesPaint = null;
+listen("wrapped-scrobbles", (event) => scrobblesPaint?.(event.payload));
+
+listen("sound-download", (event) => {
+  soundJob = event.payload;
+  paintSoundProgress();
+  // (a download the page isn't showing yet: drawn with its bar)
+  if (soundRunning() && !soundView?.box.isConnected) redrawSettingsInPlace();
+  if (!soundRunning()) {
+    if (soundJob.stage === "done") soundJob = null;
+    fetchSoundState().then(() => redrawSettingsInPlace());
+  }
+});
+fetchSoundState();
+
+// Ollama's setup on the Settings page (tier 2 on this PC, ollama.rs): the
+// last status, the job running or just ended (an install or a model
+// download, as its "ollama-setup" events tell it), the drive and size
+// picked, and the last test's answer
+// (the last status is kept between runs, so the page opens as it was
+// instead of "Checking" while the first answer comes)
+let ollamaState = (() => {
+  try {
+    return JSON.parse(localStorage.getItem("ollamaState") || "null");
+  } catch {
+    return null;
+  }
+})();
+let ollamaJob = null;
+let ollamaDrive = null;
+let ollamaPick = null;
+let ollamaMore = false;
+let ollamaTest = null;
+// (when the status came, and the ask on its way)
+let ollamaStateAt = 0;
+let ollamaFetching = null;
+// The progress lines on the page, by job, updated in place while it runs
+const ollamaProgressViews = {};
+
+const ollamaRunning = () => !!(ollamaJob && !["done", "stopped", "error"].includes(ollamaJob.stage));
+
+function ollamaGb(gb) {
+  return `${gb >= 100 ? Math.round(gb) : Math.round(gb * 10) / 10} GB`;
+}
+
+function paintOllamaProgress() {
+  if (!ollamaJob) return;
+  const view = ollamaProgressViews[ollamaJob.job];
+  if (!view || !view.box.isConnected) return;
+  view.box.hidden = !ollamaRunning();
+  const { done = 0, total = 0, stage, label } = ollamaJob;
+  const counting = total > 0;
+  view.box.classList.toggle("waiting", !counting);
+  view.fill.style.width = counting ? `${Math.min(100, (done / total) * 100)}%` : "";
+  const gb = (bytes) => ollamaGb(bytes / 1024 ** 3);
+  view.label.textContent = counting && label.startsWith("Downloading") ? `${label}: ${gb(done)} of ${gb(total)}` : `${label}...`;
+  // (only a download can be stopped)
+  view.stop.hidden = !(stage === "download" || (stage === "pull" && label.startsWith("Downloading")));
+}
+
+listen("ollama-setup", (event) => {
+  ollamaJob = event.payload;
+  paintOllamaProgress();
+  // (a job the page isn't showing yet: drawn with its bar)
+  if (ollamaRunning() && !ollamaProgressViews[ollamaJob.job]?.box.isConnected) redrawSettingsInPlace();
+  if (["done", "stopped", "error"].includes(ollamaJob.stage)) {
+    const pulled = ollamaJob.job === "pull" && ollamaJob.stage === "done";
+    if (ollamaJob.stage === "done") ollamaJob = null;
+    refreshOllama().then(() => {
+      // A new model: straight on to the test
+      if (pulled && ollamaState?.modelReady) runOllamaTest(ollamaState.model);
+    });
+  }
+});
+
+// Draws the Settings page again where it's scrolled to (when it's open);
+// calls while it's drawing make one more draw after it
+let settingsDrawing = null;
+let settingsDrawAgain = false;
+async function redrawSettingsInPlace() {
+  if (wrapped.hidden || wrappedStack.at(-1)?.page !== "settings") return;
+  if (settingsDrawing) {
+    settingsDrawAgain = true;
+    return settingsDrawing;
+  }
+  settingsDrawing = (async () => {
+    do {
+      settingsDrawAgain = false;
+      const top = wrappedBody.scrollTop;
+      await WRAPPED_PAGES.settings();
+      wrappedBody.scrollTop = top;
+    } while (settingsDrawAgain);
+  })();
+  try {
+    await settingsDrawing;
+  } finally {
+    settingsDrawing = null;
+  }
+}
+
+// Asks ollama.rs where the setup stands; true when that changed. `fresh`
+// asks Windows again about the graphics card and drives, and waits for it
+function fetchOllamaState(fresh = false) {
+  if (ollamaFetching && !fresh) return ollamaFetching;
+  const ask = invoke("ollama_status", { fresh })
+    .then((st) => {
+      const changed = JSON.stringify(st) !== JSON.stringify(ollamaState);
+      ollamaState = st;
+      ollamaStateAt = Date.now();
+      paintPieceDive();
+      try {
+        localStorage.setItem("ollamaState", JSON.stringify({ ...st, job: null }));
+      } catch {
+        // (kept for this run only)
+      }
+      // (a job that was running before the page loaded)
+      if (st.job && !ollamaRunning()) ollamaJob = st.job;
+      return changed;
+    })
+    .catch((err) => {
+      console.warn("ollama status", err);
+      return false;
+    })
+    .finally(() => {
+      if (ollamaFetching === ask) ollamaFetching = null;
+    });
+  ollamaFetching = ask;
+  return ask;
+}
+
+async function refreshOllama() {
+  await fetchOllamaState(true);
+  await redrawSettingsInPlace();
+}
+
+// Windows' answer about the graphics card and drives came in
+listen("ollama-info", async () => {
+  if (await fetchOllamaState()) redrawSettingsInPlace();
+});
+
+async function runOllamaTest(model) {
+  ollamaTest = { model, running: true, ok: false, text: "" };
+  await redrawSettingsInPlace();
+  try {
+    ollamaTest = { model, ok: true, text: await invoke("wrapped_llm_test") };
+  } catch (err) {
+    ollamaTest = { model, ok: false, text: String(err) };
+  }
+  await redrawSettingsInPlace();
+}
+
+// A job that couldn't start (another one is running) says so; one that
+// started reports through its events
+function ollamaNotStarted(err) {
+  if (String(err).startsWith("Something is already")) {
+    ollamaJob = null;
+    wrappedToast(String(err));
+    redrawSettingsInPlace();
+  }
+}
 
 async function wrappedFacts(kind, card, ticket) {
   let facts;
@@ -5448,7 +8689,7 @@ async function wrappedFacts(kind, card, ticket) {
 
 // Track rows like Roon's: play, the Wrapped radio mark, number and title,
 // heart, length
-function trackRows(tracks) {
+function trackRows(tracks, album = {}) {
   const multi = tracks.some((t) => (t.mediaNumber || 1) > 1);
   const rows = [];
   let media = null;
@@ -5463,15 +8704,29 @@ function trackRows(tracks) {
       wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
         if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: track.handle });
       }, "wrapped-track-play"),
-      wrappedRadio("song", { tracks: [track.handle] }),
+      wrappedDive(
+        { kind: "song", handle: track.handle, title: track.title, artist: (album.artist || "").split(/ \/ |, /)[0], album: album.title || "", albumHandle: album.handle, imageKey: album.imageKey },
+        () => wrappedRadio("song", { tracks: [track.handle] }),
+      ),
     );
     const number = document.createElement("span");
     number.className = "wrapped-track-number";
     number.textContent = track.trackNumber ?? "";
     const title = document.createElement("span");
-    title.className = "wrapped-track-title";
+    title.className = "wrapped-track-title link";
     title.textContent = track.title;
+    // (a click on the song: Play Now, Add Next, Queue, Start Radio, Deep Dive)
+    title.addEventListener("click", (event) => {
+      event.stopPropagation();
+      wrappedPlayMenu(title, {
+        what: "song",
+        handle: track.handle,
+        seed: { kind: "song", handle: track.handle, title: track.title, artist: (album.artist || "").split(/ \/ |, /)[0], album: album.title || "", albumHandle: album.handle, imageKey: album.imageKey },
+        radio: { tracks: [track.handle] },
+      });
+    });
     row.append(number, title);
+    wholeRowOpens(row, title);
     row.append(
       wrappedHeart({ inLibrary: track.inLibrary, favorite: track.favorite }, async (favorite) => {
         const next = track.inLibrary
@@ -5489,14 +8744,18 @@ function trackRows(tracks) {
   return rows;
 }
 
-function searchResults(hits) {
+function searchResults(hits, query) {
   const out = [];
   if (hits.artists.length) {
     out.push(wrappedSection("Artists"));
     out.push(
       wrappedGrid(
-        hits.artists.slice(0, 12).map((a) => ({ handle: a.handle, title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: a.imageKey, round: true })),
-        (item) => openWrappedPage({ page: "artist", handle: item.handle }),
+        hits.artists.slice(0, 12).map((a) => ({ handle: a.handle, performerId: a.performerId, title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: a.imageKey, round: true })),
+        (item) => {
+          if (item.performerId != null) rememberSearch({ kind: "artist", performerId: item.performerId, name: item.title, imageKey: item.imageKey });
+          else if (query) rememberSearch({ kind: "query", text: query });
+          openWrappedPage({ page: "artist", handle: item.handle });
+        },
       ),
     );
   }
@@ -5504,8 +8763,12 @@ function searchResults(hits) {
     out.push(wrappedSection("Albums"));
     out.push(
       wrappedGrid(
-        hits.albums.slice(0, 18).map((a) => ({ handle: a.handle, title: a.title, sub: [a.artist, a.year].filter(Boolean).join(" · "), imageKey: a.imageKey })),
-        (item) => openWrappedPage({ page: "album", handle: item.handle }),
+        hits.albums.slice(0, 18).map((a) => ({ handle: a.handle, albumId: a.albumId, title: a.title, artist: a.artist, sub: [a.artist, a.year].filter(Boolean).join(" · "), imageKey: a.imageKey })),
+        (item) => {
+          if (item.albumId != null) rememberSearch({ kind: "album", albumId: item.albumId, name: item.title, artist: item.artist, imageKey: item.imageKey });
+          else if (query) rememberSearch({ kind: "query", text: query });
+          openWrappedPage({ page: "album", handle: item.handle });
+        },
       ),
     );
   }
@@ -5520,7 +8783,10 @@ function searchResults(hits) {
         wrappedIconButton(WRAPPED_PLAY_ICON, "Play now", () => {
           if (zone) send("library_play_track", { zoneId: zone.zoneId, handle: t.handle });
         }, "wrapped-track-play"),
-        wrappedRadio("song", { tracks: [t.handle] }),
+        wrappedDive(
+          { kind: "song", handle: t.handle, title: t.title, artist: (t.artist || "").split(/ \/ |, /)[0], album: t.album || "", albumHandle: t.albumHandle, imageKey: t.imageKey },
+          () => wrappedRadio("song", { tracks: [t.handle] }),
+        ),
       );
       const art = wrappedArt(t.imageKey, 88, t.album);
       art.classList.add("small");
@@ -5561,8 +8827,189 @@ function searchResults(hits) {
 $("#wrapped-close").addEventListener("click", () => setWrappedOpen(false));
 wrappedBack.addEventListener("click", wrappedBackPage);
 
+// ----- The bar: the pages, and the search with what was searched lately -----
+
+const wrappedNav = $("#wrapped-nav");
+const wrappedBarInput = $("#wrapped-bar-input");
+const wrappedRecent = $("#wrapped-recent");
+
+// The pages along the bar (the menu has them too, with Settings and Close)
+function fillWrappedNav() {
+  const items = [{ page: "home", label: "Home", icon: "home" }];
+  if (wrappedSettings?.discovery !== false) items.push({ page: "discover", label: "Discover", icon: "discover" });
+  items.push(tier2Ready() ? { page: "deepdive", label: "Deep Dive", icon: "deepdive" } : { page: "radio", label: "Radio", icon: "radio" });
+  items.push({ page: "playlists", label: "Playlists", icon: "playlists" }, { page: "history", label: "History", icon: "history" }, { page: "settings", label: "Settings", icon: "settings" });
+  const current = wrappedStack.at(-1)?.page;
+  wrappedNav.replaceChildren();
+  for (const item of items) {
+    const link = document.createElement("button");
+    link.className = `wrapped-nav-link${item.page === current ? " selected" : ""}`;
+    link.insertAdjacentHTML("beforeend", WRAPPED_ICONS[item.icon]);
+    const label = document.createElement("span");
+    label.textContent = item.label;
+    link.append(label);
+    link.title = item.label;
+    link.addEventListener("click", () => openWrappedPage(item));
+    wrappedNav.append(link);
+  }
+}
+
+// Searching from the bar opens the Search page with what's typed (and
+// keeps it current while you type); Enter searches at once
+let wrappedBarTimer = null;
+function wrappedBarSearch(now) {
+  clearTimeout(wrappedBarTimer);
+  const go = () => {
+    const query = wrappedBarInput.value.trim();
+    if (!query) return;
+    const top = wrappedStack.at(-1);
+    if (top?.page === "search" && !wrapped.hidden) {
+      if (top.query === query) return;
+      top.query = query;
+      renderWrapped();
+    } else {
+      openWrappedPage({ page: "search", query });
+    }
+  };
+  if (now) go();
+  else wrappedBarTimer = setTimeout(go, 400);
+}
+wrappedBarInput.addEventListener("input", () => {
+  if (wrappedBarInput.value.trim()) hideWrappedRecent();
+  else showWrappedRecent();
+  wrappedBarSearch(false);
+});
+wrappedBarInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    const query = wrappedBarInput.value.trim();
+    if (query) rememberSearch({ kind: "query", text: query });
+    wrappedBarSearch(true);
+    hideWrappedRecent();
+  } else if (event.key === "Escape") {
+    hideWrappedRecent();
+    wrappedBarInput.blur();
+  }
+});
+wrappedBarInput.addEventListener("focus", () => {
+  if (!wrappedBarInput.value.trim()) showWrappedRecent();
+});
+document.addEventListener("pointerdown", (event) => {
+  if (wrappedRecent.hidden) return;
+  if (wrappedRecent.contains(event.target) || wrappedBarInput.contains(event.target)) return;
+  hideWrappedRecent();
+});
+
+// What was searched for and opened from a search lately (newest first,
+// 12 at most), kept on this PC
+const RECENT_SEARCHES_KEY = "wrapped-recent-searches";
+const RECENT_SEARCHES_MAX = 12;
+function recentSearches() {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY) || "[]");
+    return Array.isArray(list) ? list : [];
+  } catch {
+    return [];
+  }
+}
+function saveRecentSearches(list) {
+  try {
+    localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list.slice(0, RECENT_SEARCHES_MAX)));
+  } catch {}
+}
+const recentKey = (r) => (r.kind === "query" ? `q:${r.text.toLowerCase()}` : r.kind === "artist" ? `a:${r.performerId}` : `l:${r.albumId}`);
+function rememberSearch(entry) {
+  const key = recentKey(entry);
+  saveRecentSearches([entry, ...recentSearches().filter((r) => recentKey(r) !== key)]);
+}
+function forgetSearch(entry) {
+  const key = recentKey(entry);
+  saveRecentSearches(recentSearches().filter((r) => recentKey(r) !== key));
+}
+
+function hideWrappedRecent() {
+  wrappedRecent.hidden = true;
+}
+
+function showWrappedRecent() {
+  const list = recentSearches();
+  wrappedRecent.replaceChildren();
+  if (!list.length) return hideWrappedRecent();
+  const head = document.createElement("div");
+  head.className = "wrapped-recent-head";
+  head.textContent = "Recent";
+  wrappedRecent.append(head);
+  for (const r of list) {
+    const row = document.createElement("div");
+    row.className = "wrapped-recent-row";
+    row.tabIndex = 0;
+    const text = document.createElement("div");
+    text.className = "wrapped-recent-text";
+    const name = document.createElement("span");
+    name.className = "wrapped-recent-name";
+    if (r.kind === "query") {
+      const glass = document.createElement("span");
+      glass.className = "wrapped-recent-glass";
+      glass.innerHTML = WRAPPED_ICONS.search;
+      row.append(glass);
+      name.textContent = r.text;
+      text.append(name);
+    } else {
+      row.append(wrappedArt(r.imageKey, 72, r.name, r.kind === "artist"));
+      const kind = document.createElement("span");
+      kind.className = "wrapped-recent-kind";
+      kind.textContent = r.kind === "artist" ? "Artist" : r.artist ? `Album · ${r.artist}` : "Album";
+      name.textContent = r.name;
+      text.append(kind, name);
+    }
+    row.append(text);
+    const open = () => {
+      hideWrappedRecent();
+      rememberSearch(r);
+      if (r.kind === "query") {
+        wrappedBarInput.value = r.text;
+        wrappedBarSearch(true);
+      } else if (r.kind === "artist") {
+        openWrappedPage({ page: "artist", performerId: r.performerId });
+      } else {
+        openWrappedPage({ page: "album", albumId: r.albumId });
+      }
+    };
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") open();
+    });
+    const x = document.createElement("button");
+    x.className = "discover-ask-x";
+    x.innerHTML = CLOSE_ICON;
+    x.title = "Forget this";
+    x.addEventListener("click", (event) => {
+      event.stopPropagation();
+      forgetSearch(r);
+      showWrappedRecent();
+      wrappedBarInput.focus();
+    });
+    row.append(x);
+    wrappedRecent.append(row);
+  }
+  wrappedRecent.hidden = false;
+}
+
 // Now Playing's Wrapped piece: each button closes Now Playing and opens
 // the Wrapped page (the playing track's artist comes from the library link)
+// The third button: Deep Dive with tier 2, Roon Radio from the song without
+// it (repainted when the settings or the local model change, and on hover)
+function paintPieceDive() {
+  const btn = document.querySelector('.wrapped-piece-btn[data-action="dive"]');
+  if (!btn) return;
+  const dive = tier2Ready();
+  if (btn.dataset.mode === (dive ? "dive" : "radio")) return;
+  btn.dataset.mode = dive ? "dive" : "radio";
+  btn.innerHTML = dive ? diveIcon() : RADIO_ICON;
+  btn.dataset.tip = dive ? "Deep Dive from this song" : "Start radio from this song";
+}
+paintPieceDive();
+document.querySelector('.wrapped-piece-btn[data-action="dive"]')?.addEventListener("pointerenter", paintPieceDive);
 for (const btn of document.querySelectorAll(".wrapped-piece-btn")) {
   btn.addEventListener("click", async (event) => {
     event.stopPropagation();
@@ -5593,18 +9040,45 @@ for (const btn of document.querySelectorAll(".wrapped-piece-btn")) {
       if (!card.performerHandle) return wrappedToastStage("Roon didn't say who the artist is.");
       await closeStage();
       if (stage.hidden) openWrappedPage({ page: "artist", handle: card.performerHandle });
-    } else if (action === "playlist") {
-      let made;
+    } else if (action === "album") {
+      let card;
       try {
-        made = await invoke("library_playlist_from_playing", { zoneId: zone.zoneId });
+        card = await invoke("library_playing_album", { zoneId: zone.zoneId });
       } catch (err) {
         return wrappedToastStage(String(err));
       }
       await closeStage();
-      if (stage.hidden) {
-        openWrappedPage({ page: "playlists" });
-        wrappedToast(`Saved "${made.name}"`);
+      if (stage.hidden) openWrappedPage({ page: "album", handle: card.handle });
+    } else if (action === "dive") {
+      // The playing song into Deep Dive's picks, as its button on an album
+      // page does
+      const id = track.trackId ?? track.libraryTrackId;
+      if (id == null) return wrappedToastStage("Roon gave no id for this song.");
+      // Without tier 2: Roon Radio from the song, Now Playing stays
+      if (!tier2Ready()) {
+        paintPieceDive();
+        try {
+          const handle = await invoke("library_track_handle", { trackId: Number(id) });
+          await invoke("library_play_radio", { zoneId: zone.zoneId, seeds: { tracks: [handle] } });
+          wrappedToastStage(`Radio from "${track.title}" on ${zone.name}`);
+        } catch (err) {
+          wrappedToastStage(typeof err === "string" ? err : "Roon didn't start the radio.");
+        }
+        return;
       }
+      let handle;
+      let card = null;
+      try {
+        [handle, card] = await Promise.all([
+          invoke("library_track_handle", { trackId: Number(id) }),
+          invoke("library_playing_album", { zoneId: zone.zoneId }).catch(() => null),
+        ]);
+      } catch (err) {
+        return wrappedToastStage(String(err));
+      }
+      const artist = (card?.artist || track.album?.artist || "").split(/ \/ |, /)[0];
+      await closeStage();
+      if (stage.hidden) divePickAdd({ kind: "song", handle, title: track.title, artist, album: card?.title || "", albumHandle: card?.handle, imageKey: card?.imageKey });
     }
   });
 }
@@ -5632,9 +9106,10 @@ function setRoonNav(nav) {
   roonNav = nav;
   // Roon went somewhere (the sidebar, a link): the page gets out of the
   // way like any Roon page would; it remembers where it was for next time
-  if (moved && !wrapped.hidden) setWrappedOpen(false);
+  // (not while a Deep Dive is at work: it stays in front)
+  if (moved && !wrapped.hidden && !diveHolding()) setWrappedOpen(false);
   layoutWrapped();
-  if (!wrappedMenu.hidden) fillWrappedMenu();
+  if (!wrappedSide.hidden) fillWrappedSide();
   if (!wrapped.hidden && wrappedStack.at(-1)?.page === "home") renderWrapped();
 }
 invoke("wrapper_nav").then(setRoonNav).catch(() => {});
@@ -5643,7 +9118,6 @@ listen("roon-nav", (event) => setRoonNav(event.payload));
 // Wrapped page): the page gets out of the way, whatever Roon does with it
 listen("roon-click", () => {
   if (!wrapped.hidden) setWrappedOpen(false);
-  closeWrappedMenu();
 });
 
 // Roon's own full screen mode breaks the page's layout, so wrapper.rs
@@ -5715,7 +9189,16 @@ $("#win-min").addEventListener("click", () => appWindow.minimize());
 $("#win-max").addEventListener("click", () => appWindow.toggleMaximize());
 $("#win-close").addEventListener("click", () => appWindow.close());
 $("#detach").addEventListener("click", () => send("wrapper_put_back"));
-$("#open-settings").addEventListener("click", () => send("open_window", { window: "settings" }));
+// The title bar's sliders open Wrapped's own Settings page (Toasted's
+// settings are a button on that page)
+$("#open-settings").addEventListener("click", async () => {
+  // (the player steps aside first, like the Wrapped piece's buttons)
+  if (!stage.hidden) {
+    await closeStage();
+    if (!stage.hidden) return;
+  }
+  openWrappedPage({ page: "settings" });
+});
 
 // No right-click menu
 document.addEventListener("contextmenu", (event) => event.preventDefault());

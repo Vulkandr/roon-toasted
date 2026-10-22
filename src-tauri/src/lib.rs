@@ -7,11 +7,15 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 
+mod audio;
 mod autostart;
 mod browse;
 mod changelog;
 mod discover;
+mod dive;
 mod judge;
+mod ollama;
+mod sources;
 mod hotkeys;
 mod icon;
 mod launch;
@@ -24,6 +28,9 @@ mod roon;
 mod roonnav;
 mod settings;
 mod skin;
+mod sound;
+mod home;
+mod scrobbles;
 mod status;
 mod toast;
 mod tray;
@@ -367,11 +374,17 @@ fn hide_window(window: WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Dev builds: print warnings from libraries (like roon-api) to the terminal.
+    // Dev builds: print warnings from libraries (like roon-api) to the
+    // terminal; but not Symphonia's MP3 decoder's at the start of every
+    // preview (a 30-second clip cut from a longer song begins in the middle
+    // of the data its first frames lean on, which the decoder skips)
     #[cfg(debug_assertions)]
-    let _ = tracing_subscriber::fmt()
-        .with_max_level(tracing_subscriber::filter::LevelFilter::WARN)
-        .try_init();
+    {
+        use tracing_subscriber::filter::{LevelFilter, Targets};
+        use tracing_subscriber::prelude::*;
+        let shown = Targets::new().with_default(LevelFilter::WARN).with_target("symphonia_bundle_mp3", LevelFilter::ERROR);
+        let _ = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer()).with(shown).try_init();
+    }
 
     // Restarted (switching Cores): give the old copy's WebView2 time to finish
     // closing first. Opening windows while it's still shutting down makes them
@@ -438,8 +451,10 @@ pub fn run() {
         .manage(wrapped::Wrapped::default())
         .manage(discover::Discover::default())
         .manage(judge::Judge::default())
+        .manage(sources::Sources::default())
         .manage(wrapped::LibraryCopy::default())
         .manage(tags::Tags::default())
+        .manage(sound::Sound::default())
         .manage(update::Updates::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -528,6 +543,9 @@ pub fn run() {
             // Hearts and add-to-library, if switched on (see library.rs)
             library::start(app.handle());
             update::start(app.handle());
+            // Wrapped's Home page kept current (see home.rs)
+            home::schedule(app.handle());
+            scrobbles::schedule(app.handle());
 
             // Just updated: the Changelog opens (see changelog.rs)
             changelog::at_start(app.handle());
@@ -654,13 +672,48 @@ pub fn run() {
             ocr::wrapper_open_in_roon,
             wrapped::wrapped_library_status,
             wrapped::wrapped_library_sync,
+            wrapped::wrapped_library_artists,
+            wrapped::wrapped_library_albums,
+            wrapped::wrapped_library_tracks,
+            tags::wrapped_genres,
+            tags::wrapped_genre_artists,
+            library::library_track_handle,
+            library::library_playlist_tracks,
+            library::library_play_playlist_from,
+            library::library_playlist_remove,
+            library::library_tags,
+            library::library_tag_contents,
+            library::library_listen_later,
+            library::library_listen_later_remove,
             discover::wrapper_build,
             discover::wrapped_discover_status,
             discover::wrapped_discover_build,
             discover::wrapped_discover_ratings,
             discover::wrapped_discover_vote,
             discover::wrapped_discover_reset,
+            discover::wrapped_discover_request_add,
+            discover::wrapped_discover_request_remove,
+            discover::wrapped_discover_request_keep,
+            dive::wrapped_dive_chat,
+            dive::wrapped_dive_build,
+            dive::wrapped_dive_status,
+            dive::wrapped_dive_forget,
+            sound::sound_status,
+            sound::sound_download,
+            sound::sound_cancel,
+            sound::sound_check,
+            home::wrapped_home,
+            scrobbles::wrapped_scrobbles_status,
+            scrobbles::wrapped_scrobbles_sync,
+            discover::wrapped_ban_list,
+            discover::wrapped_ban_add,
+            discover::wrapped_ban_remove,
             judge::wrapped_llm_test,
+            ollama::ollama_status,
+            ollama::ollama_install,
+            ollama::ollama_start,
+            ollama::ollama_pull,
+            ollama::ollama_cancel,
             wrapped::wrapped_settings_get,
             wrapped::wrapped_settings_update,
             tags::wrapped_artist_tags,
@@ -687,6 +740,7 @@ pub fn run() {
             library::library_queue_play_from,
             wrapper::wrapper_hole,
             wrapper::wrapper_status,
+            wrapper::wrapper_attention,
             wrapper::wrapper_put_back,
             wrapper::list_fonts,
             wrapper::wrapper_roon_player,
@@ -704,6 +758,8 @@ pub fn run() {
             // Quitting: Roon gets its own window back if it's in the Wrapper
             if let tauri::RunEvent::Exit = event {
                 wrapper::put_back(app);
+                // (and the Ollama Wrapped started, if it's running)
+                ollama::close_ours();
             }
         });
 }

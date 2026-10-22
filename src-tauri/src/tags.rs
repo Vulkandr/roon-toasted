@@ -709,6 +709,97 @@ pub async fn wrapped_album_tags(app: AppHandle, artist: String, album: String) -
 }
 
 /// How many artists are in the tag cache.
+// ----- Your library by our genres (the Genres page) -----
+
+/// A tag's membership: an artist's tag counts when it is among the
+/// artist's top tags of its kind and weighted at least this much (Last.fm's
+/// top tag is 100).
+const MEMBER_WEIGHT: u32 = 30;
+const MEMBER_TOP: usize = 5;
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenreRow {
+    pub name: String,
+    pub kind: TagKind,
+    pub artists: usize,
+    /// A library artist's picture to stand for the genre.
+    pub image_key: Option<String>,
+    /// A few of its artists, best known first.
+    pub examples: Vec<String>,
+}
+
+/// An artist of a genre: the library's artist and how strongly the tag
+/// applies.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GenreArtist {
+    pub name: String,
+    pub performer_id: Option<u64>,
+    pub image_key: Option<String>,
+    pub album_count: Option<i32>,
+    pub weight: u32,
+}
+
+/// The tags an artist belongs to: its top tags of each kind, weighted
+/// enough (see `MEMBER_WEIGHT`).
+fn memberships(tags: &[Tag]) -> Vec<(String, TagKind, u32)> {
+    let mut out = Vec::new();
+    for kind in [TagKind::Genre, TagKind::Style, TagKind::Scene] {
+        let mut mine: Vec<&Tag> = tags.iter().filter(|t| t.kind == kind && t.weight >= MEMBER_WEIGHT).collect();
+        mine.sort_by(|a, b| b.weight.cmp(&a.weight));
+        out.extend(mine.into_iter().take(MEMBER_TOP).map(|t| (t.name.clone(), kind, t.weight)));
+    }
+    out
+}
+
+/// Every genre, style and scene the library's artists belong to, biggest
+/// first (artists without tags yet aren't counted; Settings tags them).
+#[tauri::command]
+pub fn wrapped_genres(app: AppHandle) -> Vec<GenreRow> {
+    let library = app.state::<crate::wrapped::LibraryCopy>().artists(&app);
+    let tags = app.state::<Tags>();
+    let mut rows: HashMap<String, GenreRow> = HashMap::new();
+    tags.with_store(&app, |s| {
+        for artist in &library {
+            let Some(have) = s.artists.get(&key_of(&artist.name)) else { continue };
+            for (name, kind, _) in memberships(&have.tags) {
+                let row = rows.entry(format!("{name}\u{0}{kind:?}")).or_insert_with(|| GenreRow { name: name.clone(), kind, artists: 0, image_key: None, examples: Vec::new() });
+                row.artists += 1;
+                if row.image_key.is_none() {
+                    row.image_key = artist.image_key.clone();
+                }
+                if row.examples.len() < 3 {
+                    row.examples.push(artist.name.clone());
+                }
+            }
+        }
+    });
+    let mut rows: Vec<GenreRow> = rows.into_values().filter(|r| r.artists >= 2).collect();
+    rows.sort_by(|a, b| b.artists.cmp(&a.artists).then_with(|| a.name.cmp(&b.name)));
+    rows
+}
+
+/// The library's artists of one tag, the tag's weight on them first.
+#[tauri::command]
+pub fn wrapped_genre_artists(app: AppHandle, name: String) -> Vec<GenreArtist> {
+    let want = key_of(&name);
+    let library = app.state::<crate::wrapped::LibraryCopy>().artists(&app);
+    let tags = app.state::<Tags>();
+    let mut out: Vec<GenreArtist> = tags.with_store(&app, |s| {
+        library
+            .iter()
+            .filter_map(|artist| {
+                let have = s.artists.get(&key_of(&artist.name))?;
+                let weight = memberships(&have.tags).into_iter().find(|(n, _, _)| *n == want).map(|(_, _, w)| w)?;
+                Some(GenreArtist { name: artist.name.clone(), performer_id: artist.performer_id, image_key: artist.image_key.clone(), album_count: artist.album_count, weight })
+            })
+            .collect()
+    });
+    out.sort_by(|a, b| b.weight.cmp(&a.weight).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    out
+}
+
 #[tauri::command]
 pub fn wrapped_tags_count(app: AppHandle) -> usize {
     app.state::<Tags>().count(&app)
@@ -959,6 +1050,14 @@ fn tag_score(q: &SimilarQuery, c: &ArtistTags) -> Option<(f64, Vec<String>)> {
 }
 
 fn rank_similar(app: &AppHandle, q: &SimilarQuery) -> Vec<SimilarRow> {
+    let mut rows = rank_similar_all(app, q);
+    // (the ban list stays out of the radio too)
+    let down = crate::discover::turned_down(app);
+    rows.retain(|r| !down.contains(&r.name.to_lowercase()));
+    rows
+}
+
+fn rank_similar_all(app: &AppHandle, q: &SimilarQuery) -> Vec<SimilarRow> {
     let tags = app.state::<Tags>();
     let history: HashMap<String, HistoryArtist> = known_artists(app).into_iter().map(|a| (key_of(&a.name), a)).collect();
     let in_library = app.state::<LibraryCopy>().names(app);

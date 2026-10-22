@@ -466,15 +466,24 @@ pub async fn library_album_add_for(app: AppHandle, handle: String) -> Result<Art
 /// Plays one album track (by its handle) on the zone right now. Used for the
 /// tracks of a release that Roon's browse pages leave out.
 #[tauri::command]
-pub async fn library_play_track(app: AppHandle, zone_id: String, handle: String) -> Result<(), String> {
+pub async fn library_play_track(app: AppHandle, zone_id: String, handle: String, how: Option<roon_library::PlayHow>) -> Result<(), String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
-    client.play_track(&zone_id, &handle).await.map_err(describe)
+    client.play_track_how(&zone_id, &handle, how.unwrap_or_default()).await.map_err(describe)
 }
 
 // --- Wrapped pages ---
 
 /// An album by the Core's album id, as a card with a session handle.
+/// A track by the Core's track id: its handle for this session (the
+/// Tracks page keeps ids only).
+#[tauri::command]
+pub async fn library_track_handle(app: AppHandle, track_id: u64) -> Result<String, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.track_by_id(track_id).await.map_err(describe)
+}
+
 #[tauri::command]
 pub async fn library_album_by_id(app: AppHandle, album_id: u64) -> Result<AlbumCard, String> {
     let library = app.state::<Library>();
@@ -658,6 +667,72 @@ pub async fn library_play_playlist(app: AppHandle, zone_id: String, handle: Stri
     Ok(())
 }
 
+/// A playlist's songs, in order (the playlist page).
+#[tauri::command]
+pub async fn library_playlist_tracks(app: AppHandle, handle: String) -> Result<Vec<roon_library::PlaylistEntry>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.playlist_tracks(&handle).await.map_err(describe)
+}
+
+/// Plays a playlist from one of its songs (`item`, a PlaylistEntry's item
+/// handle) on.
+#[tauri::command]
+pub async fn library_play_playlist_from(app: AppHandle, zone_id: String, handle: String, item: Option<String>) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.play_playlist_from(&zone_id, &handle, item.as_deref()).await.map_err(describe)
+}
+
+/// Takes songs out of a playlist; the songs left, read again.
+#[tauri::command]
+pub async fn library_playlist_remove(app: AppHandle, handle: String, items: Vec<String>) -> Result<Vec<roon_library::PlaylistEntry>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.remove_playlist_items(&handle, &items).await.map_err(describe)?;
+    // (no answer comes: read it again until they're gone, a few seconds at most)
+    for _ in 0..10 {
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        let left = client.playlist_tracks(&handle).await.map_err(describe)?;
+        if !left.iter().any(|e| items.contains(&e.item_handle)) {
+            return Ok(left);
+        }
+    }
+    Err("Roon didn't take the songs out.".into())
+}
+
+/// The profile's tags.
+#[tauri::command]
+pub async fn library_tags(app: AppHandle) -> Result<Vec<roon_library::TagCard>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.tags().await.map_err(describe)
+}
+
+/// What a tag holds.
+#[tauri::command]
+pub async fn library_tag_contents(app: AppHandle, handle: String) -> Result<roon_library::TagContents, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.tag_contents(&handle).await.map_err(describe)
+}
+
+/// Listen Later, newest first.
+#[tauri::command]
+pub async fn library_listen_later(app: AppHandle) -> Result<Vec<roon_library::ListenLaterEntry>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.listen_later().await.map_err(describe)
+}
+
+/// Takes an album, artist or song out of Listen Later.
+#[tauri::command]
+pub async fn library_listen_later_remove(app: AppHandle, kind: String, handle: String) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.listen_later_remove(&kind, &handle).await.map_err(describe)
+}
+
 /// Plays the zone's queue from one of its items, a played one included
 /// (the Core's item id, from `library_queue_songs`).
 #[tauri::command]
@@ -723,10 +798,10 @@ pub async fn library_play_artist_mix(app: AppHandle, zone_id: String, artists: V
 
 /// Plays an album (by handle) on the zone right now.
 #[tauri::command]
-pub async fn library_play_album(app: AppHandle, zone_id: String, handle: String) -> Result<(), String> {
+pub async fn library_play_album(app: AppHandle, zone_id: String, handle: String, how: Option<roon_library::PlayHow>) -> Result<(), String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
-    client.play_album(&zone_id, &handle).await.map_err(describe)
+    client.play_album_how(&zone_id, &handle, how.unwrap_or_default()).await.map_err(describe)
 }
 
 fn add_mode(app: &AppHandle) -> AddMode {
