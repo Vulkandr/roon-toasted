@@ -237,7 +237,10 @@ function render(payload) {
 
   previousBtn.disabled = !zone?.canPrevious;
   nextBtn.disabled = !zone?.canNext;
-  playPauseBtn.disabled = !zone || (!zone.canPlay && !zone.canPause);
+  // (after a PC restart Roon can report a loaded zone as stopped with play
+  // "not allowed", though play works, as Dialed Up's key shows: with
+  // something loaded the button stays live)
+  playPauseBtn.disabled = !zone || (!zone.canPlay && !zone.canPause && !np && !next);
   playPauseBtn.classList.toggle("playing", zone?.state === "playing");
   queuePanel.classList.toggle("paused", zone?.state !== "playing");
   shuffleBtn.disabled = !zone;
@@ -393,7 +396,14 @@ listen("wrapper-parked", () => {
 // Play or pause outright (not "playpause"): a stopped zone, with its
 // output just back, starts with Play
 playPauseBtn.addEventListener("click", () => {
-  if (zone) send("roon_control", { zoneId: zone.zoneId, action: zone.state === "playing" ? "pause" : "play" });
+  if (!zone) return;
+  // (Roon saying neither play nor pause is allowed: playpause, as Dialed
+  // Up's key sends, which Roon takes as play on a stopped zone)
+  const action = zone.state === "playing" ? "pause" : zone.canPlay ? "play" : "playpause";
+  invoke("roon_control", { zoneId: zone.zoneId, action }).catch((err) => {
+    console.warn("roon_control", action, err);
+    if (!wrapped.hidden) wrappedToast(`Roon didn't start playing: ${err}`);
+  });
 });
 previousBtn.addEventListener("click", () => {
   if (zone) send("roon_control", { zoneId: zone.zoneId, action: "previous" });
