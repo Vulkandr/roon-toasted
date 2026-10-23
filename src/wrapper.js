@@ -7061,8 +7061,11 @@ WRAPPED_PAGES.history = async function (entry) {
   reload.addEventListener("click", () => sync(false));
   const tabsRow = document.createElement("div");
   tabsRow.className = "wrapped-tabs-row";
-  tabsRow.append(tabs, reload);
-  wrappedBody.append(tabsRow, progress, holder);
+  // (the read's progress sits in the row, left of the button, so the list
+  // doesn't move down while it runs)
+  progress.classList.add("wrapped-history-progress");
+  tabsRow.append(tabs, progress, reload);
+  wrappedBody.append(tabsRow, holder);
   // Progress of a sync (started here or elsewhere), while this page shows
   const unlisten = await listen("wrapped-history", (event) => {
     if (ticket !== wrappedTicket) return unlisten();
@@ -8309,9 +8312,10 @@ WRAPPED_PAGES.settings = async function () {
     } else historyText.textContent = p.wanted ? `Reading: ${n(p.loaded)} of ${n(p.wanted)} plays...` : "Checking Roon for new plays...";
   });
   // Your Last.fm account: its scrobbles reach back before Roon's history
-  const userBox = document.createElement("div");
+  // (folded to its title until opened)
+  const userBox = document.createElement("details");
   userBox.className = "settings-card-sub";
-  const userTitle = document.createElement("div");
+  const userTitle = document.createElement("summary");
   userTitle.className = "settings-card-row-name";
   userTitle.textContent = "Last.fm username (optional)";
   const userNote = statusLine("If you scrobble to Last.fm, your plays from before Roon's history count too (Home, History's tops). Read once, then new ones daily.");

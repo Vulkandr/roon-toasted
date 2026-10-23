@@ -6342,3 +6342,57 @@ body > .wrapped-toast {
 .settings-start .wrapped-play {
   padding: 0 18px;
 }
+
+/* History: a read's progress in the tabs row, left of Check for new plays */
+.wrapped-tabs-row .wrapped-history-progress {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.wrapped-history-progress .wrapped-note {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wrapped-history-progress + .reload {
+  margin-left: 0;
+}
+
+/* Your music's Last.fm username folds to its title */
+details.settings-card-sub > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  list-style: none;
+}
+
+details.settings-card-sub > summary::-webkit-details-marker {
+  display: none;
+}
+
+details.settings-card-sub > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+details.settings-card-sub[open] > summary::before {
+  transform: rotate(45deg);
+}
+
+details.settings-card-sub > summary:hover {
+  color: var(--accent);
+}
+
+details.settings-card-sub:not([open]) {
+  padding-bottom: 2px;
+}
