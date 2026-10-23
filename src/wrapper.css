@@ -6396,3 +6396,10 @@ details.settings-card-sub > summary:hover {
 details.settings-card-sub:not([open]) {
   padding-bottom: 2px;
 }
+
+/* A card that's only a title and its button (Toasted's settings) */
+.settings-card.single {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+}

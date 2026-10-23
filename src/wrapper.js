@@ -8487,8 +8487,10 @@ WRAPPED_PAGES.settings = async function () {
   sizeCard.append(sizeRow);
 
   // Toasted's own settings, last
+  // (one line: its title and Open)
   const toastedCard = card("Toasted's settings");
-  cardRow(toastedCard, "Roon Core, Toaster, hotkeys, toasts and the Wrapper", statusLine("In the app's own Settings window"), button("Open", () => send("open_window", { window: "settings" })));
+  toastedCard.classList.add("single");
+  toastedCard.append(button("Open", () => send("open_window", { window: "settings" })));
 };
 
 WRAPPED_PAGES.genre = async function (entry) {
