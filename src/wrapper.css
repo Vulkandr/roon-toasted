@@ -353,6 +353,13 @@ button:disabled {
   inset: 0;
 }
 
+/* While editing, the layout's frame shows when it's not the whole player
+   (its shape kept, space at the sides or top and bottom) */
+.stage-editing .stage-canvas.framed {
+  outline: 1px dashed rgba(255, 255, 255, 0.35);
+  outline-offset: -1px;
+}
+
 .piece {
   position: absolute;
   z-index: 2;
@@ -2383,7 +2390,7 @@ html.invert-colors {
 .wrapped-side {
   position: absolute;
   bottom: 109px;
-  z-index: 4;
+  z-index: 3; /* under Now Playing (the stage, 4) */
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -2515,6 +2522,35 @@ html.invert-colors {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+/* Emoji in one color, the button's: the outline versions when the system
+   has them (Segoe UI Symbol, as Roon's sidebar shows them), and in any
+   case drawn as their shape in the text color (the glyph itself
+   transparent, its shadow in the color), so no colors of their own go
+   through the sidebar's color filter */
+.mono-emoji {
+  font-family: "Segoe UI Symbol", "Noto Sans Symbols 2", "Noto Sans Symbols", sans-serif;
+  font-variant-emoji: text;
+  font-weight: 400;
+  margin-right: 1px;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 0 currentColor;
+}
+
+/* (Wrapped's own lists' emoji: line icons in the text's color) */
+.mono-emoji.icon {
+  display: inline-block;
+  margin-right: 5px;
+  vertical-align: -0.15em;
+  -webkit-text-fill-color: currentColor;
+  text-shadow: none;
+}
+
+.wrapped-side .wrapped-side-btn span.mono-emoji svg {
+  width: 1.05em;
+  height: 1.05em;
+  color: inherit;
 }
 
 .wrapped-side-list {
@@ -2685,6 +2721,155 @@ html.invert-colors {
 /* A song's whole row opens its menu (wrapper.js wholeRowOpens) */
 .wrapped-track.clickable {
   cursor: pointer;
+}
+
+/* Fine Tuning's tier strip: three parts, the on ones lit */
+.tier-strip {
+  display: flex;
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.tier-seg {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 7px 10px;
+  border-right: 1px solid var(--border);
+  text-align: left;
+  color: var(--muted);
+}
+
+.tier-seg:last-child {
+  border-right: 0;
+}
+
+.tier-seg.on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--text);
+}
+
+.tier-seg:not(.fixed):hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.tier-seg.fixed {
+  cursor: default;
+}
+
+.tier-seg-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.tier-seg-title::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1px solid var(--muted);
+}
+
+.tier-seg.on .tier-seg-title::before {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.tier-seg-words {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tier-seg.unready .tier-seg-words {
+  font-style: italic;
+}
+
+/* Tier 3's music folder */
+.music-folder {
+  margin-top: 12px;
+}
+
+.music-folder-row {
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.music-folder-path {
+  display: block;
+  margin-top: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Shuffle library: the button, "Skip played", and how it's going */
+.wrapped-shuffle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.wrapped-shuffle-btn {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.wrapped-shuffle-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wrapped-shuffle-btn.on {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.wrapped-shuffle-skip {
+  flex: none;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.wrapped-shuffle-select {
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.wrapped-shuffle-note {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 12px;
 }
 
 /* The Tracks page's hearts-only switch */
@@ -3124,6 +3309,60 @@ html.invert-colors {
 .wrapped-ban-when {
   color: var(--muted);
   font-size: 12px;
+}
+
+/* An explainer on hover (wrapper.js hoverTip): after half a second, gone
+   the moment the mouse leaves */
+.has-tip {
+  position: relative;
+}
+
+.hover-tip {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 6;
+  width: max-content;
+  max-width: 420px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: normal;
+  line-height: 1.4;
+  text-transform: none;
+  white-space: normal;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: none;
+}
+
+.has-tip:hover > .hover-tip {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 0.12s 0.5s, visibility 0s 0.5s;
+}
+
+/* Home's Refresh, top right (its tip opens to the left) */
+.wrapped-home {
+  position: relative;
+}
+
+.wrapped-home-corner {
+  position: absolute;
+  top: 0;
+  right: 0;
+  z-index: 2;
+}
+
+.wrapped-home-corner .hover-tip {
+  left: auto;
+  right: 0;
 }
 
 .wrapped-home-foot {
@@ -4089,17 +4328,45 @@ body > .wrapped-toast {
 /* ----- Discover: the weekly playlists (discover.rs) -----
    Two columns (one when narrow): last weeks' copies small on top, this
    week's large, Build now under it */
+/* The two lists side by side, part by part: each column spans five rows
+   of the page's grid (subgrid), so the cards, buttons and Fine Tuning
+   boxes line up and match in height */
 .discover-lists {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
-  gap: 28px;
-  align-items: start;
+  column-gap: 28px;
+  row-gap: 12px;
 }
 
 .discover-column {
+  display: grid;
+  grid-row: span 5;
+  grid-template-rows: subgrid;
+  row-gap: 12px;
+}
+
+.discover-column > .discover-card.large,
+.discover-column > .discover-ask {
+  height: 100%;
+  box-sizing: border-box;
+  align-content: start;
+}
+
+.discover-column > .discover-ask {
+  margin-top: 0;
+}
+
+/* an empty row stays in the grid at no height, so both columns keep
+   the same five rows */
+.discover-old:empty {
+  height: 0;
+}
+
+.discover-actions {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  align-items: flex-start;
+  gap: 8px;
 }
 
 .discover-head h3 {
@@ -5283,6 +5550,44 @@ body > .wrapped-toast {
   width: fit-content;
 }
 
+.dive-ask-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.dive-ask-buttons .wrapped-play {
+  margin-right: 0;
+}
+
+.dive-ask-buttons[hidden] {
+  display: none;
+}
+
+/* Deeper Dive: beside Make the playlist, the same size, outlined */
+.wrapped-button.dive-deeper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px 0 12px;
+  height: 36px;
+  border-radius: 999px;
+  border-color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.wrapped-button.dive-deeper svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+.wrapped-button.dive-deeper:disabled {
+  opacity: 0.5;
+}
+
 .dive-go[hidden] {
   display: none;
 }
@@ -5679,4 +5984,361 @@ body > .wrapped-toast {
   .sound-check-group.picks .sound-check-row .sound-check-source {
     grid-column: auto;
   }
+}
+
+/* Deep Dive's History: the button beside "Your picks", and its dropdown of
+   past picks, newest first (Wrapped's card colors, not the accent menu) */
+.dive-picks-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.wrapped-button.dive-past {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 8px 0 12px;
+  font-size: 12px;
+}
+
+.wrapped-button.dive-past svg {
+  width: 14px;
+  height: 14px;
+}
+
+.wrapped-button.dive-past:disabled {
+  opacity: 0.5;
+}
+
+.wrapped-popmenu.dive-past-menu {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 320px;
+  max-height: 420px;
+  overflow-y: auto;
+  padding: 6px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+}
+
+.dive-past-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px;
+  border-radius: 8px;
+  color: inherit;
+  text-align: left;
+}
+
+.dive-past-item:not(:disabled):hover,
+.dive-past-item:focus-visible {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  outline: none;
+}
+
+.dive-past-item.picked {
+  opacity: 0.5;
+}
+
+.dive-past-item .wrapped-art {
+  width: 40px;
+  height: 40px;
+  flex: none;
+}
+
+.dive-past-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.dive-past-title,
+.dive-past-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dive-past-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.dive-past-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dive-past-clear {
+  align-self: flex-end;
+  margin-top: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dive-past-clear:hover {
+  color: var(--text);
+}
+
+/* Deep Dive's builder: one card holding the picks, the words, Songs from
+   and the buttons (Songs from on the left of the footer, the buttons on
+   the right; Smart Radio / Make the playlist keeps one width) */
+.dive-builder {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 900px;
+  margin-bottom: 22px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--card);
+}
+
+.dive-builder .dive-picks,
+.dive-builder .dive-ask {
+  margin-bottom: 0;
+}
+
+.dive-builder .dive-input {
+  max-width: none;
+}
+
+.dive-builder .dive-pick {
+  background: transparent;
+}
+
+.dive-builder .dive-pick .wrapped-art.small {
+  width: 56px;
+  height: 56px;
+}
+
+.dive-builder .dive-add {
+  width: 56px;
+  height: 56px;
+}
+
+.dive-ask-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dive-ask-foot .dive-ask-buttons {
+  margin-left: auto;
+}
+
+.dive-ask-buttons .wrapped-play.dive-go {
+  justify-content: center;
+  min-width: 184px;
+}
+
+/* Made so far: the playlist's cover and a round play button */
+.dive-made-art.small {
+  flex: none;
+  width: 44px;
+  height: 44px;
+}
+
+.dive-made-play {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+}
+
+.dive-made-play:hover {
+  filter: brightness(1.1);
+}
+
+.dive-made-play svg {
+  width: 15px;
+  height: 15px;
+  margin-left: 2px;
+}
+
+.dive-made-top {
+  padding-left: 8px;
+}
+
+/* History's recent plays: Tracks' columns, then the heart (a gap when the
+   song isn't in the library), how much was heard and when; the headings
+   only name the columns */
+.wrapped-history-heart-gap {
+  flex: none;
+  width: 34px;
+}
+
+.wrapped-history-heard,
+.wrapped-history-played {
+  flex: none;
+  padding: 0 8px;
+  text-align: right;
+  white-space: nowrap;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.wrapped-history-heard {
+  width: 96px;
+}
+
+.wrapped-history-played {
+  width: 104px;
+}
+
+.wrapped-col-head {
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  border-left: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.wrapped-col-head.wrapped-track-title {
+  border-left-color: transparent;
+}
+
+.wrapped-col-head.wrapped-history-heard,
+.wrapped-col-head.wrapped-history-played {
+  justify-content: flex-end;
+}
+
+/* Played: the one heading that sorts (newest or oldest first) */
+.wrapped-col-sort {
+  gap: 4px;
+  cursor: pointer;
+}
+
+.wrapped-col-sort:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.wrapped-col-dir {
+  color: var(--accent);
+  font-size: 13px;
+}
+
+/* Wrapped's Settings, left column: cards like the tiers' on the right,
+   each a title, a line about it, and rows of a name and status with the
+   control on the right */
+.settings-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 640px;
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+
+.settings-card > .wrapped-setting-text {
+  margin: -6px 0 0;
+}
+
+.settings-card-title {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.settings-card-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.settings-card-row-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.settings-card-row-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-card-status {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-card .wrapped-tabs {
+  width: fit-content;
+  margin: 0;
+}
+
+/* Wrapped Discovery's On, glowing while a tier is working */
+.wrapped-tab.selected.glow {
+  color: var(--accent);
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
+    0 0 12px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+/* Your music's Last.fm username, under the history it adds to */
+.settings-card-sub {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0 0 14px;
+  border-left: 2px solid var(--border);
+}
+
+.settings-card-sub .wrapped-search {
+  max-width: 260px;
+}
+
+/* Start here: over both columns on a fresh setup */
+.settings-start {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 24px;
+  max-width: 1328px;
+  margin: 0 auto 20px;
+  padding: 16px 18px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--border));
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--card));
+}
+
+.settings-start[hidden] {
+  display: none;
+}
+
+.settings-start-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 760px;
+}
+
+.settings-start .wrapped-play {
+  padding: 0 18px;
 }

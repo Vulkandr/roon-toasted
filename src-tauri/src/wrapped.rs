@@ -154,12 +154,19 @@ pub struct WrappedSettings {
     /// The user's Last.fm username, optional: their scrobbles fill in the
     /// listening from before Roon's history (scrobbles.rs).
     pub lastfm_user: String,
+    /// Tier 3's own folder of music files (sound.rs "Manually choose music
+    /// folder"), for songs Roon can't hand over; empty for none.
+    pub music_folder: String,
     pub similar_by: SimilarBy,
     pub similar_scope: SimilarScope,
     /// Wrapped Discovery (discover.rs): the weekly lists, ratings, the
     /// player's "Suggested because", and the zone watching behind them.
     /// Off, none of it shows or runs; what it kept stays on disk.
     pub discovery: bool,
+    /// Fine Tuning's tier switches for Discover Weekly: tier 2 (the
+    /// language model) and tier 3 (sound) used when set up.
+    pub weekly_tier2: bool,
+    pub weekly_tier3: bool,
     /// Tier 2, the language model (judge.rs): which service, its key (or
     /// Ollama's address), the model name (empty: the service's default),
     /// and how much say it gets ("light": keep or drop, pick the song;
@@ -179,6 +186,10 @@ pub struct WrappedSettings {
     /// more per playlist, so a bigger model pays off there. Empty: the
     /// model above.
     pub dive_model: String,
+    /// How big Wrapped's pages are (the top bar, side menu and player stay
+    /// Roon's size): a percent ("90", "100", "110", "125", "150") or "auto",
+    /// scaled with the window's width.
+    pub page_size: String,
 }
 
 impl Default for WrappedSettings {
@@ -186,9 +197,12 @@ impl Default for WrappedSettings {
         WrappedSettings {
             lastfm_key: String::new(),
             lastfm_user: String::new(),
+            music_folder: String::new(),
             similar_by: SimilarBy::default(),
             similar_scope: SimilarScope::default(),
             discovery: true,
+            weekly_tier2: true,
+            weekly_tier3: true,
             llm_provider: "anthropic".into(),
             llm_key: String::new(),
             llm_model: String::new(),
@@ -197,6 +211,7 @@ impl Default for WrappedSettings {
             discogs_token: String::new(),
             ollama_manual: false,
             dive_model: String::new(),
+            page_size: "100".into(),
         }
     }
 }
@@ -429,11 +444,64 @@ pub async fn history_catch_up(app: &AppHandle) -> Result<usize, String> {
 
 /// The newest plays in the copy, `limit` from `offset`.
 #[tauri::command]
-pub fn wrapped_history_recent(app: AppHandle, limit: Option<usize>, offset: Option<usize>) -> Vec<Play> {
-    let wrapped = app.state::<Wrapped>();
-    wrapped.ensure_loaded(&app);
-    let store = wrapped.store.lock().unwrap();
-    store.plays.iter().skip(offset.unwrap_or(0)).take(limit.unwrap_or(200)).cloned().collect()
+pub fn wrapped_history_recent(app: AppHandle, limit: Option<usize>, offset: Option<usize>, oldest: Option<bool>) -> Vec<PlayRow> {
+    let plays: Vec<Play> = {
+        let wrapped = app.state::<Wrapped>();
+        wrapped.ensure_loaded(&app);
+        let store = wrapped.store.lock().unwrap();
+        let (skip, take) = (offset.unwrap_or(0), limit.unwrap_or(200));
+        // (newest first as kept; `oldest`: from the other end)
+        if oldest.unwrap_or(false) {
+            store.plays.iter().rev().skip(skip).take(take).cloned().collect()
+        } else {
+            store.plays.iter().skip(skip).take(take).cloned().collect()
+        }
+    };
+    // Each play's song in the library copy, for its heart: by the Core's
+    // track id, else by artist, title and album
+    let tracks = app.state::<LibraryCopy>().tracks(&app);
+    let by_id: HashMap<u64, &LibraryTrack> = tracks.iter().filter_map(|t| t.track_id.map(|id| (id, t))).collect();
+    let key = |artist: &str, title: &str, album: &str| (artist.to_lowercase(), title.to_lowercase(), album.to_lowercase());
+    let by_name: HashMap<(String, String, String), &LibraryTrack> = tracks.iter().map(|t| (key(&t.artist, &t.title, &t.album), t)).collect();
+    plays
+        .into_iter()
+        .map(|play| {
+            let found = play.track_id.and_then(|id| by_id.get(&id)).or_else(|| by_name.get(&key(&play.artist, &play.title, &play.album))).copied();
+            PlayRow { library_track_id: found.and_then(|t| t.track_id), favorite: found.is_some_and(|t| t.favorite), in_library: found.is_some(), play }
+        })
+        .collect()
+}
+
+/// A play as the History page shows it: with its song's heart, when the
+/// song is in the library (and the library copy's id for it).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayRow {
+    #[serde(flatten)]
+    pub play: Play,
+    pub in_library: bool,
+    pub favorite: bool,
+    pub library_track_id: Option<u64>,
+}
+
+/// A heart changed on a song (Tracks, History): the library copy follows,
+/// so the pages show it until the next read from Roon.
+#[tauri::command]
+pub fn wrapped_library_favorite(app: AppHandle, track_id: u64, favorite: bool) {
+    let copy = app.state::<LibraryCopy>();
+    let changed = copy.with_store(&app, |s| {
+        let mut changed = false;
+        for t in s.tracks.iter_mut().filter(|t| t.track_id == Some(track_id)) {
+            changed |= t.favorite != favorite;
+            t.favorite = favorite;
+        }
+        changed
+    });
+    if changed {
+        if let Some(path) = LibraryCopy::path(&app) {
+            copy.with_store(&app, |s| write_json(&path, s));
+        }
+    }
 }
 
 /// The most played artists, albums or tracks over the last `days` (all of

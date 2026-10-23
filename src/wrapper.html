@@ -247,6 +247,10 @@
                 <button class="chip" data-bg="art">Album art</button>
                 <label class="editor-check" title="Use these fonts, icons and bar styles in the player bar too, when Now Playing is closed"><input id="editor-barstyle" type="checkbox" /> Style player bar</label>
                 <label class="editor-check" title="What's white takes the app's or album's color, and what has that color turns white (the title, the play button, buttons that are on)"><input id="editor-invert" type="checkbox" /> Invert colors</label>
+                <!-- shown when the layout's shape isn't the window's (the
+                     dashed frame): makes it the window's shape -->
+                <label class="editor-check" title="On: the layout keeps the shape it was made in, as big as fits, with space added at the sides (or top and bottom) when the window is another shape. Off: the pieces spread over the whole window, whatever its shape."><input id="editor-keepshape" type="checkbox" checked /> Keep shape</label>
+                <button id="editor-shape-fit" class="editor-btn" title="The layout keeps the shape it was made in, with space added at the sides (or top and bottom) when the window is another shape. This gives it this window's shape instead; the pieces stretch to fill it." hidden>Fit to this window</button>
               </div>
             </div>
             <div class="editor-row editor-piece">

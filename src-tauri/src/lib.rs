@@ -31,6 +31,8 @@ mod skin;
 mod sound;
 mod home;
 mod scrobbles;
+mod shuffle;
+mod musicfolder;
 mod status;
 mod toast;
 mod tray;
@@ -675,6 +677,7 @@ pub fn run() {
             wrapped::wrapped_library_artists,
             wrapped::wrapped_library_albums,
             wrapped::wrapped_library_tracks,
+            wrapped::wrapped_library_favorite,
             tags::wrapped_genres,
             tags::wrapped_genre_artists,
             library::library_track_handle,
@@ -703,6 +706,14 @@ pub fn run() {
             sound::sound_cancel,
             sound::sound_check,
             home::wrapped_home,
+            home::wrapped_home_memories,
+            shuffle::wrapped_shuffle_start,
+            shuffle::wrapped_shuffle_stop,
+            shuffle::wrapped_shuffle_status,
+            musicfolder::wrapped_music_folder_pick,
+            musicfolder::wrapped_music_folder_clear,
+            musicfolder::wrapped_music_folder_rescan,
+            musicfolder::wrapped_music_folder_status,
             scrobbles::wrapped_scrobbles_status,
             scrobbles::wrapped_scrobbles_sync,
             discover::wrapped_ban_list,

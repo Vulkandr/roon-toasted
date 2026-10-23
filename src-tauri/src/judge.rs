@@ -196,6 +196,10 @@ pub struct CandidateBrief {
     pub lastfm_bio: String,
     pub wikipedia: String,
     pub albums: Vec<AlbumBrief>,
+    /// Tier 3's hearing of the songs to choose from against the seed's own
+    /// played songs ("Title: 0.88 (Black Metal, Viking Metal)"), when it
+    /// listened.
+    pub sound: Vec<String>,
 }
 
 /// An album's brief: Roon's review, Last.fm's tags, and the outside texts
@@ -227,7 +231,7 @@ pub async fn candidate_brief(app: &AppHandle, client: &LibraryClient, key: &str,
             }
         }
     }
-    CandidateBrief { name: name.to_string(), tags: tags.cached(app, name).map(|t| t.tags).unwrap_or_default(), bio, lastfm_bio: texts.lastfm, wikipedia: texts.wikipedia, albums }
+    CandidateBrief { name: name.to_string(), tags: tags.cached(app, name).map(|t| t.tags).unwrap_or_default(), bio, lastfm_bio: texts.lastfm, wikipedia: texts.wikipedia, albums, sound: Vec::new() }
 }
 
 fn clip(text: &str, chars: usize) -> String {
@@ -246,11 +250,11 @@ fn tag_line(tags: &[Tag], n: usize) -> String {
     tags.iter().take(n).map(|t| format!("{} {}", t.name, t.weight)).collect::<Vec<_>>().join(", ")
 }
 
-const SYSTEM: &str = "You help build one listener's weekly discovery playlist. You get one artist they played (the seed), described by the albums they actually played, and one candidate artist found through listeners the two share. Decide whether the candidate, introduced by one of the listed songs, fits someone who played those seed albums. Sometimes the listener asked for something instead (WHAT THEY ASKED FOR): an aspect of a song they name (its guitars, vocals, rhythm, mood, production, or all of it), or a sound in their own words; then judge the candidate against that request, and the seed albums, when given, are that song's album. When other requests of theirs are listed, a pick that goes against one is less likely to be enjoyed. Judge the sound and era of what they played, not the band's name or fame. Shared listeners are only how the candidate was found, not evidence: bands that shared radio playlists, tours, labels or an era often share fans without sounding alike (two bands played side by side on the same radio stations can be nothing alike). Broad labels such as rock, hard rock, alternative, metal or extreme metal say nothing on their own: decide by the specifics of the music, its vocals, guitar sound and riffing, rhythm, heaviness, production and mood. 1980s thrash is not a fit for a listener of modern blackened thrash, a band's power metal albums are not a fit for a melodic death metal listener, a band's later polished records are not a fit for someone who plays its raw early ones, and the reverse. Judge the candidate by its listed albums, not its whole career: when any one of them fits the seed albums, the candidate is a fit and the song comes from that album (a band whose early records are power metal still fits a melodic death metal listener through a later album that is melodic death metal); drop it only when none of its listed albums fits. Use the texts and tags given (Roon's reviews, Discogs' per-album styles, Last.fm, Wikipedia), and what you know of the bands. Pick the song whose album is closest to the seed albums' era and sound; avoid intros, interludes, ballads, covers and joke songs unless the seed albums are like that. The why line describes the candidate's sound and what ties it to the seed albums, in at most 140 characters: name only albums listed above (the seed's played albums or the candidate's), never another album; no filler such as \"a good next step\", \"for your playlist\" or \"your current rotation\"; no greeting; do not repeat the band names. First compare the two sounds, then decide. Answer with JSON only, no prose around it: {\"comparison\": \"the best-fitting listed album's sound next to the seed albums' sound, in those specific terms, at most 220 characters\", \"fit\": true or false, \"confidence\": a number from 0 to 1, how likely this listener enjoys the song (low when it isn't a fit), \"song\": \"a title exactly as listed, or null\", \"why\": \"the line\", \"note\": \"when not a fit, why not, at most 100 characters\"}";
+const SYSTEM: &str = "You help build one listener's weekly discovery playlist. You get one artist they played (the seed), described by the albums they actually played, and one candidate artist found through listeners the two share. Decide whether the candidate, introduced by one of the listed songs, fits someone who played those seed albums. Sometimes the listener asked for something instead (WHAT THEY ASKED FOR): an aspect of a song they name (its guitars, vocals, rhythm, mood, production, or all of it), or a sound in their own words; then judge the candidate against that request, and the seed albums, when given, are that song's album. When other requests of theirs are listed, a pick that goes against one is less likely to be enjoyed. Judge the sound and era of what they played, not the band's name or fame. Shared listeners are only how the candidate was found, not evidence: bands that shared radio playlists, tours, labels or an era often share fans without sounding alike (two bands played side by side on the same radio stations can be nothing alike). Broad labels such as rock, hard rock, alternative, metal or extreme metal say nothing on their own: decide by the specifics of the music, its vocals, guitar sound and riffing, rhythm, heaviness, production and mood. 1980s thrash is not a fit for a listener of modern blackened thrash, a band's power metal albums are not a fit for a melodic death metal listener, a band's later polished records are not a fit for someone who plays its raw early ones, and the reverse. Judge the candidate by its listed albums, not its whole career: when any one of them fits the seed albums, the candidate is a fit and the song comes from that album (a band whose early records are power metal still fits a melodic death metal listener through a later album that is melodic death metal); drop it only when none of its listed albums fits. Use the texts and tags given (Roon's reviews, Discogs' per-album styles, Last.fm, Wikipedia), and what you know of the bands. When SOUND is given, it is a model that listened to the actual audio of the candidate's songs and of the seed songs the listener played: weigh it heavily, prefer the closest-sounding song unless it is an intro, interlude or such, and a candidate whose songs all sound far (under 0.6) rarely fits. Pick the song whose album is closest to the seed albums' era and sound; avoid intros, interludes, ballads, covers and joke songs unless the seed albums are like that. The why line describes the candidate's sound and what ties it to the seed albums, in at most 140 characters: name only albums listed above (the seed's played albums or the candidate's), never another album; no filler such as \"a good next step\", \"for your playlist\" or \"your current rotation\"; no greeting; do not repeat the band names. First compare the two sounds, then decide. Answer with JSON only, no prose around it: {\"comparison\": \"the best-fitting listed album's sound next to the seed albums' sound, in those specific terms, at most 220 characters\", \"fit\": true or false, \"confidence\": a number from 0 to 1, how likely this listener enjoys the song (low when it isn't a fit), \"song\": \"a title exactly as listed, or null\", \"why\": \"the line\", \"note\": \"when not a fit, why not, at most 100 characters\"}";
 
 /// Bumped when the instructions change, so cached verdicts from older ones
 /// are judged again.
-const PROMPT_VERSION: u32 = 8;
+const PROMPT_VERSION: u32 = 9;
 
 /// Longest Last.fm or Wikipedia text handed over, in characters.
 const OTHER_CHARS: usize = 500;
@@ -314,6 +318,12 @@ fn user_text(seed: &SeedBrief, cand: &CandidateBrief) -> String {
     bio_lines(&mut out, &cand.bio, &cand.lastfm_bio, &cand.wikipedia, BIO_CHARS);
     for a in &cand.albums {
         album_lines(&mut out, a, "Album");
+    }
+    if !cand.sound.is_empty() {
+        out.push_str(&format!(
+            "SOUND (a model listened to these songs and to the seed songs they played; closeness 1 = alike, about 0.3 = nothing alike; then its strongest styles): {}\n",
+            cand.sound.join(" | ")
+        ));
     }
     if !seed.wishes.is_empty() {
         out.push_str(&format!("\nTHIS WEEK THEY ALSO ASKED FOR: {}\n", seed.wishes.join("; ")));
@@ -599,7 +609,7 @@ pub struct DiveReply {
     pub per_artist: usize,
 }
 
-const DIVE_CHAT: &str = "You help one listener make a playlist from what they picked (songs, albums or artists, described below) and what they asked for. Before it's made, you talk it over with them, the way a friend behind a record store counter would: ask one short question at a time about what would most change which songs belong (which part of the sound matters most, how far from the picks it may stray, an era, the mood, how strict to be). Where the songs come from (their own library, music new to them, or both) is already set on the page (WHERE FROM below): never ask about it, and don't offer to change it. If they ask you something (what you meant, a word, a band), answer briefly and plainly, then carry on with a question if one is still needed. Never ask what they've already told you, and keep it short: three or four questions in all is usually enough. When there's a last try (THE LAST TRY below), they've heard it and will tell you which songs hit the mark and which missed: work out what the hits share (the sound, the era, the pace) and what the misses got wrong, ask only if that's unclear, and put it in the summary, naming the hits and the misses. When you know enough, or they say to go ahead, set done to true and say in a sentence or two what you'll make. With every answer, fill in what's settled so far: summary (everything they want, in plain words, for whoever picks the songs: what to match, what to avoid, how strict), count (how many songs: 30 until they say, 10 to 60), per_artist (songs by any one artist: 1 until they say, at most 3). Answer with JSON only, no prose around it: {\"count\": number, \"done\": true or false, \"per_artist\": number, \"say\": \"what you say to them\", \"summary\": \"...\"}";
+const DIVE_CHAT: &str = "You help one listener make a playlist from what they picked (songs, albums or artists, described below) and what they asked for. Before it's made, you talk it over with them, the way a friend behind a record store counter would: ask one short question at a time about what would most change which songs belong (which part of the sound matters most, how far from the picks it may stray, an era, the mood, how strict to be). Where the songs come from (their own library, music new to them, or both) is already set on the page (WHERE FROM below): never ask about it, and don't offer to change it. If they ask you something (what you meant, a word, a band), answer briefly and plainly, then carry on with a question if one is still needed. Never ask what they've already told you, and ask only what you really need (HOW MANY QUESTIONS below says how many). Talk plainly, for a listener who may not know genre names: describe the music in everyday words (fast or slow, heavy or gentle, screamed or sung, raw or polished, dark or upbeat), and when a genre name helps, say in a few words what it sounds like. If they use genre names themselves, you can too. Keep each message short. When there's a last try (THE LAST TRY below), they've heard it and will tell you which songs hit the mark and which missed: work out what the hits share (the sound, the era, the pace) and what the misses got wrong, ask only if that's unclear, and put it in the summary, naming the hits and the misses. When you know enough, or they say to go ahead, set done to true and say in a sentence or two what you'll make. With every answer, fill in what's settled so far: summary (everything they want, for whoever picks the songs: what to match, what to avoid, how strict; here exact genre and style names help), count (how many songs: 30 until they say, 10 to 60), per_artist (songs by any one artist: 1 until they say, at most 3). Answer with JSON only, no prose around it: {\"count\": number, \"done\": true or false, \"per_artist\": number, \"say\": \"what you say to them\", \"summary\": \"...\"}";
 
 fn dive_chat_shape() -> serde_json::Value {
     serde_json::json!({
@@ -618,16 +628,29 @@ fn dive_chat_shape() -> serde_json::Value {
 /// Tier 2's next turn in the talk before a Deep Dive (`brief`: the picks
 /// and the request; `source` where the songs come from, "library", "new"
 /// or "both", chosen on the page; `talk`: the turns so far, the listener's
-/// marked true).
-pub async fn dive_chat(llm: &Llm, brief: &str, source: &str, talk: &[(bool, String)]) -> Result<DiveReply, String> {
+/// marked true; `mode`: "make" (no questions: settled from their words and
+/// made straight away) or "deeper" (at least one question, at most
+/// DIVE_QUESTIONS)).
+pub async fn dive_chat(llm: &Llm, brief: &str, source: &str, talk: &[(bool, String)], mode: &str) -> Result<DiveReply, String> {
     let mut user = brief.to_string();
     user.push_str(match source {
         "library" => "\nWHERE FROM: their own library only.\n",
         "new" => "\nWHERE FROM: music new to them only (artists they don't know).\n",
         _ => "\nWHERE FROM: their own library and music new to them, both.\n",
     });
+    let asked = talk.iter().filter(|(listener, _)| !listener).count();
+    let make = mode == "make";
+    if make {
+        user.push_str("\nHOW MANY QUESTIONS: none. They chose to have it made straight from their words: don't ask anything, set done to true, fill in summary, count and per_artist from what they asked for, and say in a sentence what you'll make.\n");
+    } else if asked >= DIVE_QUESTIONS {
+        user.push_str(&format!("\nHOW MANY QUESTIONS: you've asked {asked}, all there are: set done to true now and say in a sentence or two what you'll make.\n"));
+    } else {
+        user.push_str(&format!(
+            "\nHOW MANY QUESTIONS: they chose a deeper dive, so ask at least one, then only as many as you need to make what they asked for, {DIVE_QUESTIONS} at most in all (asked so far: {asked}). A request that's already clear needs only one.\n"
+        ));
+    }
     if talk.is_empty() {
-        user.push_str("\nYou haven't said anything yet: open the talk.\n");
+        user.push_str(if make { "\nYou haven't said anything yet.\n" } else { "\nYou haven't said anything yet: open the talk.\n" });
     } else {
         user.push_str("\nTHE TALK SO FAR:\n");
         for (listener, text) in talk {
@@ -636,8 +659,18 @@ pub async fn dive_chat(llm: &Llm, brief: &str, source: &str, talk: &[(bool, Stri
         user.push_str("\nYour turn.\n");
     }
     let text = complete(llm, DIVE_CHAT, &user, Some(&dive_chat_shape())).await?;
-    parse_dive_reply(&text)
+    let mut reply = parse_dive_reply(&text)?;
+    // (the limits hold whatever it answered: made straight away, or made
+    // once the last question is answered)
+    if !reply.done && (make || asked >= DIVE_QUESTIONS) {
+        reply.done = true;
+        reply.say.clear();
+    }
+    Ok(reply)
 }
+
+/// The most questions a Deeper Dive asks.
+pub const DIVE_QUESTIONS: usize = 4;
 
 fn parse_dive_reply(text: &str) -> Result<DiveReply, String> {
     let v = json_in(text)?;

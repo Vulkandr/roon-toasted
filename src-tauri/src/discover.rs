@@ -474,6 +474,8 @@ pub struct DiscoverStatus {
     pub rediscover_requests: Vec<RequestCard>,
     /// Tier 2 is set up (requests need it).
     pub tier2: bool,
+    /// Tier 3 is set up (its models downloaded).
+    pub tier3: bool,
 }
 
 /// The current build's notes: printed, and written to `discover-log.txt`
@@ -1796,6 +1798,165 @@ fn because(found: &Neighbours, views: &[SeedView], from: &[usize]) -> (String, V
 }
 
 #[allow(clippy::too_many_arguments)]
+// ----- Tier 3 in the lists (sound.rs): the seeds heard as you play them,
+// each candidate's songs heard and the closest to its seed kept -----
+
+/// A seed's sound: its songs you played most (this year, else ever).
+const SEED_SONGS: usize = 3;
+/// Under this, none of an artist's songs sound like its seed: the artist
+/// goes to the back of the list (used only when the list is short).
+const SOUND_FAR: f32 = 0.60;
+/// Under this, clearly lowered (after the closer ones).
+const SOUND_MID: f32 = 0.75;
+
+#[derive(Default)]
+struct Hearing {
+    /// Each seed's sound, by its index: its played songs heard together
+    /// (None: none of them could be heard).
+    seeds: HashMap<usize, Option<Vec<f32>>>,
+    /// A song (handle) heard: its closeness to its artist's seed and its
+    /// strongest styles.
+    songs: HashMap<String, (f32, Vec<String>)>,
+    /// Artists (list index) whose songs all sound far from their seed, or
+    /// only middling.
+    far: HashSet<usize>,
+    mid: HashSet<usize>,
+    heard: usize,
+    files: usize,
+    secs: u64,
+    /// Tier 3 failed (not set up after all): not tried again this build.
+    off: bool,
+}
+
+impl Hearing {
+    /// The order bucket of an artist: 0 close (or not heard), 1 middling,
+    /// 2 far.
+    fn bucket(&self, i: usize) -> u8 {
+        if self.far.contains(&i) {
+            2
+        } else if self.mid.contains(&i) {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// Tier 2's SOUND lines for an artist's songs.
+    fn lines(&self, songs: &[roon_library::TopTrack]) -> Vec<String> {
+        songs
+            .iter()
+            .filter_map(|t| {
+                let (close, styles) = self.songs.get(&t.handle)?;
+                Some(format!("{}: {close:.2}{}", t.title, if styles.is_empty() { String::new() } else { format!(" ({})", styles.join(", ")) }))
+            })
+            .collect()
+    }
+}
+
+/// Tier 3 for one batch of the weekly list: the batch's seeds heard (their
+/// songs you played most), every candidate song of each artist heard, the
+/// closest to the artist's seed becomes its pick, and an artist with
+/// nothing close is marked far (or middling). `seed_of[j]`: artist j's seed
+/// (index and name); `first`: the batch's place in the whole list.
+#[allow(clippy::too_many_arguments)]
+async fn hear_batch(
+    app: &AppHandle,
+    client: &LibraryClient,
+    hearing: &mut Hearing,
+    seed_year: &HashMap<String, Vec<(String, u64, u32)>>,
+    seed_ever: &HashMap<String, Vec<(String, u64, u32)>>,
+    seed_of: &[Option<(usize, String)>],
+    names: &[String],
+    batch: &[Vec<roon_library::TopTrack>],
+    first: usize,
+    picks: &mut [Vec<String>],
+) {
+    use crate::sound::{Print, Song, Sound};
+    let sound = app.state::<Sound>();
+    let mut songs: Vec<Song> = Vec::new();
+    // The seeds not heard yet
+    let mut seed_ranges: Vec<(usize, std::ops::Range<usize>)> = Vec::new();
+    for (b, name) in seed_of.iter().flatten() {
+        if hearing.seeds.contains_key(b) || seed_ranges.iter().any(|(x, _)| x == b) {
+            continue;
+        }
+        let k = name.to_lowercase();
+        let list = seed_year.get(&k).filter(|l| !l.is_empty()).or_else(|| seed_ever.get(&k)).cloned().unwrap_or_default();
+        let start = songs.len();
+        for (title, id, _) in list.iter().take(SEED_SONGS) {
+            let handle = client.track_by_id(*id).await.ok();
+            songs.push(Song { artist: name.clone(), title: title.clone(), album: String::new(), handle });
+        }
+        seed_ranges.push((*b, start..songs.len()));
+    }
+    // Every candidate song of the batch's artists
+    let cand_start = songs.len();
+    let mut cand_of: Vec<(usize, String, String)> = Vec::new();
+    for (j, list) in batch.iter().enumerate() {
+        if seed_of.get(j).and_then(|s| s.as_ref()).is_none() || picks.get(j).is_none_or(|p| p.is_empty()) {
+            continue;
+        }
+        for t in list {
+            songs.push(Song { artist: names[j].clone(), title: t.title.clone(), album: t.album.clone(), handle: Some(t.handle.clone()) });
+            cand_of.push((j, t.handle.clone(), t.title.clone()));
+        }
+    }
+    if songs.is_empty() {
+        return;
+    }
+    let started = std::time::Instant::now();
+    let prints: Vec<Option<Print>> = match sound.prints(app, &songs, &|_, _| {}).await {
+        Ok(p) => p,
+        Err(e) => {
+            note(format!("tier 3 skipped: {e}"));
+            hearing.off = true;
+            return;
+        }
+    };
+    hearing.secs += started.elapsed().as_secs();
+    hearing.heard += prints.iter().flatten().count();
+    hearing.files += prints.iter().flatten().filter(|p| crate::sound::own_file(&p.from)).count();
+    let style_names = sound.names(app).unwrap_or_default();
+    for (b, range) in seed_ranges {
+        let heard: Vec<&Print> = prints[range].iter().flatten().collect();
+        let name = seed_of.iter().flatten().find(|(x, _)| *x == b).map(|(_, n)| n.clone()).unwrap_or_default();
+        if heard.is_empty() {
+            note(format!("tier 3: no songs of the seed {name} could be heard"));
+        }
+        hearing.seeds.insert(b, crate::sound::average(&heard));
+    }
+    for j in 0..batch.len() {
+        let Some((b, seed_name)) = seed_of.get(j).and_then(|s| s.as_ref()) else { continue };
+        let Some(Some(seed)) = hearing.seeds.get(b) else { continue };
+        let mut scored: Vec<(f32, String, String)> = Vec::new();
+        for (k, (jj, handle, title)) in cand_of.iter().enumerate() {
+            if *jj != j {
+                continue;
+            }
+            if let Some(p) = &prints[cand_start + k] {
+                let close = crate::sound::dot(&p.artist, seed);
+                hearing.songs.insert(handle.clone(), (close, p.top_styles(&style_names, 3)));
+                scored.push((close, handle.clone(), title.clone()));
+            }
+        }
+        if scored.is_empty() {
+            continue;
+        }
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        note(format!("sound of {} for {seed_name}: {}", names[j], scored.iter().map(|(c, _, t)| format!("{t} {c:.2}")).collect::<Vec<_>>().join(", ")));
+        let (best, handle, title) = scored[0].clone();
+        if picks[j].first() != Some(&handle) {
+            note(format!("tier 3 chose {} - {title} ({best:.2}), the closest to {seed_name}", names[j]));
+            picks[j] = vec![handle];
+        }
+        if best < SOUND_FAR {
+            hearing.far.insert(first + j);
+        } else if best < SOUND_MID {
+            hearing.mid.insert(first + j);
+        }
+    }
+}
+
 async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recently: &HashSet<String>, said: &Feedback, ctx: &Context, requests: &[Request], progress: &impl Fn(String)) -> Result<Picked, String> {
     if key.is_empty() {
         return Err("Discover Weekly needs a Last.fm key (Wrapped's Settings): it finds new artists through Last.fm's listeners.".into());
@@ -1844,6 +2005,18 @@ async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recentl
     // a collaboration of an artist you know ("Neurosis & Jarboe")
     let known = |k: &str| heard.contains_key(k) || library.contains(k);
     let mut llm = crate::judge::Llm::from_settings(&WrappedSettings::load(app));
+    // (Fine Tuning's switches: tier 2 and tier 3 for this list)
+    let switches = WrappedSettings::load(app);
+    if llm.is_some() && !switches.weekly_tier2 {
+        note("tier 2 switched off for Discover Weekly (Fine Tuning)".to_string());
+        llm = None;
+    }
+    let tier3 = crate::sound::Sound::ready(app) && switches.weekly_tier3;
+    if !switches.weekly_tier3 && crate::sound::Sound::ready(app) {
+        note("tier 3 switched off for Discover Weekly (Fine Tuning)".to_string());
+    }
+    let mut hearing = Hearing::default();
+    let (seed_year, seed_ever) = if tier3 { (songs_by_artist(app, ctx, Some(now - 365 * DAY_MS)), songs_by_artist(app, ctx, None)) } else { (HashMap::new(), HashMap::new()) };
     // (Ollama not answering: tier 1's picks as they are, rather than every
     // judgement failing one by one)
     // (Wrapped runs Ollama: started for the build if it isn't running,
@@ -2101,7 +2274,15 @@ async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recentl
                 }
             }
         }
-        let batch_picks = choose_by_album(app, key, &batch, &names[first..], &seed_tags[first..], &seed_eras[first..], tier2, progress).await;
+        let mut batch_picks = choose_by_album(app, key, &batch, &names[first..], &seed_tags[first..], &seed_eras[first..], tier2, progress).await;
+        // Tier 3: every candidate song heard against its seed as you play
+        // it; the closest becomes the pick, and an artist with nothing close
+        // goes to the back
+        if tier3 && !hearing.off {
+            let seed_of: Vec<Option<(usize, String)>> = (first..handles.len()).map(|i| base_of(froms[i]).and_then(|b| found.seeds.get(b).map(|(h, _)| (b, h.name.clone())))).collect();
+            progress("Listening to the picks and their seeds...".into());
+            hear_batch(app, client, &mut hearing, &seed_year, &seed_ever, &seed_of, &names[first..], &batch, first, &mut batch_picks).await;
+        }
         candidates.extend(batch);
         picks.extend(batch_picks);
         let with_songs = (first..picks.len()).filter(|i| !picks[*i].is_empty()).count();
@@ -2156,7 +2337,11 @@ async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recentl
         let pairs: Vec<(crate::judge::SeedBrief, crate::judge::CandidateBrief)> = judged
             .iter()
             .zip(briefs)
-            .map(|(&i, b)| (seed_briefs[&froms[i]].clone(), b.unwrap_or_else(|| crate::judge::CandidateBrief { name: names[i].clone(), ..Default::default() })))
+            .map(|(&i, b)| {
+                let mut brief = b.unwrap_or_else(|| crate::judge::CandidateBrief { name: names[i].clone(), ..Default::default() });
+                brief.sound = hearing.lines(&candidates[i]);
+                (seed_briefs[&froms[i]].clone(), brief)
+            })
             .collect();
         let judging = std::time::Instant::now();
         let verdicts = crate::judge::judge_all(app, llm, pairs, progress).await;
@@ -2226,7 +2411,20 @@ async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recentl
             Next::Done => break,
         }
     }
-    let kept: Vec<usize> = (0..picks.len()).filter(|i| !picks[*i].is_empty()).collect();
+    let mut kept: Vec<usize> = (0..picks.len()).filter(|i| !picks[*i].is_empty()).collect();
+    if tier3 && hearing.heard > 0 {
+        note(format!(
+            "tier 3 heard {} songs ({} from your files) in {} s; {} artists sound far from their seed, {} middling",
+            hearing.heard,
+            hearing.files,
+            hearing.secs,
+            kept.iter().filter(|i| hearing.far.contains(i)).count(),
+            kept.iter().filter(|i| hearing.mid.contains(i)).count()
+        ));
+        // (a hard nudge: the far ones to the back, used only when the list
+        // is short; the middling ones after the close ones)
+        kept.sort_by_key(|i| hearing.bucket(*i));
+    }
     // Heavy: tier 2 puts the list in order (and so decides which make the
     // cut when there are more than a list holds); Light, or when that
     // fails: tier 1's order, spread by seed
@@ -2235,7 +2433,11 @@ async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recentl
         _ => None,
     };
     let mut out = match ordered {
-        Some(order) => picked_in_order(&order.into_iter().take(SONGS).collect::<Vec<_>>(), &picks, &names, &reasons),
+        Some(mut order) => {
+            // (tier 2 saw the sound; the far ones still go last)
+            order.sort_by_key(|i| hearing.far.contains(i));
+            picked_in_order(&order.into_iter().take(SONGS).collect::<Vec<_>>(), &picks, &names, &reasons)
+        }
         None => picked(&kept.into_iter().take(SONGS).collect::<Vec<_>>(), &picks, &names, &reasons),
     };
     out.song_why = song_why;
@@ -2276,11 +2478,14 @@ fn next_step(total: usize, adding: bool, round: usize, tier1_left: bool, heavy: 
 /// Your songs by artist from the history (lower-cased artist): title, the
 /// Core's track id and how often you listened to it, most first. Plays from
 /// the lists don't count.
-fn songs_by_artist(app: &AppHandle, ctx: &Context) -> HashMap<String, Vec<(String, u64, u32)>> {
+fn songs_by_artist(app: &AppHandle, ctx: &Context, since: Option<i64>) -> HashMap<String, Vec<(String, u64, u32)>> {
     app.state::<Wrapped>().with_plays(app, |plays| {
         let mut by: HashMap<String, HashMap<String, (String, u64, u32)>> = HashMap::new();
         for p in plays {
             let Some(id) = p.track_id else { continue };
+            if since.is_some_and(|at| p.played_at < at) {
+                break; // newest first: the rest is older
+            }
             if p.artist.is_empty() || !counts(p) || ctx.from_lists.contains(&(p.played_at, p.title.to_lowercase())) {
                 continue;
             }
@@ -2392,7 +2597,7 @@ async fn pick_rediscover(app: &AppHandle, client: &LibraryClient, _key: &str, re
     let mut names: Vec<String> = Vec::new();
     let mut reasons: Vec<(String, Vec<String>)> = Vec::new();
     let mut picks: Vec<Vec<String>> = Vec::new();
-    let songs = songs_by_artist(app, ctx);
+    let songs = songs_by_artist(app, ctx, None);
     let played: HashSet<&str> = said.played_songs.iter().map(String::as_str).collect();
 
     // The Fine Tuning's artists first: one of your most played songs of
@@ -2490,15 +2695,15 @@ async fn pick_rediscover(app: &AppHandle, client: &LibraryClient, _key: &str, re
     progress("Picking songs...".into());
     let options = MixOptions { per_artist: 1, include_live: false, library_only: true, own_albums: true, from_top: 5, never: said.played_songs.clone() };
     let (found_songs, _) = client.pick_artist_tracks(&handles, &options).await;
+    let order_never: Vec<(usize, String)> = found_songs.iter().enumerate().filter_map(|(i, s)| s.first().map(|t| (i, t.handle.clone()))).collect();
     let mut never_found = 0;
-    for (i, songs) in found_songs.iter().enumerate() {
+    for (i, handle) in order_never {
         if never_found >= want_never {
             break;
         }
-        let Some(song) = songs.first() else { continue };
         names.push(never_names[i].clone());
         reasons.push(("In your library, never played".to_string(), Vec::new()));
-        picks.push(vec![song.handle.clone()]);
+        picks.push(vec![handle]);
         never_found += 1;
     }
     note(format!("rediscover: {from_requests} from the fine tuning, {old_found} old favorites and {never_found} never played"));
@@ -2677,13 +2882,14 @@ fn status(app: &AppHandle) -> DiscoverStatus {
     let building = *discover.building.lock().unwrap();
     let failed = discover.failed.lock().unwrap().clone();
     let tier2 = crate::judge::Llm::from_settings(&WrappedSettings::load(app)).is_some();
-    DiscoverStatus { weekly, rediscover, building, weekly_error: failed.get("weekly").cloned(), rediscover_error: failed.get("rediscover").cloned(), requests, rediscover_requests, tier2 }
+    let tier3 = crate::sound::Sound::ready(app);
+    DiscoverStatus { weekly, rediscover, building, weekly_error: failed.get("weekly").cloned(), rediscover_error: failed.get("rediscover").cloned(), requests, rediscover_requests, tier2, tier3 }
 }
 
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1063;
+pub const BUILD: u32 = 1071;
 
 #[tauri::command]
 pub fn wrapper_build() -> u32 {

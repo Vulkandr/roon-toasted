@@ -97,7 +97,8 @@ struct Kept {
     /// The 400 styles, a byte each (the square root, times 255), base64.
     styles: String,
     /// What was heard: a preview ("deezer:136994518", "itunes:1440870245")
-    /// or your file, all of it ("core:Bölzer/2016 - Hero/03 - Hero.flac").
+    /// or your file, all of it ("core:Bölzer/2016 - Hero/03 - Hero.flac"
+    /// from Roon, "file:..." from your music folder).
     from: String,
     /// No preview was found, or it couldn't be heard (looked for again
     /// after RETRY_MS).
@@ -199,7 +200,7 @@ pub struct Song {
 
 /// Heard from your own file (not a preview).
 pub fn own_file(from: &str) -> bool {
-    from.starts_with("core:")
+    from.starts_with("core:") || from.starts_with("file:")
 }
 
 fn key(artist: &str, title: &str) -> String {
@@ -243,13 +244,19 @@ struct Preview {
 /// A title without its version ("Hero (Live)", "Hero - Remastered 2019":
 /// "hero"), folded.
 pub(crate) fn base_title(title: &str) -> String {
+    fold(short_title(title))
+}
+
+/// A title without its version, as written ("Ayahuasca (Original Mix)":
+/// "Ayahuasca").
+fn short_title(title: &str) -> &str {
     let mut t = title;
     for cut in [" (", " [", " - ", " – "] {
         if let Some(at) = t.find(cut).filter(|at| *at > 0) {
             t = &t[..at];
         }
     }
-    fold(t)
+    t.trim()
 }
 
 /// How well a found song's names fit the one wanted (None: not it). Its
@@ -550,7 +557,15 @@ impl Sound {
         let mut unreached = None;
         let plain = format!("{} {}", song.artist, song.title);
         let exact = format!("artist:\"{}\" track:\"{}\"", song.artist, song.title);
-        for q in [plain, exact] {
+        let mut queries = vec![plain, exact];
+        // (a version in the title, "(Original Mix)" and such, finds nothing
+        // on Deezer: the title without it too; `fit` still prefers the
+        // same version when there is one)
+        let short = short_title(&song.title);
+        if !short.is_empty() && short != song.title.trim() {
+            queries.push(format!("{} {short}", song.artist));
+        }
+        for q in queries {
             match self.deezer(client, "https://api.deezer.com/search", &[("q", q.as_str()), ("limit", "25")]).await {
                 Ok(v) => {
                     if let Some(p) = deezer_pick(v["data"].as_array().map(|a| a.as_slice()).unwrap_or(&[]), song) {
@@ -562,7 +577,7 @@ impl Sound {
         }
         // Apple's search: about 20 calls a minute, so one every 3 s
         Self::turn(&self.itunes, Duration::from_secs(3)).await;
-        let term = format!("{} {}", song.artist, song.title);
+        let term = format!("{} {}", song.artist, if short.is_empty() { song.title.as_str() } else { short });
         let asked = client
             .get("https://itunes.apple.com/search")
             .query(&[("term", term.as_str()), ("media", "music"), ("entity", "song"), ("limit", "25")])
@@ -603,6 +618,8 @@ impl Sound {
         // of it was found), or heard from a preview and maybe yours
         let mut wanted: Vec<(String, Song)> = Vec::new();
         let mut maybe: Vec<(String, Song)> = Vec::new();
+        // (heard from a preview, not Roon's: maybe in your music folder)
+        let mut maybe_folder: Vec<(String, Song)> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
         for s in songs {
             if fold(&s.artist).is_empty() || fold(&s.title).is_empty() {
@@ -617,6 +634,8 @@ impl Sound {
                 Some(kept) if !kept.missing || now - kept.at < RETRY_MS => {
                     if s.handle.is_some() {
                         maybe.push((k, s.clone()));
+                    } else {
+                        maybe_folder.push((k, s.clone()));
                     }
                 }
                 _ => wanted.push((k, s.clone())),
@@ -628,8 +647,28 @@ impl Sound {
         if !asked.is_empty() {
             println!("[sound] your files: {} of the {} songs that may be yours, through Roon", files.len(), asked.len());
         }
-        let mut jobs: Vec<Job> = wanted.into_iter().map(|(key, song)| Job { file: files.remove(&key), key, song }).collect();
-        jobs.extend(maybe.into_iter().filter_map(|(key, song)| files.remove(&key).map(|file| Job { key, song, file: Some(file) })));
+        // Your music folder (Settings, "Manually choose music folder") for
+        // the songs Roon didn't hand over
+        let folder = if wanted.is_empty() && maybe.is_empty() && maybe_folder.is_empty() { None } else { crate::musicfolder::ready(app).await };
+        let local_of = |s: &Song| folder.as_ref().and_then(|_| crate::musicfolder::find(&s.artist, &s.title, &s.album, None));
+        let mut jobs: Vec<Job> = wanted
+            .into_iter()
+            .map(|(key, song)| {
+                let file = files.remove(&key);
+                let local = if file.is_none() { local_of(&song) } else { None };
+                Job { file, local, key, song }
+            })
+            .collect();
+        jobs.extend(maybe.into_iter().chain(maybe_folder).filter_map(|(key, song)| match files.remove(&key) {
+            Some(file) => Some(Job { key, song, file: Some(file), local: None }),
+            None => local_of(&song).map(|local| Job { key, song, file: None, local: Some(local) }),
+        }));
+        if folder.is_some() {
+            let n = jobs.iter().filter(|j| j.local.is_some()).count();
+            if n > 0 {
+                println!("[sound] your music folder: {n} songs found there");
+            }
+        }
         let total = jobs.len();
         tick(0, total);
         if total == 0 {
@@ -848,6 +887,8 @@ struct Job {
     key: String,
     song: Song,
     file: Option<CoreFile>,
+    /// The song's file in your music folder (musicfolder.rs).
+    local: Option<PathBuf>,
 }
 
 /// Where to fetch one of your files from the Core.
@@ -1024,6 +1065,19 @@ async fn hear_core_file(app: &AppHandle, core: &reqwest::Client, file: &CoreFile
     result
 }
 
+/// A file in your music folder heard whole (FILES_AT_ONCE at a time, like
+/// the Core's).
+async fn hear_local_file(app: &AppHandle, path: &Path) -> Result<crate::audio::Patches, String> {
+    let gate = app.state::<Sound>().files.clone();
+    let _turn = gate.acquire_owned().await.map_err(|e| e.to_string())?;
+    let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    if std::fs::metadata(path).is_ok_and(|m| m.len() > MOST_FILE_BYTES) {
+        return Err("it's too big".into());
+    }
+    let at = path.to_path_buf();
+    tauri::async_runtime::spawn_blocking(move || crate::audio::hear_file(&at, &ext)).await.map_err(|e| e.to_string())?
+}
+
 /// A song found and fetched, made ready to hear.
 struct Ready {
     key: String,
@@ -1064,12 +1118,26 @@ async fn fetch_all(app: &AppHandle, client: &reqwest::Client, core: &reqwest::Cl
 /// decoded, when Roon has one; else its preview found (the album's list
 /// first, when there is one), fetched and decoded.
 async fn fetch_one(app: &AppHandle, client: &reqwest::Client, core: &reqwest::Client, job: Job, list: Option<Arc<Vec<Value>>>) -> Fetched {
-    let Job { key, song, file } = job;
+    let Job { key, song, file, mut local } = job;
     if let Some(file) = file {
         match hear_core_file(app, core, &file).await {
             Ok(patches) if patches.count() > 0 => return Fetched::Ready(Ready { key, from: file.from, patches }),
             Ok(_) => println!("[sound] {} - {}: your file is too short to hear", song.artist, song.title),
-            Err(e) => println!("[sound] {} - {}: your file couldn't be heard ({e}), so its preview is", song.artist, song.title),
+            Err(e) => println!("[sound] {} - {}: your file couldn't be had from Roon ({e})", song.artist, song.title),
+        }
+        // The same file in your music folder, by its path on the Core
+        if crate::musicfolder::ready(app).await.is_some() {
+            local = crate::musicfolder::find(&song.artist, &song.title, &song.album, file.from.strip_prefix("core:"));
+        }
+    }
+    if let Some(path) = local {
+        match hear_local_file(app, &path).await {
+            Ok(patches) if patches.count() > 0 => {
+                let parts: Vec<String> = path.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect();
+                return Fetched::Ready(Ready { key, from: format!("file:{}", parts[parts.len().saturating_sub(3)..].join("/")), patches });
+            }
+            Ok(_) => println!("[sound] {} - {}: your file is too short to hear", song.artist, song.title),
+            Err(e) => println!("[sound] {} - {}: your file in the music folder couldn't be heard ({e})", song.artist, song.title),
         }
     }
     let sound = app.state::<Sound>();
@@ -1419,6 +1487,14 @@ mod tests {
 
     fn song(artist: &str, title: &str, album: &str) -> Song {
         Song { artist: artist.into(), title: title.into(), album: album.into(), handle: None }
+    }
+
+    #[test]
+    fn short_titles() {
+        assert_eq!(short_title("Ayahuasca (Original Mix)"), "Ayahuasca");
+        assert_eq!(short_title("Hero - Remastered 2019"), "Hero");
+        assert_eq!(short_title("Hero"), "Hero");
+        assert_eq!(base_title("Ayahuasca (Original Mix)"), "ayahuasca");
     }
 
     #[test]

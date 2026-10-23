@@ -440,6 +440,233 @@ fn newest(mut rows: Vec<(f64, HomeAlbum)>, since: &str, why: impl Fn(&HomeAlbum,
     out
 }
 
+// ----- Rows from your own listening: forgotten favorites, your week, on
+// this day (worked out on the spot from the history copy, the Last.fm
+// scrobbles from before it and the library copy) -----
+
+/// An album remembered from your listening.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MemoryAlbum {
+    pub title: String,
+    pub artist: String,
+    pub album_id: Option<u64>,
+    pub performer_id: Option<u64>,
+    pub image_key: Option<String>,
+    /// Songs of it played (in the window the row is about).
+    pub plays: u32,
+    /// When it was last played (Unix ms).
+    pub last_played: i64,
+    /// For "on this day": the year.
+    pub year: Option<i32>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct YourWeek {
+    pub plays: u32,
+    pub seconds: i64,
+    pub artists: usize,
+    pub albums: Vec<MemoryAlbum>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HomeMemories {
+    pub forgotten: Vec<MemoryAlbum>,
+    pub week: YourWeek,
+    pub on_this_day: Vec<MemoryAlbum>,
+}
+
+/// An album played this many songs' worth or more counts as a favorite.
+const FORGOTTEN_PLAYS: u32 = 20;
+/// ...and not played for this long makes it forgotten.
+const FORGOTTEN_AFTER: i64 = 365 * 86_400_000;
+const FORGOTTEN_MAX: usize = 60;
+/// On this day: albums per past year.
+const ON_THIS_DAY_PER_YEAR: usize = 3;
+
+/// An album's key across the sources: the first credited artist and the
+/// title without its edition, both folded.
+fn memory_key(artist: &str, album: &str) -> String {
+    let first = artist.split(" / ").next().unwrap_or(artist).split(", ").next().unwrap_or(artist);
+    format!("{}|{}", fold(first), fold(&crate::sound::base_title(album)))
+}
+
+/// One play of an album, from Roon's history or a scrobble.
+struct Listen {
+    at: i64,
+    key: String,
+    title: String,
+    artist: String,
+    album_id: Option<u64>,
+    performer_id: Option<u64>,
+    image_key: Option<String>,
+    seconds: i64,
+}
+
+/// Every album play: Roon's history (plays of at least half a song), and the
+/// scrobbles from before Roon's oldest play.
+fn all_listens(app: &AppHandle) -> Vec<Listen> {
+    let mut out: Vec<Listen> = app.state::<crate::wrapped::Wrapped>().with_plays(app, |plays| {
+        plays
+            .iter()
+            .filter(|p| crate::wrapped::counts(p) && !p.album.is_empty())
+            .map(|p| Listen {
+                at: p.played_at,
+                key: memory_key(&p.artist, &p.album),
+                title: p.album.clone(),
+                artist: p.artist.clone(),
+                album_id: p.album_id,
+                performer_id: p.performer_id,
+                image_key: p.image_key.clone(),
+                seconds: p.seconds_played.or(p.length_seconds).unwrap_or(0).max(0) as i64,
+            })
+            .collect()
+    });
+    let oldest = out.iter().map(|l| l.at).min().unwrap_or(i64::MAX);
+    crate::scrobbles::with(app, |s| {
+        for p in s.plays.iter().filter(|p| p.at < oldest && !p.album.is_empty()) {
+            out.push(Listen {
+                at: p.at,
+                key: memory_key(&p.artist, &p.album),
+                title: p.album.clone(),
+                artist: p.artist.clone(),
+                album_id: None,
+                performer_id: None,
+                image_key: None,
+                seconds: 0,
+            });
+        }
+    });
+    out
+}
+
+/// Adds Roon's ids and cover to albums known only by name: from Roon's
+/// history (the same album played in Roon), else the library copy.
+fn fill_ids(app: &AppHandle, albums: &mut [MemoryAlbum], known: &HashMap<String, (Option<u64>, Option<u64>, Option<String>)>) {
+    let library: HashMap<String, crate::wrapped::LibraryAlbum> =
+        app.state::<crate::wrapped::LibraryCopy>().albums(app).into_iter().map(|a| (memory_key(&a.artist, &a.title), a)).collect();
+    for a in albums.iter_mut().filter(|a| a.album_id.is_none()) {
+        let key = memory_key(&a.artist, &a.title);
+        if let Some((album_id, performer_id, image_key)) = known.get(&key).filter(|k| k.0.is_some()) {
+            a.album_id = *album_id;
+            a.performer_id = a.performer_id.or(*performer_id);
+            a.image_key = a.image_key.clone().or_else(|| image_key.clone());
+        } else if let Some(l) = library.get(&key) {
+            a.album_id = l.album_id;
+            a.performer_id = a.performer_id.or(l.performer_id);
+            a.image_key = a.image_key.clone().or_else(|| l.image_key.clone());
+            a.title = l.title.clone();
+        }
+    }
+}
+
+/// The local calendar day of a moment ("YYYY-MM-DD"), `offset_min` as
+/// JavaScript's getTimezoneOffset (UTC minus local, in minutes).
+fn local_day(ms: i64, offset_min: i32) -> String {
+    date_string(ms - offset_min as i64 * 60_000)
+}
+
+fn memories(app: &AppHandle, offset_min: i32, now: i64) -> HomeMemories {
+    let listens = all_listens(app);
+    // What Roon's history knows of each album (ids, cover), for the
+    // scrobbled ones
+    let mut known: HashMap<String, (Option<u64>, Option<u64>, Option<String>)> = HashMap::new();
+    for l in listens.iter().filter(|l| l.album_id.is_some()) {
+        known.entry(l.key.clone()).or_insert((l.album_id, l.performer_id, l.image_key.clone()));
+    }
+    let tally = |pick: &dyn Fn(&Listen) -> bool| -> HashMap<String, MemoryAlbum> {
+        let mut rows: HashMap<String, MemoryAlbum> = HashMap::new();
+        for l in listens.iter().filter(|l| pick(l)) {
+            let row = rows.entry(l.key.clone()).or_insert_with(|| MemoryAlbum { title: l.title.clone(), artist: l.artist.clone(), ..Default::default() });
+            row.plays += 1;
+            if l.at > row.last_played {
+                row.last_played = l.at;
+            }
+            if row.album_id.is_none() && l.album_id.is_some() {
+                row.album_id = l.album_id;
+                row.title = l.title.clone();
+            }
+            row.performer_id = row.performer_id.or(l.performer_id);
+            if row.image_key.is_none() {
+                row.image_key = l.image_key.clone();
+            }
+        }
+        rows
+    };
+
+    // Forgotten favorites: much played, not for a year
+    let mut forgotten: Vec<MemoryAlbum> = tally(&|_| true)
+        .into_values()
+        .filter(|a| a.plays >= FORGOTTEN_PLAYS && now - a.last_played >= FORGOTTEN_AFTER)
+        .collect();
+    fill_ids(app, &mut forgotten, &known);
+    forgotten.retain(|a| a.album_id.is_some());
+    forgotten.sort_by(|a, b| b.plays.cmp(&a.plays).then(b.last_played.cmp(&a.last_played)));
+    forgotten.truncate(FORGOTTEN_MAX);
+
+    // Your week: the last seven days
+    let week_from = now - 7 * 86_400_000;
+    let recent: Vec<&Listen> = listens.iter().filter(|l| l.at >= week_from).collect();
+    let mut week = YourWeek {
+        plays: recent.len() as u32,
+        seconds: recent.iter().map(|l| l.seconds).sum(),
+        artists: recent.iter().map(|l| fold(&l.artist)).collect::<HashSet<_>>().len(),
+        albums: tally(&|l| l.at >= week_from).into_values().collect(),
+    };
+    week.albums.sort_by(|a, b| b.plays.cmp(&a.plays).then(b.last_played.cmp(&a.last_played)));
+    week.albums.truncate(24);
+    fill_ids(app, &mut week.albums, &known);
+
+    // On this day: the same calendar day in the years before
+    let today = local_day(now, offset_min);
+    let (this_year, month_day) = (today[..4].parse::<i32>().unwrap_or(0), today[4..].to_string());
+    let mut by_year: HashMap<i32, HashMap<String, MemoryAlbum>> = HashMap::new();
+    for l in &listens {
+        let day = local_day(l.at, offset_min);
+        if day[4..] != month_day {
+            continue;
+        }
+        let year = day[..4].parse::<i32>().unwrap_or(0);
+        if year >= this_year {
+            continue;
+        }
+        let row = by_year.entry(year).or_default().entry(l.key.clone()).or_insert_with(|| MemoryAlbum {
+            title: l.title.clone(),
+            artist: l.artist.clone(),
+            year: Some(year),
+            ..Default::default()
+        });
+        row.plays += 1;
+        row.last_played = row.last_played.max(l.at);
+        row.album_id = row.album_id.or(l.album_id);
+        row.performer_id = row.performer_id.or(l.performer_id);
+        if row.image_key.is_none() {
+            row.image_key = l.image_key.clone();
+        }
+    }
+    let mut years: Vec<i32> = by_year.keys().copied().collect();
+    years.sort_unstable_by(|a, b| b.cmp(a));
+    let mut on_this_day = Vec::new();
+    for year in years {
+        let mut albums: Vec<MemoryAlbum> = by_year.remove(&year).unwrap_or_default().into_values().collect();
+        albums.sort_by(|a, b| b.plays.cmp(&a.plays));
+        on_this_day.extend(albums.into_iter().take(ON_THIS_DAY_PER_YEAR));
+    }
+    fill_ids(app, &mut on_this_day, &known);
+
+    HomeMemories { forgotten, week, on_this_day }
+}
+
+/// Home's rows from your own listening, worked out now. `tz_offset_min`:
+/// the page's getTimezoneOffset (for "on this day").
+#[tauri::command]
+pub async fn wrapped_home_memories(app: AppHandle, tz_offset_min: Option<i32>) -> HomeMemories {
+    let offset = tz_offset_min.unwrap_or(0);
+    tauri::async_runtime::spawn_blocking(move || memories(&app, offset, now_ms())).await.unwrap_or_default()
+}
+
 fn listens_text(weight: f64) -> String {
     if weight >= 60.0 {
         "a lot".into()
@@ -470,6 +697,16 @@ fn date_string(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_keys_and_days() {
+        assert_eq!(memory_key("Bölzer", "Hero (Remastered)"), memory_key("Bolzer / Someone", "Hero"));
+        assert_ne!(memory_key("Bölzer", "Hero"), memory_key("Bölzer", "Soma"));
+        // 2025-10-21 03:00 UTC is still the 20th in Chicago (UTC-5: offset 300)
+        let at = 1_761_015_600_000;
+        assert_eq!(local_day(at, 0), "2025-10-21");
+        assert_eq!(local_day(at, 300), "2025-10-20");
+    }
 
     #[test]
     fn dates_and_newest() {

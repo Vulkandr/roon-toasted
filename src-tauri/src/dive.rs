@@ -51,6 +51,8 @@ pub struct DiveTurn {
 #[serde(rename_all = "camelCase", default)]
 pub struct DivePlan {
     pub summary: String,
+    /// Smart Radio: songs as close to the picks as can be, nothing asked.
+    pub smart: bool,
     pub source: String,
     pub count: usize,
     pub per_artist: usize,
@@ -403,7 +405,7 @@ async fn ollama_for(app: &AppHandle, llm: &Llm) -> Result<Option<crate::ollama::
 /// `history`: the turns so far, oldest first; empty for its opening
 /// question).
 #[tauri::command]
-pub async fn wrapped_dive_chat(app: AppHandle, picks: Vec<DivePick>, text: String, source: String, history: Vec<DiveTurn>, follows: Option<i64>) -> Result<DiveReply, String> {
+pub async fn wrapped_dive_chat(app: AppHandle, picks: Vec<DivePick>, text: String, source: String, history: Vec<DiveTurn>, follows: Option<i64>, mode: Option<String>) -> Result<DiveReply, String> {
     let llm = llm_or_err(&app)?;
     let client = app.state::<Library>().client().ok_or("Not connected to the Roon Core's library yet.")?;
     let _ollama = ollama_for(&app, &llm).await?;
@@ -413,8 +415,11 @@ pub async fn wrapped_dive_chat(app: AppHandle, picks: Vec<DivePick>, text: Strin
         brief.push_str(&last_try(&list));
     }
     let talk: Vec<(bool, String)> = history.into_iter().filter(|t| !t.text.trim().is_empty()).map(|t| (t.from == "listener", t.text)).collect();
-    crate::judge::dive_chat(&llm, &brief, &source, &talk).await
+    crate::judge::dive_chat(&llm, &brief, &source, &talk, mode.as_deref().unwrap_or("deeper")).await
 }
+
+/// What Smart Radio asks for, in place of a talk.
+const SMART_RADIO: &str = "Smart Radio: nothing asked beyond their picks. Find the songs that sound as close as possible to the picks themselves: the same kind of sound (guitars, vocals, pace, production, mood), feel and era, the way a good radio station follows what's playing. Be strict: leave out songs that only share fans or a broad genre with the picks.";
 
 #[tauri::command]
 pub fn wrapped_dive_status(app: AppHandle) -> DiveStatus {
@@ -666,8 +671,8 @@ async fn build(app: &AppHandle, picks: Vec<DivePick>, text: &str, plan: &DivePla
     let llm = llm_or_err(app)?;
     let client = app.state::<Library>().client().ok_or("Not connected to the Roon Core's library yet.")?;
     let picks: Vec<DivePick> = picks.into_iter().take(PICKS_MAX).collect();
-    if picks.is_empty() && text.trim().is_empty() {
-        return Err("Pick something, or say what the playlist should be.".into());
+    if picks.is_empty() && (plan.smart || text.trim().is_empty()) {
+        return Err(if plan.smart { "Pick a song, album or artist for Smart Radio first." } else { "Pick something, or say what the playlist should be." }.into());
     }
     let count = if plan.count == 0 { 30 } else { plan.count.clamp(10, 60) };
     let per_artist = plan.per_artist.clamp(1, 3);
@@ -684,8 +689,12 @@ async fn build(app: &AppHandle, picks: Vec<DivePick>, text: &str, plan: &DivePla
     note(format!("Deep Dive ({} {}): {} ({}), picks: {}", llm.provider, llm.model, text.trim(), source, picks.iter().map(|p| format!("{} {} by {}", p.kind, p.title, p.artist)).collect::<Vec<_>>().join("; ")));
     progress("Reading up on your picks...".into());
     let mut brief = brief(app, &client, &picks, text).await;
-    // (what the talk settled, and the talk itself in their words)
-    if !plan.summary.trim().is_empty() {
+    // (what the talk settled, and the talk itself in their words; Smart
+    // Radio's own words instead)
+    if plan.smart {
+        brief.push_str(&format!("WHAT THEY WANT: {SMART_RADIO}\n"));
+        note("Smart Radio".to_string());
+    } else if !plan.summary.trim().is_empty() {
         brief.push_str(&format!("WHAT YOU SETTLED WITH THEM: {}\n", plan.summary.trim()));
         note(format!("settled: {}", plan.summary.trim()));
     }

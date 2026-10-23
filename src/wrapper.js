@@ -523,6 +523,12 @@ const LAYOUT_VERSION = 2;
 const NO_TEXT_EDGE = { textEdge: "none", textEdgeSize: 2 };
 const NO_ICON_EDGE = { iconEdge: "none", iconEdgeSize: 2 };
 const DEFAULT_LAYOUT = {
+  // The layout's shape (width over height), locked in when it's first
+  // edited: the pieces sit in a frame of this shape, as big as fits and
+  // centered, so a different window shape only adds space at the sides or
+  // top and bottom. Null (never edited): the whole window, as before.
+  aspect: null,
+  keepShape: true, // off: the pieces spread over the whole window, whatever its shape
   barStyle: true, // the player bar uses these styles too (not the places)
   background: "art", // or "plain"
   invertToggles: false, // "Invert colors": what's white takes the accent, and what has the accent turns white
@@ -539,11 +545,13 @@ const DEFAULT_LAYOUT = {
     wrapped: { visible: true, x: 0.015, y: 0.03, size: 0.0173, font: DEFAULT_FONT, ...NO_TEXT_EDGE, ...NO_ICON_EDGE },
   },
 };
+const ASPECT_RANGE = [0.2, 6]; // the narrowest and widest shape kept
 const MIN_ART = 48; // px
 const MIN_TEXT_SIZE = 9; // px
 const MIN_LENGTH = 60; // px, the narrowest a width or length can be dragged
 const MAX_SIZE = { square: 1, box: 0.3, auto: 0.15, bar: 0.15 }; // of the stage
 const SNAP = 7; // px
+const DRAG_START = 4; // px the mouse moves before a pressed piece follows it
 
 // ----- Profiles -----
 //
@@ -826,9 +834,53 @@ function applyIcons() {
 $("#stage-close").addEventListener("click", () => closeStage());
 $("#stage-minimize").addEventListener("click", () => closeStage());
 
+// The frame the pieces sit in: the canvas, sized to the layout's shape
+// (as big as fits in the player, centered); without a shape, all of it.
+// Everything below measures the canvas, so it all follows the frame.
+const stageShapeBtn = $("#editor-shape-fit");
+function stageAspect() {
+  const w = stage.clientWidth;
+  const h = stage.clientHeight;
+  return w && h ? Math.round((w / h) * 10000) / 10000 : null;
+}
+function fitCanvas() {
+  const SW = stage.clientWidth;
+  const SH = stage.clientHeight;
+  const a = layout.keepShape !== false ? layout.aspect : null;
+  let framed = false;
+  if (!a || !SW || !SH) {
+    for (const k of ["left", "top", "width", "height", "right", "bottom"]) stageCanvas.style[k] = "";
+  } else {
+    let w = SW;
+    let h = SW / a;
+    if (h > SH) {
+      h = SH;
+      w = SH * a;
+    }
+    w = Math.round(w);
+    h = Math.round(h);
+    stageCanvas.style.left = `${Math.round((SW - w) / 2)}px`;
+    stageCanvas.style.top = `${Math.round((SH - h) / 2)}px`;
+    stageCanvas.style.width = `${w}px`;
+    stageCanvas.style.height = `${h}px`;
+    stageCanvas.style.right = "auto";
+    stageCanvas.style.bottom = "auto";
+    framed = w < SW - 1 || h < SH - 1;
+  }
+  stageCanvas.classList.toggle("framed", framed);
+  if (stageShapeBtn) stageShapeBtn.hidden = !framed;
+}
+// Locks the layout's shape to the player's now (when it's first edited,
+// or with "Fit to this window")
+function lockShape() {
+  const a = stageAspect();
+  if (a) layout.aspect = clamp(a, ASPECT_RANGE[0], ASPECT_RANGE[1]);
+}
+
 // Puts every piece where the layout says, in pixels: first its size, then
 // (knowing how big it came out) its place
 function layoutStage() {
+  fitCanvas();
   // (the Discover thumbs move between the info and Wrapped pieces)
   if (ratingReady) renderRating();
   renderFormat();
@@ -1062,7 +1114,8 @@ function barChanged(slider) {
   if (id) waves[id]?.draw();
 }
 
-new ResizeObserver(layoutStage).observe(stageCanvas);
+// (the player's size, not the canvas's: the canvas is sized from it)
+new ResizeObserver(layoutStage).observe(stage);
 // In the player bar the sliders stretch with the window (narrow windows
 // shorten them), and the canvas behind a drawn bar has to follow
 new ResizeObserver(() => {
@@ -1076,7 +1129,9 @@ function normalizeLayout(saved) {
   if (!saved || typeof saved !== "object") return out;
   if (typeof saved.barStyle === "boolean") out.barStyle = saved.barStyle;
   if (typeof saved.invertToggles === "boolean") out.invertToggles = saved.invertToggles;
+  if (typeof saved.keepShape === "boolean") out.keepShape = saved.keepShape;
   if (saved.background === "art") out.background = "art";
+  if (typeof saved.aspect === "number" && saved.aspect >= ASPECT_RANGE[0] && saved.aspect <= ASPECT_RANGE[1]) out.aspect = saved.aspect;
   const savedPieces = saved.pieces;
   if (savedPieces && typeof savedPieces === "object") {
     for (const id of PIECE_IDS) {
@@ -1139,6 +1194,11 @@ function loadLayout(saved) {
 
 let saveTimer;
 function scheduleSave() {
+  // (the shape locks in with the first change, at the window's shape then)
+  if (layout.keepShape !== false && !layout.aspect) {
+    lockShape();
+    layoutStage();
+  }
   clearTimeout(saveTimer);
   saveTimer = setTimeout(saveLayout, 400);
   showUnsaved();
@@ -1560,6 +1620,15 @@ const iconEdgeSize = $("#editor-icon-edge-size");
 const iconEdgeValue = $("#editor-icon-edge-value");
 const iconEdgeAll = $("#editor-icon-edge-all");
 const invertCheck = $("#editor-invert");
+// Keep shape: on, the layout keeps the shape it was made in (space added
+// around it); off, it spreads over the whole window. Turned on, it takes
+// the window's shape now unless it has one already.
+const keepShapeCheck = $("#editor-keepshape");
+keepShapeCheck.addEventListener("change", () => {
+  layout.keepShape = keepShapeCheck.checked;
+  if (layout.keepShape && !layout.aspect) lockShape();
+  changed();
+});
 const editorLabels = $("#editor-labels");
 const labelScale = $("#editor-label-scale");
 const labelScaleValue = $("#editor-label-scale-value");
@@ -1620,6 +1689,7 @@ function refreshEditor() {
     iconEdgeSize.disabled = iconEdgeSelect.value === "none";
   }
   invertCheck.checked = !!layout.invertToggles;
+  keepShapeCheck.checked = layout.keepShape !== false;
   const withLabels = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
   editorLabels.hidden = !withLabels;
   if (withLabels) {
@@ -1694,6 +1764,12 @@ for (const button of editorText.querySelectorAll(".align-btn")) {
 }
 // "All": the choice goes to every piece of that kind
 const fontAll = $("#editor-font-all");
+// Fit to this window: the layout takes the player's shape now (its pieces
+// stretch to it, as they did before shapes were kept)
+stageShapeBtn?.addEventListener("click", () => {
+  lockShape();
+  changed();
+});
 const barStyleCheck = $("#editor-barstyle");
 barStyleCheck.addEventListener("change", () => {
   layout.barStyle = barStyleCheck.checked;
@@ -1858,6 +1934,9 @@ for (const id of PIECE_IDS) {
       x0: event.clientX,
       y0: event.clientY,
       start: { ...layout.pieces[id], px: el.offsetLeft, py: el.offsetTop, pw: el.offsetWidth, ph: el.offsetHeight },
+      // (a press only selects: nothing moves or snaps until the mouse has
+      // gone DRAG_START px)
+      moved: false,
     };
     stageCanvas.setPointerCapture(event.pointerId);
   });
@@ -1874,6 +1953,10 @@ stageCanvas.addEventListener("pointercancel", endDrag);
 stageCanvas.addEventListener("lostpointercapture", endDrag);
 
 function dragTo(cx, cy) {
+  if (!drag.moved) {
+    if (Math.abs(cx - drag.x0) < DRAG_START && Math.abs(cy - drag.y0) < DRAG_START) return;
+    drag.moved = true;
+  }
   const W = stageCanvas.clientWidth;
   const H = stageCanvas.clientHeight;
   const base = Math.min(W, H);
@@ -2017,10 +2100,11 @@ function endDrag(event) {
       // already released
     }
   }
+  const moved = drag.moved;
   drag = null;
   showGuide(guideV, null, "left");
   showGuide(guideH, null, "top");
-  scheduleSave();
+  if (moved) scheduleSave();
 }
 
 // Arrow keys nudge the selected piece (Shift: by 10)
@@ -2243,6 +2327,7 @@ listen("wrapped-settings-changed", (event) => {
   const was = wrappedSettings?.discovery !== false;
   wrappedSettings = event.payload;
   paintPieceDive();
+  applyPageSize();
   if ((wrappedSettings?.discovery !== false) === was) return;
   loadDiscoverRatings();
   if (wrapped.hidden) return;
@@ -3131,6 +3216,33 @@ function wrappedSideGroups() {
   ];
 }
 
+// A name with its emoji drawn in one color, like Roon's sidebar shows them
+// (the 🌟 💎 🧠 of Wrapped's playlists): color emoji over Roon's sidebar go
+// through the color filter and come out in other colors
+// Wrapped's own lists' emoji as line icons (Lucide star, gem, brain)
+const MONO_EMOJI = {
+  "\u{1F31F}": '<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/>',
+  "\u{1F48E}": '<path d="M6 3h12l4 6-10 13L2 9Z"/><path d="M11 3 8 9l4 13 4-13-3-6"/><path d="M2 9h20"/>',
+  "\u{1F9E0}": '<path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/><path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/><path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4"/><path d="M17.599 6.5a3 3 0 0 0 .399-1.375"/><path d="M6.003 5.125A3 3 0 0 0 6.401 6.5"/><path d="M3.477 10.896a4 4 0 0 1 .585-.396"/><path d="M19.938 10.5a4 4 0 0 1 .585.396"/><path d="M6 18a4 4 0 0 1-1.967-.516"/><path d="M19.967 17.484A4 4 0 0 1 18 18"/>',
+};
+function monoEmoji(text) {
+  const out = [];
+  for (const part of text.split(/(\p{Extended_Pictographic}\uFE0F?)/u)) {
+    if (!part) continue;
+    if (/\p{Extended_Pictographic}/u.test(part)) {
+      const glyph = document.createElement("span");
+      glyph.className = "mono-emoji";
+      const plain = part.replace("\uFE0F", "");
+      if (MONO_EMOJI[plain]) {
+        glyph.classList.add("icon");
+        glyph.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${MONO_EMOJI[plain]}</svg>`;
+      } else glyph.textContent = plain + "\uFE0E";
+      out.push(glyph);
+    } else out.push(document.createTextNode(part));
+  }
+  return out;
+}
+
 function fillWrappedSide() {
   wrappedSide.replaceChildren();
   const current = wrapped.hidden ? null : wrappedStack.at(-1)?.page;
@@ -3173,7 +3285,7 @@ function fillWrappedSide() {
           option.className = "wrapped-side-btn wrapped-side-list";
           option.insertAdjacentHTML("beforeend", WRAPPED_ICONS.playlists);
           const label = document.createElement("span");
-          label.textContent = p.name;
+          label.append(...monoEmoji(p.name));
           option.append(label);
           option.title = p.name;
           if (current === "playlist" && wrappedStack.at(-1)?.handle === p.handle) option.classList.add("selected");
@@ -3539,13 +3651,96 @@ function wrappedDive(seed, radio) {
 
 // Adds a pick to Deep Dive and opens it
 function divePickAdd(seed) {
-  const key = (s) => `${s.kind}|${s.title}|${s.artist || ""}`.toLowerCase();
-  if (!diveSeeds.some((s) => key(s) === key(seed))) {
+  if (!diveSeeds.some((s) => diveKey(s) === diveKey(seed))) {
     if (diveSeeds.length >= DIVE_MAX) wrappedToast(`Deep Dive takes up to ${DIVE_MAX} picks: remove one first.`);
-    else diveSeeds.push(seed);
+    else {
+      diveSeeds.push(seed);
+      divePastAdd(seed);
+    }
   }
   diveRadioAt = -1;
   openWrappedPage({ page: "deepdive" });
+}
+
+// Picks told apart by kind, title and artist
+const diveKey = (s) => `${s.kind}|${s.title}|${s.artist || ""}`.toLowerCase();
+
+// Everything ever picked, newest first, for the History dropdown (a
+// convenience, so storage may fail)
+const DIVE_PAST_MAX = 30;
+function divePast() {
+  try {
+    const list = JSON.parse(localStorage.getItem("wrapped-dive-history") || "[]");
+    return Array.isArray(list) ? list.filter((s) => s && s.kind && s.title) : [];
+  } catch {
+    return [];
+  }
+}
+function divePastSave(list) {
+  try {
+    localStorage.setItem("wrapped-dive-history", JSON.stringify(list.slice(0, DIVE_PAST_MAX)));
+  } catch {}
+}
+function divePastAdd(seed) {
+  divePastSave([seed, ...divePast().filter((s) => diveKey(s) !== diveKey(seed))]);
+}
+
+// The History dropdown: past picks, newest first; one already picked is
+// marked and can't be added twice
+function divePastMenu(anchor) {
+  closePlayMenu();
+  const past = divePast();
+  const menu = document.createElement("div");
+  menu.className = "wrapped-popmenu dive-past-menu";
+  const kinds = { song: "Song", album: "Album", artist: "Artist" };
+  for (const seed of past) {
+    const picked = diveSeeds.some((s) => diveKey(s) === diveKey(seed));
+    const btn = document.createElement("button");
+    btn.className = `dive-past-item${picked ? " picked" : ""}`;
+    btn.disabled = picked;
+    btn.title = picked ? "Already picked" : diveSeeds.length >= DIVE_MAX ? `Deep Dive takes up to ${DIVE_MAX} picks: remove one first` : "Pick it again";
+    const art = wrappedArt(seed.imageKey, 80, seed.title, seed.kind === "artist");
+    art.classList.add("small");
+    const text = document.createElement("span");
+    text.className = "dive-past-text";
+    const name = document.createElement("span");
+    name.className = "dive-past-title";
+    name.textContent = seed.title;
+    const sub = document.createElement("span");
+    sub.className = "dive-past-sub";
+    sub.textContent = [kinds[seed.kind], seed.kind === "artist" ? null : seed.artist, picked ? "picked" : null].filter(Boolean).join(" · ");
+    text.append(name, sub);
+    btn.append(art, text);
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (diveSeeds.length >= DIVE_MAX) return wrappedToast(`Deep Dive takes up to ${DIVE_MAX} picks: remove one first.`);
+      closePlayMenu();
+      diveSeeds.push(seed);
+      divePastAdd(seed);
+      renderWrapped();
+    });
+    menu.append(btn);
+  }
+  const clear = document.createElement("button");
+  clear.className = "dive-past-clear";
+  clear.textContent = "Clear history";
+  clear.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closePlayMenu();
+    divePastSave([]);
+    renderWrapped();
+  });
+  menu.append(clear);
+  wrapped.append(menu);
+  const a = anchor.getBoundingClientRect();
+  const w = wrapped.getBoundingClientRect();
+  const m = menu.getBoundingClientRect();
+  let left = a.left - w.left;
+  let top = a.bottom - w.top + 4;
+  if (left + m.width > w.width - 8) left = Math.max(8, w.width - 8 - m.width);
+  if (top + m.height > w.height - 8) top = Math.max(8, a.top - w.top - m.height - 4);
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
 }
 
 // The play choices for a song or an album (Roon's: Play Now, Add Next,
@@ -3696,6 +3891,71 @@ function wrappedFailed(err) {
 }
 
 // ----- The pages -----
+
+// Tier 3's own music folder (musicfolder.rs): for songs Roon can't hand
+// over, their files are looked for there before a preview is used
+function musicFolderSection() {
+  const box = document.createElement("div");
+  box.className = "llm-section music-folder";
+  const title = document.createElement("div");
+  title.className = "llm-section-title";
+  title.textContent = "Your music folder (optional)";
+  const about = wrappedNote(
+    "Tier 3 gets your files from Roon by itself. If Roon can't hand some over (its storage out of reach from this PC, music Roon doesn't have), choose the folder your music is in and they're looked for there, before a preview is used. Songs are matched by their folders and file names (artist, album, title).",
+    "wrapped-note small",
+  );
+  const row = document.createElement("div");
+  row.className = "wrapped-setting-row music-folder-row";
+  const where = document.createElement("span");
+  where.className = "music-folder-path";
+  const pick = document.createElement("button");
+  pick.className = "wrapped-button small";
+  pick.textContent = "Manually choose music folder";
+  const rescan = document.createElement("button");
+  rescan.className = "wrapped-button small";
+  rescan.textContent = "Rescan";
+  const clear = document.createElement("button");
+  clear.className = "wrapped-button small";
+  clear.textContent = "Remove";
+  const paint = (st) => {
+    if (!st) return;
+    where.textContent = st.folder
+      ? `${st.folder}: ${st.scanning ? "reading it..." : `${st.files.toLocaleString()} audio file${st.files === 1 ? "" : "s"}`}`
+      : "No folder chosen";
+    where.title = st.folder || "";
+    pick.textContent = st.folder ? "Choose another folder" : "Manually choose music folder";
+    rescan.hidden = !st.folder;
+    clear.hidden = !st.folder;
+    rescan.disabled = st.scanning;
+  };
+  pick.addEventListener("click", async () => {
+    pick.disabled = true;
+    try {
+      paint(await invoke("wrapped_music_folder_pick"));
+    } catch (err) {
+      wrappedToast(String(err));
+    } finally {
+      pick.disabled = false;
+    }
+  });
+  rescan.addEventListener("click", async () => paint(await invoke("wrapped_music_folder_rescan")));
+  clear.addEventListener("click", async () => paint(await invoke("wrapped_music_folder_clear")));
+  invoke("wrapped_music_folder_status").then(paint).catch(() => {});
+  const ticket = wrappedTicket;
+  listen("music-folder", (event) => {
+    if (ticket === wrappedTicket) paint(event.payload);
+  }).then((unlisten) => {
+    const stop = setInterval(() => {
+      if (ticket !== wrappedTicket) {
+        unlisten();
+        clearInterval(stop);
+      }
+    }, 2000);
+  });
+  row.append(pick, rescan, clear);
+  box.append(title, about, row, where);
+  return box;
+}
 
 const WRAPPED_PAGES = {
   // Home: artists for you (new to you, by what you play), new albums from
@@ -3885,10 +4145,14 @@ const WRAPPED_PAGES = {
     }
     wrappedBody.append(tabs);
     if (deepDiveTab === "radio") return diveRadioTab();
-    wrappedBody.append(divePicks());
+    // (one card for everything that makes a playlist: picks, words, where
+    // from and the buttons)
+    const builder = document.createElement("section");
+    builder.className = "dive-builder";
+    builder.append(divePicks(), diveAsk());
+    wrappedBody.append(builder);
     const check = soundCheckBox();
     if (check) wrappedBody.append(check);
-    wrappedBody.append(diveAsk());
     wrappedBody.append(diveMade());
   },
 
@@ -3935,7 +4199,7 @@ const WRAPPED_PAGES = {
     lists.className = "discover-lists";
     lists.append(
       discoverColumn("weekly", "🌟 Discover Weekly", "Artists you don't have and have never played, found through the listeners of what you've played most lately. One song each.", status.weekly, status.building, status.weeklyError, status),
-      discoverColumn("rediscover", "💎 Library Rediscover", "Forgotten gems: old favorites you haven't played in a year or more, and a third from artists in your library you've never played.", status.rediscover, status.building, status.rediscoverError),
+      discoverColumn("rediscover", "💎 Library Rediscover", "Forgotten gems: old favorites you haven't played in a year or more, and a third from artists in your library you've never played.", status.rediscover, status.building, status.rediscoverError, status),
     );
     wrappedBody.append(lists, discoverResetRow(!!status.building));
   },
@@ -4253,7 +4517,20 @@ function divePicks() {
   head.className = "dive-picks-head";
   const title = document.createElement("h4");
   title.textContent = diveSeeds.length ? `Your picks (${diveSeeds.length} of ${DIVE_MAX})` : "Your picks";
-  head.append(title);
+  const pastBtn = document.createElement("button");
+  pastBtn.className = "wrapped-button small dive-past";
+  pastBtn.innerHTML = `<span>History</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
+  const anyPast = divePast().length > 0;
+  pastBtn.disabled = !anyPast;
+  pastBtn.title = anyPast ? "What you've picked before, newest first" : "Nothing picked yet";
+  pastBtn.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (wrapped.querySelector(".dive-past-menu")) return closePlayMenu();
+    divePastMenu(pastBtn);
+  });
+  // (a press on the button itself mustn't close its menu before the click)
+  pastBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
+  head.append(title, pastBtn);
   box.append(head);
   const row = document.createElement("div");
   row.className = "dive-pick-row";
@@ -4305,39 +4582,8 @@ function divePicks() {
   return box;
 }
 
-// What the playlist should be, in your own words. Make the playlist starts
-// a talk with tier 2 (diveChatPanel): a question at a time, yours answered
-// too; once it's settled, the talk goes away and the playlist is made
-let diveSlot = null; // where the talk shows, under the words
-let diveGo = null; // Make the playlist (hidden while talking)
-function diveAsk() {
-  const box = document.createElement("section");
-  box.className = "dive-ask";
-  const label = document.createElement("h4");
-  label.textContent = "What should it be?";
-  const input = document.createElement("textarea");
-  input.className = "wrapped-search dive-input";
-  input.rows = 3;
-  input.maxLength = 500;
-  input.placeholder = diveSeeds.length ? "e.g. the guitars of these, but heavier and from the 90s" : "e.g. the heaviest death metal, songs I've never heard";
-  input.value = diveText;
-  const go = document.createElement("button");
-  go.className = "wrapped-play dive-go";
-  go.innerHTML = `${diveIcon()}<span>Make the playlist</span>`;
-  const paint = () => {
-    go.disabled = !diveText.trim() && !diveSeeds.length;
-    go.title = go.disabled ? "Pick something, or say what the playlist should be" : "";
-  };
-  input.addEventListener("input", () => {
-    diveText = input.value;
-    paint();
-  });
-  paint();
-  go.addEventListener("click", () => {
-    diveChat = { turns: [], plan: null, waiting: false, error: "", draft: "" };
-    diveTalk();
-  });
-  // Where from: the toggle, so the talk needn't ask
+// Songs from: New to you / Your library / Both, for both buttons
+function diveFromSwitch() {
   const from = document.createElement("div");
   from.className = "dive-from";
   const fromLabel = document.createElement("span");
@@ -4365,11 +4611,70 @@ function diveAsk() {
     chips.push(chip);
     fromTabs.append(chip);
   }
+  return from;
+}
+
+// What the playlist should be, in your own words. With nothing written the
+// first button is Smart Radio (from the picks alone); with words it's Make
+// the playlist, which reads them once and makes it, nothing asked; Deeper Dive starts a talk with
+// tier 2 (diveChatPanel): one to four questions, as many as it needs, yours
+// answered too; once it's settled, the talk goes away and it's made
+let diveSlot = null; // where the talk shows, under the words
+let diveGo = null; // the two buttons (hidden while talking)
+function diveAsk() {
+  const box = document.createElement("section");
+  box.className = "dive-ask";
+  const input = document.createElement("textarea");
+  input.className = "wrapped-search dive-input";
+  input.rows = 3;
+  input.maxLength = 500;
+  input.placeholder = diveSeeds.length ? "Optional: say what it should be, e.g. the guitars of these, but heavier and from the 90s" : "Say what it should be, e.g. the heaviest songs in my library";
+  input.setAttribute("aria-label", "What should it be?");
+  input.value = diveText;
+  const buttons = document.createElement("div");
+  buttons.className = "dive-ask-buttons";
+  const go = document.createElement("button");
+  go.className = "wrapped-play dive-go";
+  const deeper = document.createElement("button");
+  deeper.className = "wrapped-button dive-deeper";
+  deeper.innerHTML = `${diveIcon()}<span>Deeper Dive</span>`;
+  // (nothing written but something picked: Smart Radio, songs as close to
+  // the picks as can be; once there are words: Make the playlist from them)
+  const smart = () => !diveText.trim() && diveSeeds.length > 0;
+  let shown = null;
+  const paint = () => {
+    const none = !diveText.trim() && !diveSeeds.length;
+    const now = smart() ? "smart" : "make";
+    if (now !== shown) {
+      shown = now;
+      go.innerHTML = now === "smart" ? `${RADIO_ICON}<span>Smart Radio</span>` : `${diveIcon()}<span>Make the playlist</span>`;
+    }
+    go.disabled = deeper.disabled = none;
+    go.title = none ? "Pick something, or say what the playlist should be" : now === "smart" ? "Songs that sound as close to your picks as can be, nothing asked" : "Made straight from what you wrote, nothing asked";
+    deeper.title = none ? go.title : "A few questions first (up to four, only what it needs), then it's made";
+  };
+  input.addEventListener("input", () => {
+    diveText = input.value;
+    paint();
+  });
+  paint();
+  const start = (mode) => {
+    diveChat = { turns: [], plan: null, waiting: false, error: "", draft: "", mode };
+    diveTalk();
+  };
+  go.addEventListener("click", () => (smart() ? diveBuild("Making your Smart Radio...", { smart: true }) : start("make")));
+  deeper.addEventListener("click", () => start("deeper"));
+  // (the other button keeps one width, Smart Radio or Make the playlist,
+  // so nothing moves as you type)
+  buttons.append(deeper, go);
+  const foot = document.createElement("div");
+  foot.className = "dive-ask-foot";
+  foot.append(diveFromSwitch(), buttons);
   const slot = document.createElement("div");
   slot.className = "dive-chat-slot";
   diveSlot = slot;
-  diveGo = go;
-  box.append(label, input, from, go, slot);
+  diveGo = buttons;
+  box.append(input, foot, slot);
   diveChatRedraw();
   return box;
 }
@@ -4433,7 +4738,7 @@ async function diveTalk() {
   chat.asking = false;
   diveChatRedraw();
   try {
-    const reply = await invoke("wrapped_dive_chat", { picks: divePicksPayload(), text: diveText, source: diveSource, history: diveHistory(chat), follows: chat.follows ?? null });
+    const reply = await invoke("wrapped_dive_chat", { picks: divePicksPayload(), text: diveText, source: diveSource, history: diveHistory(chat), follows: chat.follows ?? null, mode: chat.mode || "deeper" });
     if (diveChat !== chat) return;
     chat.waiting = false;
     chat.plan = { summary: reply.summary, source: diveSource, count: reply.count, perArtist: reply.perArtist };
@@ -4475,6 +4780,27 @@ function diveChatPanel() {
   if (chat.plan) {
     const p = chat.plan;
     panel.append(wrappedNote(`So far: ${DIVE_SOURCES[p.source] || DIVE_SOURCES.both} · ${p.count} songs · ${p.perArtist} per artist`, "wrapped-note small dive-chat-plan"));
+  }
+  if (chat.mode === "make") {
+    const actions = document.createElement("div");
+    actions.className = "dive-chat-actions";
+    if (chat.error) {
+      const again = document.createElement("button");
+      again.className = "wrapped-button";
+      again.textContent = "Try again";
+      again.addEventListener("click", () => diveTalk());
+      actions.append(again);
+    }
+    const over = document.createElement("button");
+    over.className = "dive-chat-over";
+    over.textContent = chat.waiting ? "Cancel" : "Start over";
+    over.addEventListener("click", () => {
+      diveChat = null;
+      diveChatRedraw();
+    });
+    actions.append(over);
+    panel.append(actions);
+    return panel;
   }
   const row = document.createElement("div");
   row.className = "dive-chat-row";
@@ -4541,9 +4867,9 @@ function diveChatPanel() {
 
 // Makes the Deep Dive from what the talk settled, with the builder's
 // progress over the page; the talk comes back if it fails
-async function diveBuild(said) {
-  const chat = diveChat;
-  const plan = { ...(chat?.plan || { summary: "", count: 30, perArtist: 1 }), source: diveSource };
+async function diveBuild(said, opts = {}) {
+  const chat = opts.smart ? null : diveChat;
+  const plan = opts.smart ? { summary: "", count: 30, perArtist: 1, smart: true, source: diveSource } : { ...(chat?.plan || { summary: "", count: 30, perArtist: 1 }), source: diveSource };
   const history = chat ? diveHistory(chat) : [];
   const follows = chat?.follows ?? null;
   diveChat = null;
@@ -4554,13 +4880,13 @@ async function diveBuild(said) {
     if (event.payload.text) wrappedBusy(event.payload.text);
   });
   try {
-    const status = await invoke("wrapped_dive_build", { picks: divePicksPayload(), text: diveText, plan, history, follows });
+    const status = await invoke("wrapped_dive_build", { picks: divePicksPayload(), text: opts.smart ? "" : diveText, plan, history, follows });
     diveLists = status.dives;
     renderDivePiece();
     const made = status.dives[0];
     // (the new one opens on its songs)
     if (made) diveOpen.add(made.builtAt);
-    wrappedToast(`Made ${made?.name || "your Deep Dive"}.`);
+    wrappedToast(`Made ${made?.name || (opts.smart ? "your Smart Radio" : "your Deep Dive")}.`);
   } catch (err) {
     wrappedToast(String(err));
     if (chat) {
@@ -4610,6 +4936,7 @@ function diveTakeUp(d) {
     draft: "",
     asking: true,
     follows: d.builtAt,
+    mode: "deeper",
   };
   deepDiveTab = "dive";
   renderWrapped();
@@ -4792,6 +5119,9 @@ function diveMade() {
         card.className = `dive-made-card${diveOpen.has(d.builtAt) ? " open" : ""}`;
         const top = document.createElement("div");
         top.className = "dive-made-top";
+        const cover = wrappedArt(d.playlist?.imageKey, 96, d.name);
+        cover.classList.add("small", "dive-made-art");
+        top.append(cover);
         const text = document.createElement("div");
         text.className = "dive-made-text";
         const name = document.createElement("span");
@@ -4800,7 +5130,10 @@ function diveMade() {
         const sub = document.createElement("span");
         sub.className = "dive-made-sub";
         const date = new Date(d.builtAt).toLocaleDateString(undefined, { month: "short", day: "numeric" });
-        sub.textContent = [`${d.songs.length} songs`, date, d.request ? `"${d.request}"` : d.picks.join(", ")].filter(Boolean).join(" · ");
+        // (what it was made from; the words, often long, under the mouse)
+        const from = d.picks?.length ? `from ${d.picks.join(", ")}` : d.request ? `"${d.request}"` : null;
+        sub.textContent = [d.plan?.smart ? "Smart Radio" : null, `${d.songs.length} songs`, date, from].filter(Boolean).join(" · ");
+        if (d.request) sub.title = d.request;
         text.append(name, sub);
         top.append(text);
         const talk = document.createElement("button");
@@ -4814,8 +5147,10 @@ function diveMade() {
         top.append(talk);
         if (d.playlist) {
           const play = document.createElement("button");
-          play.className = "wrapped-play discover-play small";
-          play.innerHTML = `${WRAPPED_PLAY_ICON}<span>Play</span>`;
+          play.className = "dive-made-play";
+          play.innerHTML = WRAPPED_PLAY_ICON;
+          play.title = "Play";
+          play.setAttribute("aria-label", `Play ${d.name}`);
           play.addEventListener("click", (e) => {
             e.stopPropagation();
             if (!zone) return wrappedToast("Pick a zone first.");
@@ -4894,7 +5229,9 @@ function diveRadioTab() {
   if (!diveSeeds.length) {
     wrappedBody.append(wrappedNote("Start the radio from an artist, or pick songs, albums or artists with their brain buttons.", "wrapped-note small"));
     return radioPickSeed((item) => {
-      diveSeeds.push({ kind: "artist", handle: item.handle, title: item.title, imageKey: item.imageKey, radio: { name: item.title, handle: item.handle } });
+      const seed = { kind: "artist", handle: item.handle, title: item.title, imageKey: item.imageKey, radio: { name: item.title, handle: item.handle } };
+      diveSeeds.push(seed);
+      divePastAdd(seed);
       renderWrapped();
     });
   }
@@ -5453,6 +5790,7 @@ async function wrappedHome(holder, ticket, refresh = false) {
   }
   if (ticket !== wrappedTicket) return;
   paintHome(holder, status, ticket);
+  homeMemories(holder, ticket);
   // (a build's progress and end, a ban, a daily look for albums: all
   // come as events while the page shows)
   homeUnlisten = await listen("wrapped-home", (event) => {
@@ -5520,39 +5858,162 @@ function paintHome(holder, status, ticket) {
         status.artists.map((a) => ({ performerId: a.performerId, title: a.name, artist: a.name, sub: a.seeds?.length ? `Like ${a.seeds.slice(0, 2).join(", ")}` : "", why: a.because, imageKey: a.imageKey, round: true })),
         (item) => openWrappedPage({ page: "artist", performerId: item.performerId }),
         ban,
+        "Artists new to you that sound like your favorites over all time and your library (by tags, not just the last few weeks like Discover)",
       ),
     );
   }
-  if (status.newFromFavorites.length) rows.append(homeRow("favorites", "New albums from artists you listen to", status.newFromFavorites.map(albumItem), openHomeAlbum, ban));
-  if (status.newFromSuggested.length) rows.append(homeRow("suggested", "New albums from artists you may like", status.newFromSuggested.map(albumItem), openHomeAlbum, ban));
-  const foot = document.createElement("div");
-  foot.className = "wrapped-home-foot";
-  if (status.builtAt) {
-    foot.append(wrappedNote(`Put together ${historyWhen(status.builtAt)}. Artists new to you that sound like your favorites over all time and your library (by tags, not the last few weeks like Discover), and albums from the last year.`, "wrapped-note small"));
-  }
-  if (!status.building) {
-    const again = document.createElement("button");
-    again.className = "wrapped-button small";
-    again.textContent = "Refresh";
-    again.addEventListener("click", () => wrappedHome(holder, ticket, true));
-    foot.append(again);
-  }
-  rows.append(foot);
+  if (status.newFromFavorites.length) rows.append(homeRow("favorites", "New albums from artists you listen to", status.newFromFavorites.map(albumItem), openHomeAlbum, ban, "Albums from the last year by the artists you listen to most, newest first"));
+  if (status.newFromSuggested.length) rows.append(homeRow("suggested", "New albums from artists you may like", status.newFromSuggested.map(albumItem), openHomeAlbum, ban, "Albums from the last year by the artists suggested for you"));
+  // Refresh, top right of the page; when it was put together on hover
+  holder.querySelector(".wrapped-home-corner")?.remove();
+  const corner = document.createElement("div");
+  corner.className = "wrapped-home-corner";
+  const again = document.createElement("button");
+  again.className = "wrapped-button small";
+  again.textContent = status.building ? "Refreshing..." : "Refresh";
+  again.disabled = !!status.building;
+  again.addEventListener("click", () => wrappedHome(holder, ticket, true));
+  const tip = document.createElement("span");
+  tip.className = "wrapped-home-corner-tip";
+  tip.append(again);
+  hoverTip(
+    tip,
+    `${status.builtAt ? `Put together ${historyWhen(status.builtAt)}. ` : ""}Refresh looks for artists for you and new albums again. New albums are also looked for daily, artists every two weeks.`,
+  );
+  corner.append(tip);
+  holder.prepend(corner);
   holder.querySelector(".wrapped-home-rows")?.remove();
-  holder.append(rows);
+  // (between the rows from your listening: above, Your Wrapped Playlists
+  // and Your week; below, Forgotten favorites and On this day)
+  const bottom = holder.querySelector(".wrapped-home-bottom");
+  if (bottom) holder.insertBefore(rows, bottom);
+  else holder.append(rows);
+}
+
+// Home's rows from your own listening and your lists (home.rs
+// wrapped_home_memories; the Discover and Deep Dive lists), drawn once per
+// visit around the suggestion rows
+async function homeMemories(holder, ticket) {
+  let top = holder.querySelector(".wrapped-home-top");
+  if (!top) {
+    top = document.createElement("div");
+    top.className = "wrapped-home-top";
+    holder.insertBefore(top, holder.querySelector(".wrapped-home-rows"));
+  }
+  let bottom = holder.querySelector(".wrapped-home-bottom");
+  if (!bottom) {
+    bottom = document.createElement("div");
+    bottom.className = "wrapped-home-bottom";
+    holder.append(bottom);
+  }
+  const [memories, discover, dives] = await Promise.all([
+    invoke("wrapped_home_memories", { tzOffsetMin: new Date().getTimezoneOffset() }).catch(() => null),
+    wrappedSettings?.discovery === false ? null : invoke("wrapped_discover_status").catch(() => null),
+    invoke("wrapped_dive_status").catch(() => null),
+  ]);
+  if (ticket !== wrappedTicket) return;
+  const dateOf = (ms) => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  const songs = (n) => `${n} song${n === 1 ? "" : "s"}`;
+  const openMemory = (item) =>
+    item.albumId != null ? openWrappedPage({ page: "album", albumId: item.albumId }) : openWrappedPage({ page: "search", query: `${item.artist} ${item.title}` });
+
+  // Your Wrapped Playlists: the current Discover Weekly and Library
+  // Rediscover, and the latest Deep Dives
+  const lists = [];
+  for (const which of ["weekly", "rediscover"]) {
+    const c = discover?.[which]?.[0];
+    if (c) lists.push({ title: c.name, sub: `Made ${c.date || dateOf(c.builtAt)}`, imageKey: c.playlist?.imageKey || c.covers?.[0], why: c.artists?.slice(0, 6).join(", "), open: () => openWrappedPage({ page: "discover" }) });
+  }
+  for (const d of (dives?.dives || []).slice(0, 8)) {
+    lists.push({
+      title: d.name,
+      sub: `Deep Dive · ${dateOf(d.builtAt)}`,
+      imageKey: d.playlist?.imageKey,
+      why: d.request,
+      open: () => {
+        deepDiveTab = "dive";
+        diveOpen.add(d.builtAt);
+        openWrappedPage({ page: "deepdive" });
+      },
+    });
+  }
+  const topRows = [];
+  if (lists.length) topRows.push(homeRow("lists", "Your Wrapped Playlists", lists, (item) => item.open(), null, "Your current Discover Weekly and Library Rediscover, and your latest Deep Dives"));
+
+  // Your week
+  const week = memories?.week;
+  if (week?.plays) {
+    const hours = Math.floor(week.seconds / 3600);
+    const minutes = Math.round((week.seconds % 3600) / 60);
+    const time = week.seconds ? `, ${hours ? `${hours} h ` : ""}${minutes} min` : "";
+    topRows.push(
+      homeRow(
+        "week",
+        "Your week",
+        week.albums.map((a) => ({ albumId: a.albumId, title: a.title, artist: a.artist, sub: `${a.artist} · ${songs(a.plays)}`, imageKey: a.imageKey, why: `${songs(a.plays)} of it this week` })),
+        openMemory,
+        null,
+        `${songs(week.plays)} from ${week.artists} artist${week.artists === 1 ? "" : "s"} in the last 7 days${time}`,
+      ),
+    );
+  }
+  top.replaceChildren(...topRows);
+
+  const bottomRows = [];
+  if (memories?.forgotten?.length) {
+    bottomRows.push(
+      homeRow(
+        "forgotten",
+        "Forgotten favorites",
+        memories.forgotten.map((a) => ({ albumId: a.albumId, title: a.title, artist: a.artist, sub: `${a.artist} · last ${new Date(a.lastPlayed).getFullYear()}`, imageKey: a.imageKey, why: `${songs(a.plays)} played, the last on ${dateOf(a.lastPlayed)}` })),
+        openMemory,
+        null,
+        "Albums you played a lot and haven't in a year or more",
+      ),
+    );
+  }
+  if (memories?.onThisDay?.length) {
+    const today = new Date().toLocaleDateString(undefined, { month: "long", day: "numeric" });
+    bottomRows.push(
+      homeRow(
+        "onthisday",
+        "On this day",
+        memories.onThisDay.map((a) => ({ albumId: a.albumId, title: a.title, artist: a.artist, sub: `${a.year} · ${a.artist}`, imageKey: a.imageKey, why: `${songs(a.plays)} of it on ${dateOf(a.lastPlayed)}` })),
+        openMemory,
+        null,
+        `What you played on ${today} in years past`,
+      ),
+    );
+  }
+  bottom.replaceChildren(...bottomRows);
+}
+
+// An explainer that shows on `el` after half a second of the mouse on it,
+// and goes the moment it leaves
+function hoverTip(el, text) {
+  el.classList.add("has-tip");
+  el.querySelector(":scope > .hover-tip")?.remove();
+  const tip = document.createElement("span");
+  tip.className = "hover-tip";
+  tip.textContent = text;
+  el.append(tip);
+  return el;
 }
 
 // A Home row: one row of cards, as many as fit the width; its title opens
 // it to three rows, and "Keep looking" three more at a time. Each card's
 // X (on hover) bans the artist. `open` is remembered per row.
 const homeOpen = {};
-function homeRow(id, title, items, onOpen, ban) {
+function homeRow(id, title, items, onOpen, ban, tip) {
   const box = document.createElement("section");
   box.className = "wrapped-home-row";
   const head = document.createElement("button");
   head.className = "wrapped-home-head";
-  head.innerHTML = `<span>${title}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
-  head.title = "Show more";
+  head.innerHTML = `<span class="wrapped-home-title"></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>`;
+  const name = head.querySelector(".wrapped-home-title");
+  name.textContent = title;
+  // (what the row is: on the title, after half a second)
+  if (tip) hoverTip(name, tip);
   const grid = document.createElement("div");
   grid.className = "wrapped-cards";
   const more = document.createElement("button");
@@ -5573,7 +6034,7 @@ function homeRow(id, title, items, onOpen, ban) {
         const wrap = document.createElement("div");
         wrap.className = "wrapped-card-wrap";
         wrap.append(wrappedCard(item, () => onOpen(item)));
-        if (item.artist) {
+        if (item.artist && ban) {
           const x = document.createElement("button");
           x.className = "discover-ask-x wrapped-card-ban";
           x.innerHTML = CLOSE_ICON;
@@ -5590,7 +6051,6 @@ function homeRow(id, title, items, onOpen, ban) {
     );
     box.classList.toggle("open", rows > 1);
     more.hidden = rows <= 1 || shown >= items.length;
-    head.title = rows > 1 ? "Show one row" : "Show more";
   };
   head.addEventListener("click", () => {
     rows = rows > 1 ? 1 : 3;
@@ -5888,6 +6348,7 @@ function libraryTrackRow(t, opts) {
     const handle = t.handle ?? (await invoke("library_track_handle", { trackId: t.trackId }));
     const next = await invoke("library_track_heart", { handle, favorite });
     t.favorite = next.favorite;
+    if (t.trackId != null) invoke("wrapped_library_favorite", { trackId: t.trackId, favorite: next.favorite }).catch(() => {});
     return { inLibrary: true, favorite: next.favorite };
   });
   const length = document.createElement("span");
@@ -5930,6 +6391,88 @@ function wholeRowOpens(row, title) {
   });
 }
 
+// Shuffle library (shuffle.rs): 50 songs as a fresh queue, kept topped up
+// as you listen; the hearts switch makes it hearted songs only; "Skip
+// played" leaves out what was played lately (today by default)
+const SHUFFLE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-7.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.289 1.725l.359.45"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>';
+const SHUFFLE_RECENT = [
+  ["today", "Today"],
+  ["3", "Last 3 days"],
+  ["7", "Last 7 days"],
+  ["30", "Last 30 days"],
+  ["90", "Last 90 days"],
+  ["off", "Off"],
+];
+function shuffleControls(entry, ticket) {
+  const box = document.createElement("div");
+  box.className = "wrapped-shuffle";
+  const btn = document.createElement("button");
+  btn.className = "wrapped-button small wrapped-shuffle-btn";
+  const skip = document.createElement("label");
+  skip.className = "wrapped-shuffle-skip";
+  const select = document.createElement("select");
+  select.className = "wrapped-shuffle-select";
+  for (const [value, label] of SHUFFLE_RECENT) {
+    const o = document.createElement("option");
+    o.value = value;
+    o.textContent = label;
+    select.append(o);
+  }
+  select.value = entry.recent;
+  select.addEventListener("change", () => {
+    entry.recent = select.value;
+    saveTracksView(entry);
+  });
+  const skipText = document.createElement("span");
+  skipText.textContent = "Skip played:";
+  skip.append(skipText, select);
+  hoverTip(skip, "Songs played in this window are left out of the shuffle. Today: played since midnight. Off: anything goes. A song never comes twice in one shuffle, and no artist twice within 50 songs.");
+  const note = document.createElement("span");
+  note.className = "wrapped-shuffle-note";
+  const paint = (st) => {
+    const mine = st.running && (!zone || st.zoneId === zone.zoneId);
+    btn.innerHTML = `${SHUFFLE_ICON}<span>${mine ? "Stop shuffle" : "Shuffle"}</span>`;
+    btn.classList.toggle("on", mine);
+    btn.title = mine ? "Stop adding songs (the queue stays)" : `Shuffle your ${entry.hearts ? "hearted tracks" : "library"}: 50 songs, topped up as you listen`;
+    note.textContent = mine ? `Shuffling${st.heartsOnly ? " hearted tracks" : ""}: ${st.added} songs queued so far` : st.ended || "";
+    note.title = note.textContent;
+  };
+  btn.addEventListener("click", async () => {
+    if (btn.classList.contains("on")) {
+      paint(await invoke("wrapped_shuffle_stop"));
+      return;
+    }
+    if (!zone) return wrappedToast("Pick a zone first.");
+    btn.disabled = true;
+    note.textContent = "Picking songs...";
+    try {
+      const st = await invoke("wrapped_shuffle_start", {
+        options: { zoneId: zone.zoneId, heartsOnly: !!entry.hearts, recent: entry.recent, tzOffsetMin: new Date().getTimezoneOffset() },
+      });
+      paint(st);
+      wrappedToast(`Shuffling ${entry.hearts ? "your hearted tracks" : "your library"} on ${zone.name}`);
+    } catch (err) {
+      note.textContent = "";
+      wrappedToast(String(err));
+    } finally {
+      btn.disabled = false;
+    }
+  });
+  invoke("wrapped_shuffle_status").then(paint).catch(() => paint({}));
+  listen("wrapped-shuffle", (event) => {
+    if (ticket === wrappedTicket) paint(event.payload);
+  }).then((unlisten) => {
+    const stop = setInterval(() => {
+      if (ticket !== wrappedTicket) {
+        unlisten();
+        clearInterval(stop);
+      }
+    }, 2000);
+  });
+  box.append(btn, skip, note);
+  return box;
+}
+
 // The Tracks page's sort, direction and hearts switch, kept between visits
 const TRACKS_VIEW_KEY = "wrapped-tracks-view";
 function loadTracksView() {
@@ -5941,7 +6484,7 @@ function loadTracksView() {
 }
 function saveTracksView(entry) {
   try {
-    localStorage.setItem(TRACKS_VIEW_KEY, JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts }));
+    localStorage.setItem(TRACKS_VIEW_KEY, JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts, recent: entry.recent }));
   } catch {}
 }
 
@@ -5977,6 +6520,7 @@ WRAPPED_PAGES.tracks = async function (entry) {
   entry.sort ||= sorts[saved.sort] ? saved.sort : "artist";
   entry.dir ||= saved.dir === "up" || saved.dir === "down" ? saved.dir : firstDir[entry.sort];
   entry.hearts ??= !!saved.hearts;
+  entry.recent ||= saved.recent || "today";
   entry.filter ||= "";
   const hearted = tracks.filter((t) => t.favorite).length;
   const total = tracks.length.toLocaleString();
@@ -6061,7 +6605,7 @@ WRAPPED_PAGES.tracks = async function (entry) {
   filter.value = entry.filter;
   const row = document.createElement("div");
   row.className = "wrapped-tabs-row";
-  row.append(hearts, filter);
+  row.append(shuffleControls(entry, ticket), hearts, filter);
   wrappedBody.append(row, header, holder);
   show();
 };
@@ -6460,9 +7004,19 @@ WRAPPED_PAGES.history = async function (entry) {
       return;
     }
     if (entry.view === "recent") {
-      const plays = await invoke("wrapped_history_recent", { limit: 500 });
+      const plays = await invoke("wrapped_history_recent", { limit: 500, oldest: !!entry.oldest });
       if (ticket !== wrappedTicket || entry.view !== "recent") return;
-      holder.replaceChildren(historyRows(plays));
+      // (newest or oldest first, from the Played heading: for this visit
+      // only, a new visit starts with the newest)
+      holder.replaceChildren(
+        historyRows(plays, {
+          oldest: !!entry.oldest,
+          flip: () => {
+            entry.oldest = !entry.oldest;
+            show();
+          },
+        }),
+      );
     } else {
       const periods = document.createElement("div");
       periods.className = "wrapped-tabs small";
@@ -6596,32 +7150,120 @@ async function openFromHistory(kind, row) {
   wrappedToast("Roon didn't keep an id for that one.");
 }
 
-function historyRows(plays) {
+// Recent plays laid out like Roon's History and the Tracks page: columns
+// art, track, artist, album, heart, how much was heard, when; the headings
+// only name the columns, except Played: a click turns the list round
+// (newest first or oldest first), its arrow in the accent color
+function historyRows(plays, order = {}) {
   const rows = document.createElement("div");
-  rows.className = "wrapped-tracks";
+  rows.className = "wrapped-tracks wrapped-history-plays";
+  if (!plays.length) {
+    rows.append(wrappedNote("Roon has no plays logged yet."));
+    return rows;
+  }
+  const header = document.createElement("div");
+  header.className = "wrapped-track wrapped-library-track wrapped-track-header wrapped-history-track";
+  const spacer = (el) => {
+    el.classList.add("wrapped-header-spacer");
+    el.setAttribute("aria-hidden", "true");
+    el.tabIndex = -1;
+    return el;
+  };
+  header.append(spacer(wrappedArt(null, 80, "")));
+  for (const [label, className] of [
+    ["Track", "wrapped-track-title"],
+    ["Artist", "wrapped-track-by"],
+    ["Album", "wrapped-track-on"],
+    [null, "heart"],
+    ["Heard", "wrapped-history-heard"],
+    ["Played", "wrapped-history-played"],
+  ]) {
+    if (!label) {
+      header.append(spacer(document.createElement("span")));
+      header.lastChild.className = "wrapped-history-heart-gap wrapped-header-spacer";
+      continue;
+    }
+    if (className === "wrapped-history-played" && order.flip) {
+      const cell = document.createElement("button");
+      cell.className = `${className} wrapped-col-head wrapped-col-sort`;
+      cell.title = order.oldest ? "Oldest first: click for the newest first" : "Newest first: click for the oldest first";
+      const text = document.createElement("span");
+      text.textContent = label;
+      const dir = document.createElement("span");
+      dir.className = "wrapped-col-dir";
+      dir.textContent = order.oldest ? "\u25B4" : "\u25BE";
+      cell.append(text, dir);
+      cell.addEventListener("click", order.flip);
+      header.append(cell);
+      continue;
+    }
+    const cell = document.createElement("span");
+    cell.className = `${className} wrapped-col-head`;
+    cell.textContent = label;
+    header.append(cell);
+  }
+  rows.append(header);
   for (const play of plays) {
     const row = document.createElement("div");
-    row.className = "wrapped-track";
-    const art = wrappedArt(play.imageKey, 88, play.album || play.title);
-    art.classList.add("small");
-    const text = document.createElement("button");
-    text.className = "wrapped-track-text link";
+    row.className = "wrapped-track wrapped-library-track wrapped-history-track";
+    row.append(wrappedArt(play.imageKey, 80, play.album || play.title));
+    // The title: the song's menu when it's in the library, else its album
     const title = document.createElement("span");
-    title.className = "wrapped-track-title";
+    title.className = "wrapped-track-title link";
     title.textContent = play.title;
-    const sub = document.createElement("span");
-    sub.className = "wrapped-track-sub";
-    sub.textContent = [play.artist, play.album].filter(Boolean).join(" · ");
-    text.append(title, sub);
-    text.addEventListener("click", () => openFromHistory("album", play));
+    title.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      if (play.libraryTrackId == null) return openFromHistory("album", play);
+      let handle;
+      try {
+        handle = await invoke("library_track_handle", { trackId: play.libraryTrackId });
+      } catch (err) {
+        return wrappedToast(String(err));
+      }
+      wrappedPlayMenu(title, {
+        what: "song",
+        handle,
+        seed: { kind: "song", handle, title: play.title, artist: (play.artist || "").split(/ \/ |, /)[0], album: play.album || "", imageKey: play.imageKey },
+        radio: { tracks: [handle] },
+      });
+    });
+    const artist = document.createElement("span");
+    artist.className = `wrapped-track-by${play.performerId != null ? " link" : ""}`;
+    artist.textContent = play.artist;
+    if (play.performerId != null) artist.addEventListener("click", () => openWrappedPage({ page: "artist", performerId: play.performerId, name: play.artist }));
+    const album = document.createElement("span");
+    album.className = `wrapped-track-on${play.albumId != null ? " link" : ""}`;
+    album.textContent = play.album;
+    if (play.albumId != null) album.addEventListener("click", () => openFromHistory("album", play));
+    // The song's heart, when it's in the library (a gap otherwise)
+    let heart;
+    if (play.inLibrary && play.libraryTrackId != null) {
+      heart = wrappedHeart({ inLibrary: true, favorite: play.favorite }, async (favorite) => {
+        const handle = await invoke("library_track_handle", { trackId: play.libraryTrackId });
+        const next = await invoke("library_track_heart", { handle, favorite });
+        play.favorite = next.favorite;
+        invoke("wrapped_library_favorite", { trackId: play.libraryTrackId, favorite: next.favorite }).catch(() => {});
+        return { inLibrary: true, favorite: next.favorite };
+      });
+    } else {
+      heart = document.createElement("span");
+      heart.className = "wrapped-history-heart-gap";
+    }
+    // How much was heard, like Roon's "15% / 5:43" (100% for the whole song)
+    const heard = document.createElement("span");
+    heard.className = "wrapped-history-heard";
+    const pct = play.secondsPlayed != null && play.lengthSeconds ? Math.min(100, Math.round((play.secondsPlayed / play.lengthSeconds) * 100)) : null;
+    const length = play.lengthSeconds ? formatTime(play.lengthSeconds) : "";
+    heard.textContent = pct != null ? `${pct >= 99 ? 100 : pct}%${length ? ` / ${length}` : ""}` : length;
+    if (pct != null && pct < 99) heard.title = `Stopped or skipped after ${pct}% of the song`;
     const when = document.createElement("span");
-    when.className = "wrapped-track-length";
-    const heard = play.secondsPlayed != null && play.lengthSeconds ? Math.min(100, Math.round((play.secondsPlayed / play.lengthSeconds) * 100)) : null;
-    when.textContent = [historyWhen(play.playedAt), heard != null && heard < 90 ? `${heard}%` : null].filter(Boolean).join(" · ");
-    row.append(art, text, when);
+    when.className = "wrapped-history-played";
+    when.textContent = historyWhen(play.playedAt);
+    when.title = new Date(play.playedAt).toLocaleString();
+    row.append(title, artist, album, heart, heard, when);
+    wholeRowOpens(row, title);
     rows.append(row);
   }
-  if (!plays.length) rows.append(wrappedNote("Roon has no plays logged yet."));
   return rows;
 }
 
@@ -6650,6 +7292,45 @@ const SIMILAR_SCOPES = [
   ["library", "Library"],
   ["discover", "Discover"],
 ];
+
+// ----- Page size (Wrapped's Settings): the pages scaled, not the top bar,
+// side menu or player (they stay lined up with Roon). A fixed percent, or
+// "auto": the page's width over PAGE_AUTO_WIDTH, never under PAGE_AUTO_MIN
+// (narrower than that, the page reflows as before) nor over PAGE_AUTO_MAX.
+// CSS zoom on the scrolling body, so the page column's widths grow too -----
+const PAGE_SIZES = ["auto", "90", "100", "110", "125", "150"];
+const PAGE_AUTO_WIDTH = 1100;
+const PAGE_AUTO_MIN = 0.9;
+const PAGE_AUTO_MAX = 1.6;
+let pageSizeWatch = null;
+function pageZoomFor(width) {
+  return Math.round(Math.min(PAGE_AUTO_MAX, Math.max(PAGE_AUTO_MIN, width / PAGE_AUTO_WIDTH)) * 100) / 100;
+}
+function setPageZoom(zoom) {
+  const now = Number(wrappedBody.style.zoom) || 1;
+  if (Math.abs(now - zoom) < 0.005) return;
+  wrappedBody.style.zoom = zoom === 1 ? "" : String(zoom);
+}
+function applyPageSize() {
+  const size = PAGE_SIZES.includes(wrappedSettings?.pageSize) ? wrappedSettings.pageSize : "100";
+  if (size === "auto") {
+    // (the body's width on screen doesn't change with its zoom, so this
+    // never feeds itself)
+    if (!pageSizeWatch) {
+      pageSizeWatch = new ResizeObserver(() => {
+        const width = wrappedBody.getBoundingClientRect().width;
+        if (width > 0) setPageZoom(pageZoomFor(width));
+      });
+      pageSizeWatch.observe(wrappedBody);
+    }
+    const width = wrappedBody.getBoundingClientRect().width;
+    if (width > 0) setPageZoom(pageZoomFor(width));
+    return;
+  }
+  pageSizeWatch?.disconnect();
+  pageSizeWatch = null;
+  setPageZoom(Number(size) / 100);
+}
 
 WRAPPED_PAGES.settings = async function () {
   wrappedHeading("Settings", "Wrapped's own settings");
@@ -6722,6 +7403,7 @@ WRAPPED_PAGES.settings = async function () {
     return a;
   };
 
+
   // Wrapped Discovery on or off: the weekly lists, the thumbs and the
   // zone watching behind them (the menu, pages and radio stay either way)
   const discovery = field(
@@ -6732,6 +7414,8 @@ WRAPPED_PAGES.settings = async function () {
   const onOff = document.createElement("div");
   onOff.className = "wrapped-tabs small";
   const discoveryOn = wrappedSettings.discovery !== false;
+  // (On glows while at least one tier is working)
+  let discoveryOnPill = null;
   for (const [value, label] of [
     [false, "Off"],
     [true, "On"],
@@ -6739,6 +7423,7 @@ WRAPPED_PAGES.settings = async function () {
     const pill = document.createElement("button");
     pill.className = `wrapped-tab${discoveryOn === value ? " selected" : ""}`;
     pill.textContent = label;
+    if (value) discoveryOnPill = pill;
     pill.addEventListener("click", async () => {
       if (discoveryOn === value) return;
       await save({ discovery: value });
@@ -6868,61 +7553,6 @@ WRAPPED_PAGES.settings = async function () {
     lastfmNote.append(...keyWords());
     lastfmSection.append(lastfmTitle, lastfmNote, lastfmRow);
     lastfmBox.append(lastfmSection);
-    // Your Last.fm account: its scrobbles reach back before Roon's history
-    const userSection = document.createElement("div");
-    userSection.className = "llm-section";
-    const userTitle = document.createElement("div");
-    userTitle.className = "llm-section-title";
-    userTitle.textContent = "Last.fm username (optional)";
-    const userNote = wrappedNote(
-      "Roon's history only goes back as far as this Core's library. If you scrobble to Last.fm, your account's full history counts toward your favorites on Home (the scrobbles from before Roon's history starts). It's read once, then new ones daily.",
-      "wrapped-note small",
-    );
-    const userRow = document.createElement("div");
-    userRow.className = "wrapped-setting-row";
-    const userInput = document.createElement("input");
-    userInput.className = "wrapped-search";
-    userInput.placeholder = "Your Last.fm username";
-    userInput.value = wrappedSettings.lastfmUser || "";
-    userInput.autocomplete = "off";
-    const saveUser = document.createElement("button");
-    saveUser.className = "wrapped-button";
-    saveUser.textContent = "Save";
-    const userState = wrappedNote("", "wrapped-note small");
-    const paintScrobbles = (st) => {
-      if (!st || !st.user) return (userState.textContent = "");
-      const n = st.plays.toLocaleString();
-      const from = st.oldest ? ` back to ${new Date(st.oldest).toLocaleDateString()}` : "";
-      userState.textContent = st.error
-        ? st.error
-        : st.syncing
-          ? `Reading ${st.user}'s scrobbles... ${n} so far${from}`
-          : st.plays
-            ? `${n} scrobbles of ${st.user}${from}${st.complete ? "" : " (not all read yet: it goes on by itself, or Save reads now)"}`
-            : `Nothing read from ${st.user} yet.`;
-    };
-    saveUser.addEventListener("click", async () => {
-      await save({ lastfmUser: userInput.value.trim() });
-      if (userInput.value.trim()) paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: false }).catch(() => null));
-      else userState.textContent = "";
-    });
-    userInput.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") saveUser.click();
-    });
-    // (a read that stopped, or one to do over)
-    const again = document.createElement("button");
-    again.className = "wrapped-button";
-    again.textContent = "Rescan";
-    again.title = "Read the whole history from Last.fm again";
-    again.addEventListener("click", async () => {
-      if (!userInput.value.trim()) return;
-      paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: true }).catch(() => null));
-    });
-    userRow.append(userInput, saveUser, again);
-    userSection.append(userTitle, userNote, userRow, userState);
-    lastfmBox.append(userSection);
-    invoke("wrapped_scrobbles_status").then(paintScrobbles).catch(() => {});
-    scrobblesPaint = paintScrobbles;
     // Scan all: the history's new plays, the library's artists, then the
     // tags for them (the left column has each on its own)
     const [lastfmToggle, lastfmFold] = setupFold("lastfm", hasKey, lastfmBox);
@@ -7557,6 +8187,7 @@ WRAPPED_PAGES.settings = async function () {
         ? `${n.toLocaleString()} song${n === 1 ? "" : "s"} heard so far${files ? ` (${files === n ? "all" : files.toLocaleString()} from your own files)` : ""}`
         : "No songs heard yet";
       soundSection.append(wrappedNote(`Downloaded and working. ${heard}; this PC hears ${soundState.workers} previews at a time.`, "wrapped-note small"));
+      soundSection.append(musicFolderSection());
     } else {
       if (soundJob?.stage === "error") soundSection.append(wrappedNote(soundJob.error, "wrapped-note small ollama-error"));
       const goRow = document.createElement("div");
@@ -7591,142 +8222,269 @@ WRAPPED_PAGES.settings = async function () {
       card.append(...members.map((m) => m.el));
       tierCards.append(card);
     }
+    discoveryOnPill?.classList.toggle("glow", sections.some((m) => m.on));
     tiers.append(tierCards);
   }
 
-  const toasted = field("Toasted's settings", "The Roon Core, the Toaster, hotkeys, toasts and the Wrapper live in the app's own Settings window.");
-  const openToasted = document.createElement("button");
-  openToasted.className = "wrapped-button";
-  openToasted.textContent = "Open Toasted's Settings";
-  openToasted.addEventListener("click", () => send("open_window", { window: "settings" }));
-  toasted.append(openToasted);
-  // (above Similar by, at the top of the left column)
-  left.prepend(toasted);
-
-  const similar = field(
-    "Similar by",
-    'Which row the "Similar" section under artists and albums opens with. Roon is Roon\'s own picks; the others come from the tags.',
-  );
-  const pills = document.createElement("div");
-  pills.className = "wrapped-tabs small";
-  for (const [value, label] of SIMILAR_BY) {
-    const pill = document.createElement("button");
-    pill.className = `wrapped-tab${wrappedSettings.similarBy === value ? " selected" : ""}`;
-    pill.textContent = label;
-    pill.addEventListener("click", async () => {
-      await save({ similarBy: value });
-      for (const other of pills.children) other.classList.toggle("selected", other === pill);
-    });
-    pills.append(pill);
-  }
-  similar.append(pills);
-
-  const scopeField = field(
-    "Similar looks in",
-    "Library shows artists you already have; Discover only artists you don't. The row has the switch too; this is where it starts.",
-  );
-  const scopePills = document.createElement("div");
-  scopePills.className = "wrapped-tabs small";
-  for (const [value, label] of SIMILAR_SCOPES) {
-    const pill = document.createElement("button");
-    pill.className = `wrapped-tab${(wrappedSettings.similarScope || "library") === value ? " selected" : ""}`;
-    pill.textContent = label;
-    pill.addEventListener("click", async () => {
-      await save({ similarScope: value });
-      for (const other of scopePills.children) other.classList.toggle("selected", other === pill);
-    });
-    scopePills.append(pill);
-  }
-  scopeField.append(scopePills);
-
+  // ----- The left column: cards, in the order they matter when setting
+  // up: what Wrapped reads from Roon (everything builds on it), the
+  // Similar rows, the page size, then Toasted's own settings -----
+  const card = (title, text) => {
+    const box = document.createElement("section");
+    box.className = "settings-card";
+    const h = document.createElement("div");
+    h.className = "settings-card-title";
+    h.textContent = title;
+    box.append(h);
+    if (text) {
+      const p = document.createElement("div");
+      p.className = "wrapped-setting-text";
+      p.textContent = text;
+      box.append(p);
+    }
+    left.append(box);
+    return box;
+  };
+  // One line in a card: a name and what it says now on the left, its
+  // button (or pills) on the right
+  const cardRow = (box, name, status, control) => {
+    const row = document.createElement("div");
+    row.className = "settings-card-row";
+    const text = document.createElement("div");
+    text.className = "settings-card-row-text";
+    const h = document.createElement("div");
+    h.className = "settings-card-row-name";
+    h.textContent = name;
+    text.append(h);
+    if (status) text.append(status);
+    row.append(text);
+    if (control) row.append(control);
+    box.append(row);
+    return row;
+  };
+  const statusLine = (words = "") => {
+    const el = document.createElement("div");
+    el.className = "settings-card-status";
+    el.textContent = words;
+    return el;
+  };
+  const button = (label, run) => {
+    const b = document.createElement("button");
+    b.className = "wrapped-button small";
+    b.textContent = label;
+    b.addEventListener("click", run);
+    return b;
+  };
   const n = (x) => (x ?? 0).toLocaleString();
-  const copied = historyStatus
-    ? `${n(historyStatus.plays)} plays copied from Roon's history${historyStatus.syncedAt ? `, read ${historyWhen(historyStatus.syncedAt)}` : ""}`
-    : "History not read yet";
-  const records = field(
-    "Wrapped's records",
-    `${copied}. ${n(tagCount)} artist${tagCount === 1 ? "" : "s"} in the tag cache. Both live in the app's data folder.`,
-  );
-  const libraryField = field(
-    "Your library's artists",
-    "The main artists in your Roon library, read once so Wrapped can tell what's in it and what isn't (Library and Discover). Read it again after adding a lot of music.",
-  );
-  const libRow = document.createElement("div");
-  libRow.className = "wrapped-setting-row";
-  const libButton = document.createElement("button");
-  libButton.className = "wrapped-button";
-  const libText = document.createElement("span");
-  libText.className = "wrapped-setting-text inline";
-  const showLibrary = (st) => {
-    libButton.textContent = st.syncing ? "Reading..." : st.artists ? "Read again" : "Read the library";
-    libButton.disabled = st.syncing;
-    libText.textContent = st.artists
-      ? `${st.artists.toLocaleString()} artists${st.albums ? `, ${st.albums.toLocaleString()} albums` : ""}${st.tracks ? `, ${st.tracks.toLocaleString()} tracks` : ""}${st.syncedAt ? `, read ${historyWhen(st.syncedAt)}` : ""}`
+
+  // Your music: the history, the library and the artists' tags
+  const music = card("Your music", "What Wrapped reads from Roon (and Last.fm) to work from. It's kept up to date as you listen; read it again after big changes.");
+  // History, with its progress while it's read (from here, the banner or
+  // the History page)
+  const historyText = statusLine();
+  const paintHistory = (st) => {
+    historyText.textContent = st?.plays
+      ? `${n(st.plays)} Roon plays${st.scrobbles ? `, ${n(st.scrobbles)} Last.fm scrobbles from before` : ""}${st.syncedAt ? `, read ${historyWhen(st.syncedAt)}` : ""}`
       : "Not read yet";
   };
-  invoke("wrapped_library_status").then(showLibrary).catch(() => {});
-  libButton.addEventListener("click", async () => {
+  paintHistory(historyStatus);
+  const historyButton = button(historyStatus?.plays ? "Read it all again" : "Read it", async () => {
+    try {
+      historyText.textContent = "Starting...";
+      await invoke("wrapped_history_sync", { full: !!historyStatus?.plays });
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  });
+  cardRow(music, "Listening history", historyText, historyButton);
+  const unlistenHistory = await listen("wrapped-history", (event) => {
+    if (ticket !== wrappedTicket) return unlistenHistory();
+    const p = event.payload;
+    if (p.error) historyText.textContent = p.error;
+    else if (p.done) {
+      if (p.status) historyStatus = p.status;
+      paintHistory(historyStatus);
+      historyButton.textContent = historyStatus?.plays ? "Read it all again" : "Read it";
+      paintStart();
+    } else historyText.textContent = p.wanted ? `Reading: ${n(p.loaded)} of ${n(p.wanted)} plays...` : "Checking Roon for new plays...";
+  });
+  // Your Last.fm account: its scrobbles reach back before Roon's history
+  const userBox = document.createElement("div");
+  userBox.className = "settings-card-sub";
+  const userTitle = document.createElement("div");
+  userTitle.className = "settings-card-row-name";
+  userTitle.textContent = "Last.fm username (optional)";
+  const userNote = statusLine("If you scrobble to Last.fm, your plays from before Roon's history count too (Home, History's tops). Read once, then new ones daily.");
+  const userRow = document.createElement("div");
+  userRow.className = "wrapped-setting-row";
+  const userInput = document.createElement("input");
+  userInput.className = "wrapped-search";
+  userInput.placeholder = "Your Last.fm username";
+  userInput.value = wrappedSettings.lastfmUser || "";
+  userInput.autocomplete = "off";
+  const saveUser = button("Save", async () => {
+    await save({ lastfmUser: userInput.value.trim() });
+    if (userInput.value.trim()) paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: false }).catch(() => null));
+    else userState.textContent = "";
+  });
+  userInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveUser.click();
+  });
+  // (a read that stopped, or one to do over)
+  const again = button("Rescan", async () => {
+    if (!userInput.value.trim()) return;
+    paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: true }).catch(() => null));
+  });
+  again.title = "Read the whole history from Last.fm again";
+  const userState = statusLine();
+  const paintScrobbles = (st) => {
+    if (!st || !st.user) return (userState.textContent = "");
+    const count = st.plays.toLocaleString();
+    const from = st.oldest ? ` back to ${new Date(st.oldest).toLocaleDateString()}` : "";
+    userState.textContent = st.error
+      ? st.error
+      : st.syncing
+        ? `Reading ${st.user}'s scrobbles... ${count} so far${from}`
+        : st.plays
+          ? `${count} scrobbles of ${st.user}${from}${st.complete ? "" : " (not all read yet: it goes on by itself, or Save reads now)"}`
+          : `Nothing read from ${st.user} yet.`;
+  };
+  userRow.append(userInput, saveUser, again);
+  userBox.append(userTitle, userNote, userRow, userState);
+  music.append(userBox);
+  invoke("wrapped_scrobbles_status").then(paintScrobbles).catch(() => {});
+  scrobblesPaint = paintScrobbles;
+  // Library
+  const libText = statusLine("...");
+  const libButton = button("Read the library", async () => {
     try {
       showLibrary(await invoke("wrapped_library_sync"));
     } catch (err) {
       wrappedToast(String(err));
     }
   });
+  const showLibrary = (st) => {
+    libButton.textContent = st.syncing ? "Reading..." : st.artists ? "Read again" : "Read the library";
+    libButton.disabled = st.syncing;
+    libText.textContent = st.artists
+      ? `${n(st.artists)} artists, ${n(st.albums)} albums, ${n(st.tracks)} tracks${st.syncedAt ? `, read ${historyWhen(st.syncedAt)}` : ""}`
+      : "Not read yet";
+  };
+  cardRow(music, "Library", libText, libButton);
+  invoke("wrapped_library_status").then(showLibrary).catch(() => {});
   const unlistenLibrary = await listen("wrapped-library", (event) => {
     if (ticket !== wrappedTicket) return unlistenLibrary();
     const p = event.payload;
     if (p.error) wrappedToast(p.error);
     if (p.done) {
       invoke("wrapped_library_status").then(showLibrary).catch(() => {});
+      paintStart();
       // The library's artists join the ones to tag
       invoke("wrapped_tags_status").then(showTagging).catch(() => {});
     } else libText.textContent = `Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} ${p.what || "artists"}...`;
   });
-  libRow.append(libButton, libText);
-  libraryField.append(libRow);
-
-  const tagging = field(
-    "Tags for your artists",
-    "The Similar by Genre, Style, Scene and Era rows compare tags, so the artists in your history and library need tagging first: one lookup a second, most played first, in the background. Stop and start it as you like; it carries on where it left off.",
-  );
-  const tagRow = document.createElement("div");
-  tagRow.className = "wrapped-setting-row";
-  const tagButton = document.createElement("button");
-  tagButton.className = "wrapped-button";
-  const tagText = document.createElement("span");
-  tagText.className = "wrapped-setting-text inline";
-  const showTagging = (st) => {
-    tagButton.textContent = st.filling ? "Stop" : st.tagged >= st.artists ? "All tagged" : "Tag my artists";
-    tagButton.disabled = !st.filling && st.tagged >= st.artists;
-    tagText.textContent = `${st.tagged.toLocaleString()} of ${st.artists.toLocaleString()} tagged`;
-  };
-  invoke("wrapped_tags_status").then(showTagging).catch(() => {});
-  tagButton.addEventListener("click", async () => {
+  // Tags
+  const tagText = statusLine("...");
+  const tagButton = button("Tag my artists", async () => {
     const st = await invoke("wrapped_tags_status");
     showTagging(await invoke("wrapped_tags_fill", { stop: st.filling }));
   });
+  const showTagging = (st) => {
+    tagButton.textContent = st.filling ? "Stop" : st.tagged >= st.artists ? "All tagged" : "Tag my artists";
+    tagButton.disabled = !st.filling && st.tagged >= st.artists;
+    tagText.textContent = `${n(st.tagged)} of ${n(st.artists)} artists tagged${st.filling ? ", one a second in the background" : ""}`;
+  };
+  const tagRow = cardRow(music, "Artist tags", tagText, tagButton);
+  tagRow.title = "Genres, styles and scenes for each artist (Last.fm, MusicBrainz): the Genres page, Similar by Genre, Style, Scene and Era, and Discover use them. Most played first; stop and start as you like, it carries on where it left off.";
+  invoke("wrapped_tags_status").then(showTagging).catch(() => {});
   const unlistenTags = await listen("wrapped-tags", (event) => {
     if (ticket !== wrappedTicket) return unlistenTags();
     invoke("wrapped_tags_status").then(showTagging).catch(() => {});
   });
-  tagRow.append(tagButton, tagText);
-  tagging.append(tagRow);
 
-  const actions = document.createElement("div");
-  actions.className = "wrapped-setting-row";
-  const reread = document.createElement("button");
-  reread.className = "wrapped-button";
-  reread.textContent = "Read the whole history again";
-  reread.addEventListener("click", async () => {
+  // Start here: on a fresh setup (the history or the library not read
+  // yet), one button reads both; it goes once both are in
+  const start = document.createElement("section");
+  start.className = "settings-start";
+  const startText = document.createElement("div");
+  startText.className = "settings-start-text";
+  const startTitle = document.createElement("div");
+  startTitle.className = "settings-card-title";
+  startTitle.textContent = "Start here";
+  const startWords = statusLine("Wrapped works from your listening history and library in Roon. Read them once (a few minutes, in the background) and everything else fills in from there.");
+  startText.append(startTitle, startWords);
+  const startGo = document.createElement("button");
+  startGo.className = "wrapped-play";
+  startGo.textContent = "Read my history and library";
+  startGo.addEventListener("click", async () => {
+    startGo.disabled = true;
+    startGo.textContent = "Reading...";
     try {
-      await invoke("wrapped_history_sync", { full: true });
-      wrappedToast("Reading the history from Roon; the History page shows the progress.");
+      const lib = await invoke("wrapped_library_status");
+      if (!historyStatus?.plays) await invoke("wrapped_history_sync", { full: false });
+      if (!lib.artists && !lib.syncing) showLibrary(await invoke("wrapped_library_sync"));
     } catch (err) {
       wrappedToast(String(err));
+      startGo.disabled = false;
+      startGo.textContent = "Read my history and library";
     }
   });
-  actions.append(reread);
-  records.append(actions);
+  start.append(startText, startGo);
+  start.hidden = true;
+  columns.before(start);
+  async function paintStart() {
+    const lib = await invoke("wrapped_library_status").catch(() => null);
+    if (ticket !== wrappedTicket) return;
+    try {
+      start.hidden = !!historyStatus?.plays && !!lib?.artists;
+    } catch {
+      // (an event before the banner was made)
+    }
+  }
+  paintStart();
+
+  // Similar artists: how the row under artists and albums opens
+  const similarCard = card("Similar artists", 'How the "Similar" row under artists and albums opens; it has the same switches, so this is only where it starts.');
+  const pillRow = (options, current, key) => {
+    const row = document.createElement("div");
+    row.className = "wrapped-tabs small";
+    for (const [value, label] of options) {
+      const pill = document.createElement("button");
+      pill.className = `wrapped-tab${current === value ? " selected" : ""}`;
+      pill.textContent = label;
+      pill.addEventListener("click", async () => {
+        await save({ [key]: value });
+        for (const other of row.children) other.classList.toggle("selected", other === pill);
+      });
+      row.append(pill);
+    }
+    return row;
+  };
+  cardRow(similarCard, "Matched by", statusLine("Roon's own picks, or artists sharing the tags"), pillRow(SIMILAR_BY, wrappedSettings.similarBy, "similarBy"));
+  cardRow(similarCard, "Which it shows", statusLine("Artists you have, or ones you don't"), pillRow(SIMILAR_SCOPES, wrappedSettings.similarScope || "library", "similarScope"));
+
+  // Page size: Wrapped's pages bigger or smaller, or with the window
+  const sizeCard = card("Page size", "How big Wrapped's pages are, wider too; the top bar, side menu and player keep Roon's size. Scale with window follows the window's width, down to 90%.");
+  const sizeRow = document.createElement("div");
+  sizeRow.className = "wrapped-tabs small page-size";
+  const sizeNow = PAGE_SIZES.includes(wrappedSettings.pageSize) ? wrappedSettings.pageSize : "100";
+  for (const value of PAGE_SIZES) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${sizeNow === value ? " selected" : ""}`;
+    pill.textContent = value === "auto" ? "Scale with window" : `${value}%`;
+    pill.addEventListener("click", async () => {
+      if ((PAGE_SIZES.includes(wrappedSettings.pageSize) ? wrappedSettings.pageSize : "100") === value) return;
+      await save({ pageSize: value });
+      applyPageSize();
+      sizeRow.querySelectorAll(".wrapped-tab").forEach((t) => t.classList.toggle("selected", t === pill));
+    });
+    sizeRow.append(pill);
+  }
+  sizeCard.append(sizeRow);
+
+  // Toasted's own settings, last
+  const toastedCard = card("Toasted's settings");
+  cardRow(toastedCard, "Roon Core, Toaster, hotkeys, toasts and the Wrapper", statusLine("In the app's own Settings window"), button("Open", () => send("open_window", { window: "settings" })));
 };
 
 WRAPPED_PAGES.genre = async function (entry) {
@@ -7864,13 +8622,14 @@ function discoverColumn(which, title, blurb, built, building, failed, status) {
   head.append(name, wrappedNote(blurb, "wrapped-note small"));
   column.append(head);
 
+  // (always the same five parts, so the two columns line up part by part:
+  // the heading, the dated copies, this week's card, the build button and
+  // the Fine Tuning; wrapper.css lays them out as one grid)
   const [current, ...older] = built;
-  if (older.length) {
-    const row = document.createElement("div");
-    row.className = "discover-old";
-    for (const copy of older) row.append(discoverCard(copy, false, which));
-    column.append(row);
-  }
+  const row = document.createElement("div");
+  row.className = "discover-old";
+  for (const copy of older) row.append(discoverCard(copy, false, which));
+  column.append(row);
   if (current) column.append(discoverCard(current, true, which));
   else column.append(wrappedNote("Not built yet: the first one comes next Monday, or build it now.", "wrapped-note discover-empty"));
 
@@ -7880,11 +8639,14 @@ function discoverColumn(which, title, blurb, built, building, failed, status) {
   build.disabled = !!building;
   build.title = current ? "Build this week's list again (the one now becomes a dated copy)" : "Build the list now";
   build.addEventListener("click", () => discoverBuild(which, title));
-  column.append(build);
+  const actions = document.createElement("div");
+  actions.className = "discover-actions";
+  actions.append(build);
   // (why the last build didn't make a new list; the details are in
   // discover-log.txt in the app data folder)
-  if (failed && building !== which) column.append(wrappedNote(`The last build didn't finish: ${failed}`, "wrapped-note error"));
-  if (status) column.append(discoverAskPanel(status, which));
+  if (failed && building !== which) actions.append(wrappedNote(`The last build didn't finish: ${failed}`, "wrapped-note error"));
+  column.append(actions);
+  column.append(status ? discoverAskPanel(status, which) : document.createElement("div"));
   return column;
 }
 
@@ -7898,6 +8660,49 @@ const CLOSE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 // Fine Tuning, under Build now: what you'd like the next Discover Weekly
 // to bring, in your own words; then the requests standing, each for the
 // next list or, with Permanent, every one
+// Fine Tuning's tiers: one strip of three, each part its tier, whether
+// it's on and a few words on what it does; a click switches tier 2 or 3
+// for this list (tier 1 always runs; a tier not set up says so)
+const TIER_WORDS = {
+  weekly: ["Listeners and tags", "Judged by AI", "Picks by sound"],
+};
+function tierStrip(status, which) {
+  const strip = document.createElement("div");
+  strip.className = "tier-strip";
+  const words = TIER_WORDS[which] || TIER_WORDS.weekly;
+  const setting = (n) => `weeklyTier${n}`;
+  for (const n of [1, 2, 3]) {
+    const ready = n === 1 || (n === 2 ? !!status.tier2 : !!status.tier3);
+    const on = n === 1 || (ready && wrappedSettings?.[setting(n)] !== false);
+    const seg = document.createElement("button");
+    seg.className = `tier-seg${on ? " on" : " off"}${n === 1 ? " fixed" : ""}${ready ? "" : " unready"}`;
+    const t = document.createElement("span");
+    t.className = "tier-seg-title";
+    t.textContent = `Tier ${n} · ${n === 1 ? "Always on" : on ? "On" : "Off"}`;
+    const d = document.createElement("span");
+    d.className = "tier-seg-words";
+    d.textContent = !ready ? "Set up in Settings" : words[n - 1];
+    seg.append(t, d);
+    if (n === 1) seg.title = "Tier 1 makes the list; it always runs";
+    else if (!ready) {
+      seg.title = n === 2 ? "Tier 2 needs a language model: Wrapped's Settings" : "Tier 3 needs its models downloaded: Wrapped's Settings";
+      seg.addEventListener("click", () => openWrappedPage({ page: "settings" }));
+    } else {
+      seg.title = on ? "Click to switch it off for this list" : "Click to switch it on for this list";
+      seg.addEventListener("click", async () => {
+        try {
+          wrappedSettings = await invoke("wrapped_settings_update", { changes: { [setting(n)]: !on } });
+          strip.replaceWith(tierStrip(status, which));
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      });
+    }
+    strip.append(seg);
+  }
+  return strip;
+}
+
 function discoverAskPanel(status, which = "weekly") {
   const panel = document.createElement("section");
   panel.className = "discover-ask";
@@ -7962,7 +8767,11 @@ function discoverAskPanel(status, which = "weekly") {
     }
   });
   row.append(input, add);
+  // (the tiers' switches for Discover Weekly only: Library Rediscover's
+  // Fine Tuning is read by tier 2 whenever it's set up, and the rest of
+  // its list is your own history)
   panel.append(row);
+  if (!rediscover) panel.append(tierStrip(status, which));
   if (!status.tier2) {
     panel.append(wrappedNote("Fine Tuning is read by tier 2, a language model (Wrapped's Settings). Until it's set up, what you add here waits.", "wrapped-note small"));
   }
@@ -9236,3 +10045,10 @@ listen("library-track", (event) => {
 });
 invoke("roon_queue").then(renderQueue);
 listen("roon-queue", (event) => renderQueue(event.payload));
+// (Wrapped's page size from the start)
+invoke("wrapped_settings_get")
+  .then((s) => {
+    if (!wrappedSettings) wrappedSettings = s;
+    applyPageSize();
+  })
+  .catch(() => {});

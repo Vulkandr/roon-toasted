@@ -624,6 +624,16 @@ pub struct QueueSong {
     pub item_id: Option<u64>,
 }
 
+/// The queue as a shuffle watches it (see `queue_tracks`).
+#[derive(Debug, Clone, Default)]
+pub struct QueueTracks {
+    /// Songs after the playing one.
+    pub upcoming: usize,
+    /// The ids (TrackId and LibraryTrackId) of the playing song and the ones
+    /// after it.
+    pub ahead_ids: Vec<u64>,
+}
+
 /// What `play_artist_mix` queued.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -2252,6 +2262,78 @@ impl LibraryClient {
     /// its TransportTracks point at the songs, one of them IsCurrent.
     pub async fn queue_songs(&self, zone_id: &str, start: Option<u64>, recent: usize) -> Result<Vec<QueueSong>, LibraryError> {
         Ok(self.queue_songs_report(zone_id, start, recent, false).await?.0)
+    }
+
+    /// How many songs come after the playing one, and which songs those
+    /// are (with the playing one): a cheap look for a shuffle that keeps the
+    /// queue topped up.
+    pub async fn queue_tracks(&self, zone_id: &str) -> Result<QueueTracks, LibraryError> {
+        let queue = self.queue_object(zone_id)?;
+        let listed = self.queue_items(queue).await?;
+        let now_item = {
+            let g = self.inner.graph.lock().unwrap();
+            self.zone_object(&g, zone_id).and_then(|z| z.ref_field("NowPlaying"))
+        };
+        // (the items' songs come a moment after the list)
+        let songs_of = |g: &ObjectGraph, i: u64| -> Option<Vec<u64>> {
+            let item = g.get(i)?;
+            let list = g.deref(item.field("Tracks"))?.items.clone()?;
+            Some(list.iter().filter_map(|tt| g.get(*tt)?.ref_field("Track")).collect())
+        };
+        self.wait_until(Duration::from_secs(3), |g| {
+            listed.iter().all(|i| g.get(*i).is_some_and(|o| o.has_field("TransportItemId")) && songs_of(g, *i).is_some_and(|t| t.iter().all(|t| g.get(*t).is_some_and(|o| o.has_field("TrackId")))))
+        })
+        .await;
+        let g = self.inner.graph.lock().unwrap();
+        let id_of = |i: &u64| g.get(*i).and_then(|o| o.long_field("TransportItemId"));
+        let now_id = now_item.as_ref().and_then(id_of);
+        let k = listed
+            .iter()
+            .position(|i| Some(*i) == now_item || (now_id.is_some() && id_of(i) == now_id))
+            .or_else(|| listed.iter().position(|i| g.get(*i).and_then(|o| o.field("IsCurrent")).and_then(Value::as_bool) == Some(true)))
+            .unwrap_or(0);
+        let mut out = QueueTracks::default();
+        for (n, i) in listed.iter().enumerate().skip(k) {
+            let songs = songs_of(&g, *i).unwrap_or_default();
+            if n > k {
+                out.upcoming += songs.len().max(1);
+            }
+            for t in songs.iter().filter_map(|t| g.get(*t)) {
+                out.ahead_ids.extend(t.long_field("TrackId"));
+                out.ahead_ids.extend(t.long_field("LibraryTrackId"));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Plays songs (handles) on the zone: now (the queue as it is, the
+    /// songs first), next, or at the end of the queue.
+    pub async fn play_tracks_how(&self, zone_id: &str, handles: &[String], how: PlayHow) -> Result<(), LibraryError> {
+        let oids: Vec<u64> = handles.iter().filter_map(|h| h.parse().ok()).filter(|o| *o != 0).collect();
+        if oids.is_empty() {
+            return Err(LibraryError::Unconfirmed("no songs to play".into()));
+        }
+        let (transport, zone, profile) = {
+            let g = self.inner.graph.lock().unwrap();
+            let zone = self.zone_object(&g, zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into()))?;
+            (g.first_of_type("Transport").map(|o| o.oid), zone.oid, self.profile_sooid(&g))
+        };
+        let (Some(transport), Some(profile)) = (transport, profile) else {
+            return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
+        };
+        let params = self.play_parameters(how)?;
+        let mut list = Writer::new();
+        list.flex_int(oids.len() as u32);
+        for oid in &oids {
+            list.long(*oid);
+        }
+        let mut args = Writer::new();
+        args.long(zone).sooid(&profile).bytes(&params).flex_int(list.len() as u32).bytes(list.as_bytes());
+        let res = self.inner.remoting.call(transport, SIG_PLAY_TRACKS, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "PlayTracks".into(), status: res.status }.into());
+        }
+        Ok(())
     }
 
     /// `queue_songs`, with a report of what the Core gave (the list, where
