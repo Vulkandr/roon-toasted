@@ -2889,11 +2889,13 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1071;
+pub const BUILD: u32 = 1092;
 
+/// The build number, for a dev build's title bar only (a release shows
+/// none).
 #[tauri::command]
-pub fn wrapper_build() -> u32 {
-    BUILD
+pub fn wrapper_build() -> Option<u32> {
+    cfg!(debug_assertions).then_some(BUILD)
 }
 
 #[tauri::command]

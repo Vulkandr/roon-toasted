@@ -167,6 +167,9 @@ pub struct WrappedSettings {
     /// language model) and tier 3 (sound) used when set up.
     pub weekly_tier2: bool,
     pub weekly_tier3: bool,
+    /// Deep Dive's tier 3 switch (dive.rs): listening to the songs, when
+    /// set up. (Tier 1 always runs, and tier 2 is what makes a Deep Dive.)
+    pub dive_tier3: bool,
     /// Tier 2, the language model (judge.rs): which service, its key (or
     /// Ollama's address), the model name (empty: the service's default),
     /// and how much say it gets ("light": keep or drop, pick the song;
@@ -190,6 +193,9 @@ pub struct WrappedSettings {
     /// Roon's size): a percent ("90", "100", "110", "125", "150") or "auto",
     /// scaled with the window's width.
     pub page_size: String,
+    /// Which side menu shows when Wrapped opens: "wrapped" (Wrapped's own)
+    /// or "roon" (Roon's sidebar, as it is).
+    pub side_menu: String,
 }
 
 impl Default for WrappedSettings {
@@ -203,6 +209,7 @@ impl Default for WrappedSettings {
             discovery: true,
             weekly_tier2: true,
             weekly_tier3: true,
+            dive_tier3: true,
             llm_provider: "anthropic".into(),
             llm_key: String::new(),
             llm_model: String::new(),
@@ -212,6 +219,7 @@ impl Default for WrappedSettings {
             ollama_manual: false,
             dive_model: String::new(),
             page_size: "100".into(),
+            side_menu: "roon".into(),
         }
     }
 }
@@ -322,6 +330,36 @@ pub fn wrapped_history_status(app: AppHandle) -> HistoryStatus {
     wrapped.status(&app)
 }
 
+/// One line in `history-log.txt` (app data), the last 50 kept: what each
+/// read of Roon's history saw, for when one comes back short.
+fn history_log(app: &AppHandle, line: &str) {
+    println!("[wrapped] history: {line}");
+    let Ok(dir) = app.path().app_data_dir() else { return };
+    let path = dir.join("history-log.txt");
+    let mut lines: Vec<String> = std::fs::read_to_string(&path).map(|t| t.lines().map(str::to_string).collect()).unwrap_or_default();
+    let when = chrono_like_now();
+    lines.push(format!("{when} {line}"));
+    let keep = lines.len().saturating_sub(50);
+    let _ = std::fs::write(&path, lines[keep..].join("\n") + "\n");
+}
+
+/// Now as "YYYY-MM-DD HH:MM:SS" UTC (no date crate needed for a log line).
+fn chrono_like_now() -> String {
+    let secs = (now_ms() / 1000) as i64;
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // (civil date from days since 1970-01-01, Howard Hinnant's algorithm)
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + if m <= 2 { 1 } else { 0 };
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC", rest / 3600, rest % 3600 / 60, rest % 60)
+}
+
 /// Brings the copy up to date in the background: everything when it is
 /// empty (or `full`), otherwise only what is newer than it. Progress goes
 /// out as "wrapped-history" events; the result is the status when done.
@@ -355,22 +393,40 @@ pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<Histor
         };
         let progress = |loaded: usize, wanted: usize| emit(loaded, if checking { 0 } else { wanted }, false, None, None, None);
         let result = client.history_since(200_000, stop_at, &progress).await;
+        // (what the read saw, kept in history-log.txt next to the copy)
+        history_log(&app2, &match &result {
+            Ok(h) => format!("{} read: {} plays back; {}", if stop_at.is_some() { "new plays" } else { "full" }, h.plays.len(), h.debug),
+            Err(e) => format!("read failed: {e}"),
+        });
+        // (Roon said it has plays but none came back: the copy is kept as
+        // it is, rather than emptied)
+        let result = result.and_then(|h| {
+            if h.plays.is_empty() && h.total > 0 && stop_at.is_none() {
+                Err(roon_library::LibraryError::Unconfirmed(format!("Roon has {} plays but none came back", h.total)))
+            } else {
+                Ok(h)
+            }
+        });
         match result {
             Ok(history) => {
                 let added = {
                     let mut store = wrapped.store.lock().unwrap();
                     let known: std::collections::HashSet<_> = store.plays.iter().map(play_key).collect();
-                    let mut fresh: Vec<Play> = history
-                        .plays
-                        .into_iter()
-                        .filter(|p| stop_at.is_none_or(|at| p.played_at > at))
-                        .filter(|p| !known.contains(&play_key(p)))
-                        .collect();
-                    let added = fresh.len();
+                    let read: Vec<Play> = history.plays.into_iter().filter(|p| stop_at.is_none_or(|at| p.played_at > at)).collect();
+                    let added = read.iter().filter(|p| !known.contains(&play_key(p))).count();
                     if stop_at.is_none() {
-                        // A full read replaces the copy
-                        store.plays = fresh;
+                        // A full read replaces the copy with every play it
+                        // read; one that came back short keeps the copy's
+                        // other plays too
+                        let short = read.len() as u32 + 50 < history.total;
+                        let mut seen = std::collections::HashSet::new();
+                        let mut plays: Vec<Play> = read.into_iter().filter(|p| seen.insert(play_key(p))).collect();
+                        if short {
+                            plays.extend(store.plays.drain(..).filter(|p| seen.insert(play_key(p))));
+                        }
+                        store.plays = plays;
                     } else {
+                        let mut fresh: Vec<Play> = read.into_iter().filter(|p| !known.contains(&play_key(p))).collect();
                         fresh.append(&mut store.plays);
                         store.plays = fresh;
                     }

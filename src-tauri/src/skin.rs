@@ -18,9 +18,13 @@
 //! click, scroll and hover goes straight through to Roon's real sidebar.
 //! It's left out of its own picture (the magnifier's filter list) and out
 //! of screen captures (display affinity), so it never sees itself. It sits
-//! directly above the Wrapper's window, over the sidebar part of the hole,
-//! so it recolors Roon through the hole, and Roon's live picture while the
-//! Wrapper is dragged (wrapper.rs keeps that order).
+//! directly below the Wrapper's window, over Roon, so it recolors Roon
+//! through the hole while the page's own parts over the sidebar (the
+//! Wrapped button and side menu) stay on top in their own colors (wrapper.rs
+//! keeps that order). While the Wrapper is dragged by its title bar, it
+//! shows a live picture of Roon instead of the hole: then the filter goes
+//! above the Wrapper and recolors that picture, with the page's parts cut
+//! out of it (see `drag_mode`).
 //!
 //! Threads: the filter's window lives on its own thread, so the main
 //! thread must never wait on it (that froze the app while dragging):
@@ -79,6 +83,13 @@ pub fn follow(x: i32, y: i32) {
 #[cfg(windows)]
 pub fn filter_window() -> Option<windows::Win32::Foundation::HWND> {
     imp::filter_window()
+}
+
+/// Whether `lower` is the first window showing under `upper` (hidden ones,
+/// like the ones Windows keeps for typing, don't count).
+#[cfg(windows)]
+pub fn right_below(upper: windows::Win32::Foundation::HWND, lower: windows::Win32::Foundation::HWND) -> bool {
+    imp::right_below(upper, lower)
 }
 
 /// Whether nothing of Roon shows through the Wrapper: the filter goes
@@ -162,7 +173,15 @@ mod imp {
     /// Refreshes since the Wrapper started moving, and how many are still
     /// allowed then (see `tick`).
     static MOVING_TICKS: AtomicU32 = AtomicU32::new(0);
-    const FRESH_AT_DRAG: u32 = 3;
+    const FRESH_AT_DRAG: u32 = 6;
+    /// Above the Wrapper for a drag (see `drag_mode`).
+    static DRAG_MODE: AtomicBool = AtomicBool::new(false);
+    /// (For the drag log: refreshes in the drag's mode, and whether a drag
+    /// without the filter showing was noted)
+    static DRAG_TICKS: AtomicU32 = AtomicU32::new(0);
+    static DRAG_NOTED: AtomicBool = AtomicBool::new(false);
+    /// Whether this drag's live picture has been seen up (see `drag_mode`).
+    static DRAG_SWAPPED: AtomicBool = AtomicBool::new(false);
     /// The screen our window was on at the last refresh during a drag (0 =
     /// not dragging, -1 = across two screens).
     static DRAG_SCREEN: AtomicIsize = AtomicIsize::new(0);
@@ -476,6 +495,9 @@ mod imp {
 
     fn hide() {
         use windows::Win32::UI::WindowsAndMessaging::{ShowWindow, SW_HIDE};
+        if DRAG_MODE.swap(false, Ordering::Relaxed) {
+            leave_drag(hwnd(&HOST));
+        }
         if SHOWN.swap(false, Ordering::Relaxed) {
             if let Some(host) = hwnd(&HOST) {
                 // SAFETY: our own window.
@@ -511,6 +533,11 @@ mod imp {
                 }
             },
         };
+
+        // Dragged by the title bar, with a live picture of Roon in the
+        // Wrapper instead of the hole: above the Wrapper, recoloring it
+        drag_mode(host, magnifier, wrapper, crate::wrapper::drag_cuts());
+        let dragged = DRAG_MODE.load(Ordering::Relaxed);
 
         // The Wrapper is being dragged: no refreshes (each one makes Windows
         // copy part of the screen, which held the drag to about 60 fps). Our
@@ -593,14 +620,7 @@ mod imp {
                 || (known.is_none() && ticks.is_multiple_of(4))
                 || ticks.is_multiple_of(STANDBY_DETECT_EVERY);
             if due && !primed && !crate::wrapper::player_busy() {
-                let found = crate::wrapper::roon_picture(roon).and_then(|(pixels, width, height)| {
-                    let hole_height = hole[3].min(height);
-                    (width == hole[2] && hole_height >= 100).then(|| {
-                        let rows: Vec<i32> =
-                            (0..24).map(|i| hole_height * 30 / 100 + i * (hole_height * 65 / 100) / 24).collect();
-                        edge(&pixels, width, &rows)
-                    })
-                });
+                let found = picture_sidebar(roon, hole);
                 // (A Roon still repainting can show anything: only a
                 // sidebar counts here; the screen settles "none" once
                 // the hole opens)
@@ -618,8 +638,19 @@ mod imp {
         {
             match find_sidebar(hole, roon) {
                 Detect::Found(found) => take(found),
-                // Too much of it covered by other windows to tell: keep
-                // what we knew
+                // Too much of it covered to tell from the screen: the
+                // Wrapped page, say, open while the window was made small
+                // enough for Roon to fold its sidebar away (the page kept
+                // its old place, with a gap where the sidebar was). From a
+                // picture of Roon's own window instead, which the page
+                // doesn't cover; nothing to go by: what we knew. (Only for
+                // a few seconds after a resize, when Roon folds it away or
+                // brings it back: taking the picture makes Roon flicker
+                // where it shows, at the page's edge.)
+                Detect::Covered if !crate::wrapper::player_busy() && crate::wrapper::resized_lately() => match picture_sidebar(roon, hole) {
+                    Some(found) => take(found),
+                    None => known,
+                },
                 Detect::Covered => known,
             }
         } else {
@@ -640,12 +671,12 @@ mod imp {
         let rect = [hole[0], hole[1], width, hole[3]];
         let colors = *COLORS.lock().unwrap();
         // Something came between us and the Wrapper (it was clicked and
-        // came to the front, say): back on top of it
-        let out_of_order = {
-            use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV};
-            // SAFETY: a plain window query.
-            SHOWN.load(Ordering::Relaxed) && unsafe { GetWindow(wrapper, GW_HWNDPREV) }.ok() != Some(host)
-        };
+        // came to the front, say): back right under it. (Under the
+        // Wrapper, over Roon: the page's own parts over the sidebar, the
+        // Wrapped button and side menu, sit on top of the filter in their
+        // own colors, and the filter recolors Roon through the hole.)
+        // (Not during a drag: it's above the Wrapper then, put there once)
+        let out_of_order = !dragged && SHOWN.load(Ordering::Relaxed) && !right_below(wrapper, host);
         let (moved, recolor) = {
             let placed = PLACED.lock().unwrap();
             (
@@ -653,16 +684,14 @@ mod imp {
                 placed.as_ref().is_none_or(|p| p.colors != colors || p.roon_bg != roon_bg),
             )
         };
-        // Waiting: see-through, with the Wrapper (Now Playing) left out of
-        // the picture, so it shows Roon the moment it's made solid
+        // Waiting: see-through. The Wrapper is always left out of the
+        // picture (it's above us now: only Roon is ours to recolor)
         apply_alpha();
-        let waiting = WAITING.load(Ordering::Relaxed);
-        if WITHOUT_WRAPPER.swap(waiting, Ordering::Relaxed) != waiting {
+        if !dragged && !WITHOUT_WRAPPER.swap(true, Ordering::Relaxed) {
             // SAFETY: our own magnifier; the list holds valid windows.
             unsafe {
                 let mut excluded = [host, wrapper];
-                let count = if waiting { 2 } else { 1 };
-                let _ = MagSetWindowFilterList(magnifier, MW_FILTERMODE_EXCLUDE, count, excluded.as_mut_ptr());
+                let _ = MagSetWindowFilterList(magnifier, MW_FILTERMODE_EXCLUDE, 2, excluded.as_mut_ptr());
             }
         }
         // SAFETY: our own windows, on their own thread.
@@ -672,22 +701,17 @@ mod imp {
                 let _ = MagSetColorEffect(magnifier, &mut effect);
             }
             if moved {
-                // Directly above the Wrapper (or at the top if nothing is
-                // above it), waiting or not
-                use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDPREV, HWND_TOP};
-                let above = GetWindow(wrapper, GW_HWNDPREV).ok().filter(|w| !w.is_invalid());
-                let after = match above {
-                    Some(w) if w == host => GetWindow(host, GW_HWNDPREV).ok().filter(|w| !w.is_invalid()),
-                    other => other,
-                };
+                // Directly under the Wrapper (over Roon), waiting or not;
+                // during a drag it stays where it is, above the Wrapper
+                let order = if dragged { SWP_NOZORDER } else { Default::default() };
                 let _ = SetWindowPos(
                     host,
-                    Some(after.unwrap_or(HWND_TOP)),
+                    Some(wrapper),
                     rect[0],
                     rect[1],
                     rect[2],
                     rect[3],
-                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW | order,
                 );
                 let _ = SetWindowPos(magnifier, None, 0, 0, rect[2], rect[3], SWP_NOZORDER | SWP_NOACTIVATE);
                 SHOWN.store(true, Ordering::Relaxed);
@@ -717,6 +741,196 @@ mod imp {
         }
         *PLACED.lock().unwrap() = Some(Placed { rect, roon_bg, colors });
         true
+    }
+
+    /// Going into or out of a drag's mode: `cuts` (see wrapper.rs
+    /// `drag_cuts`) from the drag's first step until the hole is open again
+    /// after it. The Wrapper shows a live picture of Roon in place of the
+    /// hole meanwhile, and goes under the filter: so the filter, with the
+    /// Wrapper back in its picture, recolors that picture as it did Roon
+    /// (also when refreshed on the way to another screen). The page's parts
+    /// over the sidebar are cut out of our window, so they show in their own
+    /// colors. This gets ready first and tells the Wrapper, which then does
+    /// its part in one go. Afterwards the cut-out goes, and the usual pass
+    /// puts the filter back under the Wrapper and leaves the Wrapper out of
+    /// the picture again.
+    fn drag_mode(host: HWND, magnifier: HWND, wrapper: HWND, cuts: Option<Vec<[i32; 4]>>) {
+        use windows::Win32::Graphics::Gdi::{CombineRgn, CreateRectRgn, SetWindowRgn, RGN_DIFF};
+        use windows::Win32::UI::WindowsAndMessaging::{SWP_ASYNCWINDOWPOS, SWP_NOMOVE, SWP_NOSIZE};
+        // (for the log: the windows from us down to the Wrapper)
+        let order = || order_note(host, wrapper);
+        if cuts.is_some() && !SHOWN.load(Ordering::Relaxed) && !DRAG_NOTED.swap(true, Ordering::Relaxed) {
+            crate::wrapper::drag_log("filter: a drag, but the filter isn't showing");
+        }
+        if cuts.is_none() {
+            DRAG_NOTED.store(false, Ordering::Relaxed);
+        }
+        let on = cuts.is_some() && SHOWN.load(Ordering::Relaxed);
+        if DRAG_MODE.load(Ordering::Relaxed) == on {
+            if on {
+                // The Wrapper has swapped Roon for its live picture (and gone
+                // under us, see wrapper.rs `start_drag`): a few fresh pictures
+                // of it. If it isn't under us (it couldn't be), it's sent
+                // there now (Windows may ignore bringing a window up from
+                // this thread, never sending one down).
+                if crate::wrapper::live_picture() && !DRAG_SWAPPED.swap(true, Ordering::Relaxed) {
+                    MOVING_TICKS.store(0, Ordering::Relaxed);
+                    if above_wrapper(host, wrapper) {
+                        crate::wrapper::drag_log(&format!("filter: live picture up, {}", order()));
+                    } else {
+                        // SAFETY: plain window moves; the Wrapper's without
+                        // waiting on its thread.
+                        unsafe {
+                            if !right_below(wrapper, host) {
+                                let _ = SetWindowPos(host, Some(wrapper), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                            }
+                            let _ = SetWindowPos(wrapper, Some(host), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_ASYNCWINDOWPOS);
+                        }
+                        crate::wrapper::drag_log("filter: live picture up, but the filter wasn't above the Wrapper; the Wrapper sent under it");
+                    }
+                }
+                let n = DRAG_TICKS.fetch_add(1, Ordering::Relaxed) + 1;
+                if n == 10 || n == 60 {
+                    crate::wrapper::drag_log(&format!("filter: tick {n} of the drag, {}, moving {}", order(), crate::wrapper::moving()));
+                }
+            }
+            return;
+        }
+        if !on {
+            DRAG_MODE.store(false, Ordering::Relaxed);
+            leave_drag(Some(host));
+            crate::wrapper::drag_log(&format!("filter: back under the Wrapper after {} ticks ({} at the end)", DRAG_TICKS.load(Ordering::Relaxed), order()));
+            return;
+        }
+        let Some([_, _, width, height]) = PLACED.lock().unwrap().as_ref().map(|p| p.rect) else {
+            crate::wrapper::drag_log("filter: a drag, but the filter has no spot");
+            return;
+        };
+        DRAG_MODE.store(true, Ordering::Relaxed);
+        DRAG_SWAPPED.store(false, Ordering::Relaxed);
+        DRAG_TICKS.store(0, Ordering::Relaxed);
+        let cut_list = cuts.clone().unwrap_or_default();
+        // Ready for it, still under the Wrapper while Roon shows through
+        // the hole: the Wrapper in the picture (it shows Roon there, through
+        // the hole now, as its live picture next) and the page's parts cut
+        // out (they're over us anyway until then), right under the Wrapper.
+        // SAFETY: our own windows, on their own thread; the region is ours
+        // until SetWindowRgn takes it.
+        unsafe {
+            let mut excluded = [host];
+            let _ = MagSetWindowFilterList(magnifier, MW_FILTERMODE_EXCLUDE, 1, excluded.as_mut_ptr());
+            WITHOUT_WRAPPER.store(false, Ordering::Relaxed);
+            let region = CreateRectRgn(0, 0, width, height);
+            let mut kind = 2; // (SIMPLEREGION)
+            for c in cuts.unwrap_or_default() {
+                let cut = CreateRectRgn(c[0], c[1], c[0] + c[2], c[1] + c[3]);
+                kind = CombineRgn(Some(region), Some(region), Some(cut), RGN_DIFF).0;
+                let _ = DeleteObject(cut.into());
+            }
+            let set = SetWindowRgn(host, Some(region), true);
+            if set == 0 {
+                let _ = DeleteObject(region.into());
+            }
+            if !crate::wrapper::live_picture() && !right_below(wrapper, host) {
+                let _ = SetWindowPos(host, Some(wrapper), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+            crate::wrapper::drag_log(&format!(
+                "filter: ready, {width}x{height}, cuts {cut_list:?}, region kind {kind} (1 empty, 2 one box, 3 more), cut-out set {}, {}, see-through-ness {} (255 solid)",
+                set != 0,
+                order(),
+                ALPHA.load(Ordering::Relaxed),
+            ));
+        }
+        crate::wrapper::drag_ready();
+        MOVING_TICKS.store(0, Ordering::Relaxed);
+    }
+
+    /// Whether `lower` is the first window showing under `upper`. Hidden
+    /// ones don't count: Windows keeps a few for typing (the IME's) right
+    /// above each window, and counting them, the filter was never "right
+    /// under" the Wrapper (so it was put there again every refresh, and a
+    /// drag's start didn't go under it in time).
+    pub fn right_below(upper: HWND, lower: HWND) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindow, IsWindowVisible, GW_HWNDNEXT};
+        let mut w = upper;
+        for _ in 0..40 {
+            // SAFETY: plain window queries.
+            match unsafe { GetWindow(w, GW_HWNDNEXT) }.ok().filter(|w| !w.is_invalid()) {
+                Some(next) if next == lower => return true,
+                Some(next) if unsafe { IsWindowVisible(next) }.as_bool() => return false,
+                Some(next) => w = next,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// Whether our window is somewhere above the Wrapper.
+    fn above_wrapper(host: HWND, wrapper: HWND) -> bool {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindow, GW_HWNDNEXT};
+        let mut w = host;
+        for _ in 0..40 {
+            // SAFETY: a plain window query.
+            match unsafe { GetWindow(w, GW_HWNDNEXT) }.ok().filter(|w| !w.is_invalid()) {
+                Some(next) if next == wrapper => return true,
+                Some(next) => w = next,
+                None => return false,
+            }
+        }
+        false
+    }
+
+    /// For the drag log: where we are against the Wrapper, and what's
+    /// between (class names, a * for each one showing).
+    fn order_note(host: HWND, wrapper: HWND) -> String {
+        use windows::Win32::UI::WindowsAndMessaging::{GetClassNameW, GetWindow, IsWindowVisible, GW_HWNDNEXT};
+        let name = |w: HWND| {
+            let mut buf = [0u16; 64];
+            // SAFETY: plain window queries into our own buffer.
+            let n = unsafe { GetClassNameW(w, &mut buf) }.max(0) as usize;
+            let shown = unsafe { IsWindowVisible(w) }.as_bool();
+            format!("{}{}", String::from_utf16_lossy(&buf[..n]), if shown { "*" } else { "" })
+        };
+        let walk = |from: HWND, to: HWND| -> Option<Vec<String>> {
+            let mut between = Vec::new();
+            let mut w = from;
+            for _ in 0..40 {
+                // SAFETY: a plain window query.
+                match unsafe { GetWindow(w, GW_HWNDNEXT) }.ok().filter(|w| !w.is_invalid()) {
+                    Some(next) if next == to => return Some(between),
+                    Some(next) => {
+                        between.push(name(next));
+                        w = next;
+                    }
+                    None => return None,
+                }
+            }
+            None
+        };
+        if let Some(between) = walk(host, wrapper) {
+            if between.is_empty() {
+                "filter right above the Wrapper".into()
+            } else {
+                format!("filter above the Wrapper with {} between: {}", between.len(), between.join(", "))
+            }
+        } else if let Some(between) = walk(wrapper, host) {
+            format!("filter UNDER the Wrapper ({} between)", between.len())
+        } else {
+            "filter and Wrapper not found in one order".into()
+        }
+    }
+
+    /// Out of a drag's mode: no cut-out (the usual pass does the rest, see
+    /// `drag_mode`).
+    fn leave_drag(host: Option<HWND>) {
+        use windows::Win32::Graphics::Gdi::SetWindowRgn;
+        WITHOUT_WRAPPER.store(false, Ordering::Relaxed);
+        if let Some(host) = host {
+            // SAFETY: our own window.
+            unsafe {
+                let _ = SetWindowRgn(host, None, true);
+            }
+        }
     }
 
     /// The screen our window is on, or -1 while it's across two.
@@ -752,6 +966,19 @@ mod imp {
     /// left, running right until a clean vertical edge into the content's
     /// plain background. Only rows where Roon is the window on top count
     /// (another window may be over part of the Wrapper).
+    /// The sidebar in a picture of Roon's own window (what the page or
+    /// anything else has over it doesn't count): Some(found or none), or
+    /// None when there's no usable picture.
+    fn picture_sidebar(roon: HWND, hole: [i32; 4]) -> Option<Sidebar> {
+        crate::wrapper::roon_picture(roon).and_then(|(pixels, width, height)| {
+            let hole_height = hole[3].min(height);
+            (width == hole[2] && hole_height >= 100).then(|| {
+                let rows: Vec<i32> = (0..24).map(|i| hole_height * 30 / 100 + i * (hole_height * 65 / 100) / 24).collect();
+                edge(&pixels, width, &rows)
+            })
+        })
+    }
+
     fn find_sidebar(hole: [i32; 4], roon: HWND) -> Detect {
         use windows::Win32::Foundation::POINT;
         use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT};

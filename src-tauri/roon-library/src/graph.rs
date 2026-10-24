@@ -565,6 +565,18 @@ impl ObjectGraph {
     pub fn first_of_type(&self, name: &str) -> Option<&RoonObject> {
         self.find_by_type(name).next()
     }
+
+    /// How many objects of each type whose name contains `part` (for
+    /// diagnostics: what a call actually pushed), most first.
+    pub fn type_counts(&self, part: &str) -> Vec<(String, usize)> {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for o in self.objects.values().filter(|o| o.type_name.contains(part)) {
+            *counts.entry(o.short_type().to_string()).or_default() += 1;
+        }
+        let mut list: Vec<(String, usize)> = counts.into_iter().collect();
+        list.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        list
+    }
 }
 
 fn opt(v: Option<Value>) -> Value {

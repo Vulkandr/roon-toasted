@@ -399,6 +399,8 @@ pub struct Play {
 pub struct History {
     pub total: u32,
     pub plays: Vec<Play>,
+    /// What the read saw, for the history log (counts per step).
+    pub debug: String,
 }
 
 /// Where a library track's file is, as Roon's Export finds it (see
@@ -1781,9 +1783,13 @@ impl LibraryClient {
             .filter(|oid| *oid != 0)
             .ok_or_else(|| LibraryError::Unconfirmed("the history query did not open".into()))?;
 
-        // The plays already in the graph are an earlier query's: only the
-        // ones this query pushes count
-        let before: HashSet<u64> = self.inner.graph.lock().unwrap().find_by_type("HistoryPlay").map(|o| o.oid).collect();
+        // What an earlier query left in the graph (its rows and plays): this
+        // query's rows are the new ones, and they can point at plays that
+        // were already there (a second read in the same session)
+        let before: HashSet<u64> = {
+            let g = self.inner.graph.lock().unwrap();
+            g.find_by_type("HistoryPlay").chain(history_rows(&g)).map(|o| o.oid).collect()
+        };
         let result = self.history_pages(query, limit, PAGE, &before, stop_at, progress).await;
         let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_DISPOSE, &[]);
         result
@@ -1804,8 +1810,21 @@ impl LibraryClient {
         }
         let total = count(&self.inner.graph.lock().unwrap()).unwrap_or(0).max(0) as usize;
         let target = total.min(limit);
-        let new_plays = |g: &ObjectGraph| g.find_by_type("HistoryPlay").filter(|o| !before.contains(&o.oid)).count();
+        // This query's plays: what its new rows point at, and any play that
+        // is new to the graph (oids, each once)
+        let mine = |g: &ObjectGraph| -> Vec<u64> {
+            let mut oids: Vec<u64> = history_rows(g).filter(|r| !before.contains(&r.oid)).filter_map(|r| r.ref_field("Data")).collect();
+            oids.extend(g.find_by_type("HistoryPlay").filter(|p| !before.contains(&p.oid)).map(|p| p.oid));
+            oids.sort_unstable();
+            oids.dedup();
+            oids
+        };
+        let new_rows = |g: &ObjectGraph| history_rows(g).filter(|r| !before.contains(&r.oid)).count();
+        let arrived = |g: &ObjectGraph| new_rows(g).max(mine(g).len());
         let pages = target.div_ceil(page_size);
+        // (for the log: what had arrived after each page)
+        let mut seen_after: Vec<usize> = Vec::new();
+        let started = std::time::Instant::now();
         for page in 0..pages {
             let mut arg = Writer::new();
             arg.integer(page as i32);
@@ -1814,40 +1833,67 @@ impl LibraryClient {
                 return Err(RemotingError::Failed { method: format!("RetainPage({page})"), status: res.status }.into());
             }
             let want = total.min((page + 1) * page_size);
-            // The page's plays, then their tracks and albums (names), up to 5 s
-            self.wait_until(Duration::from_secs(5), |g| new_plays(g) >= want).await;
+            // The page's rows, then their plays' tracks and albums (names),
+            // up to 5 s
+            self.wait_until(Duration::from_secs(5), |g| arrived(g) >= want).await;
             self.wait_until(Duration::from_secs(3), |g| {
-                g.find_by_type("HistoryPlay")
-                    .filter(|o| !before.contains(&o.oid))
-                    .all(|p| p.has_field("Time") && g.deref(p.field("Track")).is_some_and(|t| t.has_field("Title")))
+                mine(g)
+                    .into_iter()
+                    .all(|oid| g.get(oid).is_some_and(|p| p.has_field("Time") && g.deref(p.field("Track")).is_some_and(|t| t.has_field("Title"))))
             })
             .await;
             let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_RELEASE, arg.as_bytes());
+            seen_after.push(arrived(&self.inner.graph.lock().unwrap()));
             progress(want, target);
             // Reached what the caller already has: no need for older pages
             if let Some(stop_at) = stop_at {
                 let g = self.inner.graph.lock().unwrap();
-                let reached = g
-                    .find_by_type("HistoryPlay")
-                    .filter(|o| !before.contains(&o.oid))
-                    .filter_map(|p| describe_play(&g, p))
-                    .any(|p| p.played_at <= stop_at);
+                let reached = mine(&g).into_iter().filter_map(|oid| g.get(oid)).filter_map(|p| describe_play(&g, p)).any(|p| p.played_at <= stop_at);
                 if reached {
                     break;
                 }
             }
         }
         let g = self.inner.graph.lock().unwrap();
+        let ours = mine(&g);
         let mut seen = HashSet::new();
-        let mut plays: Vec<Play> = g
-            .find_by_type("HistoryPlay")
-            .filter(|o| !before.contains(&o.oid))
+        let mut plays: Vec<Play> = ours
+            .iter()
+            .filter_map(|oid| g.get(*oid))
             .filter(|p| seen.insert(play_identity(p)))
             .filter_map(|p| describe_play(&g, p))
             .collect();
         plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
         plays.truncate(target);
-        Ok(History { total: total as u32, plays })
+        let all = g.find_by_type("HistoryPlay").count();
+        let fresh = g.find_by_type("HistoryPlay").filter(|o| !before.contains(&o.oid)).count();
+        let rows = new_rows(&g);
+        let row_fields: Vec<String> = history_rows(&g)
+            .find(|r| !before.contains(&r.oid))
+            .map(|r| r.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k).to_string()).collect())
+            .unwrap_or_default();
+        let shown = |list: &[usize]| {
+            if list.len() <= 8 {
+                format!("{list:?}")
+            } else {
+                format!("{:?} ... {:?}", &list[..4], &list[list.len() - 3..])
+            }
+        };
+        let types: Vec<String> = g.type_counts("History").into_iter().map(|(t, n)| format!("{t} {n}")).collect();
+        let query_fields: Vec<String> = g.get(query).map(|q| q.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k).to_string()).collect()).unwrap_or_default();
+        let debug = format!(
+            "total {total}, target {target}, pages read {} of {pages} in {} s, stop at {stop_at:?}; objects in the graph before {}; plays after {all} ({fresh} new to the graph), this read's rows {rows} pointing at {} plays, described {}; arrived after each page {}; types {}; query fields {}; row fields {}",
+            seen_after.len(),
+            started.elapsed().as_secs(),
+            before.len(),
+            ours.len(),
+            plays.len(),
+            shown(&seen_after),
+            types.join(", "),
+            query_fields.join(", "),
+            row_fields.join(", "),
+        );
+        Ok(History { total: total as u32, plays, debug })
     }
 
     /// The performer in the graph whose picture has one of these Core image
@@ -4351,6 +4397,12 @@ fn describe_album(g: &ObjectGraph, a: &RoonObject, group: &str, profile: Option<
     }
 }
 
+/// The rows of history queries (VirtualQueryElement<HistoryPlay>), each
+/// pointing at its play by Data.
+fn history_rows(g: &ObjectGraph) -> impl Iterator<Item = &RoonObject> {
+    g.objects.values().filter(|r| r.type_name.contains("VirtualQueryElement<") && r.type_name.contains("HistoryPlay"))
+}
+
 /// What tells one HistoryPlay from another (its id, or failing that its
 /// time and track), so a play pushed twice counts once.
 fn play_identity(p: &RoonObject) -> String {
@@ -4863,7 +4915,14 @@ fn zone_waveform(g: &ObjectGraph, zone: &RoonObject) -> Option<Vec<u8>> {
     if values.len() < 16 || values.iter().all(|v| *v == 0) {
         return None;
     }
-    Some(values.iter().map(|v| (*v).min(255) as u8).collect())
+    // Scaled to 0..255 by the track's own top when Roon's numbers go past
+    // 255 (capping them flattened every loud part to one height)
+    let top = values.iter().copied().max().unwrap_or(0);
+    if top > 255 {
+        Some(values.iter().map(|v| ((*v as u64 * 255) / top as u64) as u8).collect())
+    } else {
+        Some(values.iter().map(|v| (*v).min(255) as u8).collect())
+    }
 }
 
 fn zone_id_of(zone: &RoonObject) -> Option<String> {

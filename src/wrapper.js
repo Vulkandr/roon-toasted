@@ -93,6 +93,15 @@ let sidebarPx;
 let sidebarColor = null;
 let headerColor = null; // Roon's own header background, behind the content-header button
 let sidebarSeen = false; // whether skin.rs has reported a sidebar at least once
+// Whether Roon's sidebar filter (skin.rs) is showing: see-through while Roon
+// is hidden (a resize, maximizing, minimizing), when the Wrapped button and
+// side menu go in the page's own colors instead of Roon's for the filter
+let filterShown = true;
+// The filter sits under the page now (skin.rs, trying it out 2026-10-24):
+// the Wrapped button and side menu are on top of it in the page's own
+// colors, so they're never drawn in Roon's for it. (False: back to the
+// filter over the page, with them in Roon's colors.)
+const FILTER_UNDER_PAGE = true;
 let roonNav = { page: "", albumId: null, lastAlbumId: null, available: false, navCount: 0 };
 let wrappedStack = [];
 // The pages gone back from (the mouse's forward button, newest last)
@@ -152,6 +161,15 @@ function reportHole() {
     covers.push([r.left, r.top, r.width, r.height]);
     radii.push(radius);
   }
+  // (a walkthrough: the page goes over all of Roon, so its dimming reaches
+  // Roon's corner by the Wrapped button too, while Roon's sidebar filter
+  // stays on underneath; Roon's clicks wait)
+  let dim = false;
+  try {
+    dim = !!onboardingRun;
+  } catch {
+    // (at startup, before the walkthrough code has run)
+  }
   invoke("wrapper_hole", {
     x: rect.left,
     y: rect.top,
@@ -159,6 +177,7 @@ function reportHole() {
     height: rect.height,
     covers,
     radii,
+    dim,
   }).catch(() => {});
 }
 
@@ -537,7 +556,8 @@ const DEFAULT_LAYOUT = {
   // edited: the pieces sit in a frame of this shape, as big as fits and
   // centered, so a different window shape only adds space at the sides or
   // top and bottom. Null (never edited): the whole window, as before.
-  aspect: null,
+  // (the shape Vulk's presets were made in, 2026-10-23)
+  aspect: 1.8921,
   keepShape: true, // off: the pieces spread over the whole window, whatever its shape
   barStyle: true, // the player bar uses these styles too (not the places)
   background: "art", // or "plain"
@@ -571,134 +591,1007 @@ const DRAG_START = 4; // px the mouse moves before a pressed piece follows it
 // working layout (with any unsaved changes), which profile it came from,
 // and the user's profiles.
 const PRESETS = [
+  // Vulk's set (2026-10-23), made in the editor and copied from his
+  // settings: Default (DEFAULT_LAYOUT), Default Waveform, Waves, Waves
+  // Large, then the rest
   { id: "default", name: "Default", layout: DEFAULT_LAYOUT },
-  // Vulk's: a mirrored wave seek under the transport, wave volume
+  { id: "default-waveform", name: "Default Waveform", layout: {
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "anchor": null,
+        "size": 0.83,
+        "visible": true,
+        "x": 0.500347947112039,
+        "y": 0.2217391304347826
+      },
+      "info": {
+        "align": "left",
+        "font": "Lato",
+        "lines": 1,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.3,
+        "x": 0.02,
+        "y": 0.97
+      },
+      "quality": {
+        "anchor": "transport",
+        "font": "Lato",
+        "format": false,
+        "formatSide": "right",
+        "size": 0.016,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.87,
+        "y": 0.925
+      },
+      "seek": {
+        "anchor": null,
+        "bar": "roon",
+        "font": "Lato",
+        "labelScale": 1.2352941176470589,
+        "mirror": true,
+        "side": "top",
+        "size": 0.014004761904761904,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.437890625,
+        "waveDynamics": "natural",
+        "waveform": true,
+        "x": 0.5003474635163307,
+        "y": 0.9922178988326849
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "play": "circle",
+        "size": 0.0173,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.9340141398271798
+      },
+      "volume": {
+        "bar": "line",
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "labelScale": 1,
+        "len": 0.78,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "vertical": true,
+        "visible": true,
+        "x": 0.99,
+        "y": 0.45
+      },
+      "wrapped": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.015,
+        "y": 0.03
+      },
+      "zone": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "size": 0.024,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.985,
+        "y": 0.975
+      }
+    }
+  } },
   { id: "waves", name: "Waves", layout: {
-      background: "art",
-      barStyle: true,
-      pieces: {
-        art: {
-          size: 0.83,
-          visible: true,
-          x: 0.5,
-          y: 0.15
-        },
-        info: {
-          align: "left",
-          font: "Lato",
-          lines: 1,
-          size: 0.0173,
-          visible: true,
-          w: 0.2633,
-          x: 0.0191,
-          y: 0.9703
-        },
-        seek: {
-          bar: "wave",
-          font: "Lato",
-          mirror: true,
-          side: "top",
-          size: 0.0138,
-          visible: true,
-          w: 0.4418,
-          x: 0.5,
-          y: 0.9891
-        },
-        transport: {
-          icons: "lucide",
-          play: "circle",
-          size: 0.0173,
-          visible: true,
-          x: 0.5,
-          y: 0.9289
-        },
-        volume: {
-          bar: "wave",
-          font: "Lato",
-          icons: "lucide",
-          len: 0.7361,
-          mirror: true,
-          side: "top",
-          size: 0.013,
-          vertical: true,
-          visible: true,
-          x: 0.99,
-          y: 0.4398
-        },
-        zone: {
-          font: "Lato",
-          icons: "lucide",
-          size: 0.024,
-          visible: true,
-          x: 0.985,
-          y: 0.975
-        }
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "size": 0.83,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.15
+      },
+      "info": {
+        "align": "left",
+        "font": "Lato",
+        "lines": 1,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.2633,
+        "x": 0.0191,
+        "y": 0.9703
+      },
+      "quality": {
+        "anchor": "transport",
+        "font": "Lato",
+        "format": false,
+        "formatSide": "right",
+        "size": 0.016,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.87,
+        "y": 0.925
+      },
+      "seek": {
+        "bar": "wave",
+        "font": "Lato",
+        "labelScale": 1,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0138,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.4418,
+        "waveAlive": true,
+        "waveform": true,
+        "x": 0.5,
+        "y": 0.9891
+      },
+      "transport": {
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "play": "circle",
+        "size": 0.0173,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.9289
+      },
+      "volume": {
+        "bar": "wave",
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "labelScale": 1,
+        "len": 0.7361,
+        "mirror": true,
+        "side": "top",
+        "size": 0.013,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "vertical": true,
+        "visible": true,
+        "x": 0.99,
+        "y": 0.4398
+      },
+      "wrapped": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.015,
+        "y": 0.03
+      },
+      "zone": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "size": 0.024,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.985,
+        "y": 0.975
       }
-    } },
-  // Vulk's: bigger art and text, Phosphor icons, a one-sided wave seek
-  // along the bottom edge
+    }
+  } },
   { id: "waves-large", name: "Waves Large", layout: {
-      background: "art",
-      barStyle: true,
-      pieces: {
-        art: {
-          size: 0.9106,
-          visible: true,
-          x: 0.5,
-          y: 0.0496
-        },
-        info: {
-          align: "left",
-          font: "Inter",
-          lines: 2,
-          size: 0.0249,
-          visible: true,
-          w: 0.359,
-          x: 0.0238,
-          y: 0.9374
-        },
-        seek: {
-          bar: "wave",
-          font: "Inter",
-          mirror: false,
-          side: "top",
-          size: 0.0133,
-          visible: true,
-          w: 0.9953,
-          x: 0.5,
-          y: 1
-        },
-        transport: {
-          icons: "phosphor",
-          play: "plain",
-          size: 0.0173,
-          visible: true,
-          x: 0.5,
-          y: 0.9725
-        },
-        volume: {
-          bar: "wave",
-          font: "Inter",
-          icons: "phosphor",
-          len: 0.8374,
-          mirror: true,
-          side: "top",
-          size: 0.0173,
-          vertical: true,
-          visible: true,
-          x: 0.99,
-          y: 0.3227
-        },
-        zone: {
-          font: "Inter",
-          icons: "phosphor",
-          size: 0.024,
-          visible: true,
-          x: 0.9894,
-          y: 0.9499
-        }
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": true,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "anchor": null,
+        "size": 0.9106,
+        "visible": true,
+        "x": 0.5007473841554559,
+        "y": 0.02666666666666667
+      },
+      "info": {
+        "align": "left",
+        "anchor": null,
+        "font": "Inter",
+        "lines": 2,
+        "size": 0.023084375,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.3328229166666667,
+        "x": 0.028154327424400417,
+        "y": 0.9350993377483444
+      },
+      "quality": {
+        "anchor": null,
+        "font": "Lato",
+        "format": true,
+        "formatSide": "left",
+        "size": 0.011733333333333332,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.9072894550601556,
+        "y": 0.939477303988996
+      },
+      "seek": {
+        "bar": "wave",
+        "font": "Inter",
+        "labelScale": 0.5548812207386855,
+        "mirror": false,
+        "side": "top",
+        "size": 0.02396909375,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.9953,
+        "waveform": true,
+        "x": 0.5714285714285714,
+        "y": 1
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "play": "plain",
+        "size": 0.0173,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.9710327455919396
+      },
+      "volume": {
+        "anchor": null,
+        "bar": "wave",
+        "font": "Inter",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "labelScale": 1,
+        "len": 0.8374,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "vertical": true,
+        "visible": true,
+        "x": 0.9979806138933764,
+        "y": 0.3181818181818182
+      },
+      "wrapped": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.015,
+        "y": 0.03
+      },
+      "zone": {
+        "font": "Inter",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "size": 0.024,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.9894,
+        "y": 0.9499
       }
-    } },
+    }
+  } },
+  { id: "dual-large", name: "Dual Large", layout: {
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "size": 0.8892369501466276,
+        "visible": true,
+        "x": 0.49594594594594593,
+        "y": 0.1566265060240964
+      },
+      "info": {
+        "align": "left",
+        "font": "Inter",
+        "lines": 2,
+        "size": 0.0249,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.359,
+        "x": 0.0238,
+        "y": 0.9374
+      },
+      "quality": {
+        "anchor": "transport",
+        "font": "Lato",
+        "format": true,
+        "formatSide": "right",
+        "size": 0.01740100390407139,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.8936473947180585,
+        "y": 0.9496503496503496
+      },
+      "seek": {
+        "bar": "dots",
+        "color": "album",
+        "customColor": "#5e84c9",
+        "font": "Inter",
+        "labelScale": 0.9464285714285716,
+        "mirror": false,
+        "side": "top",
+        "size": 0.020889342172361033,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.9888734353268428,
+        "waveAlive": true,
+        "waveLoud": false,
+        "waveform": true,
+        "x": 0.5,
+        "y": 1
+      },
+      "transport": {
+        "iconEdge": "stroke",
+        "iconEdgeSize": 1,
+        "icons": "phosphor",
+        "play": "plain",
+        "size": 0.02289503968253968,
+        "visible": true,
+        "x": 0.49701195219123506,
+        "y": 0.979015918958032
+      },
+      "volume": {
+        "bar": "spectrum",
+        "font": "Inter",
+        "iconEdge": "none",
+        "iconEdgeSize": 1,
+        "icons": "phosphor",
+        "labelScale": 0.5949367088607594,
+        "len": 0.874826147426982,
+        "mirror": false,
+        "side": "bottom",
+        "size": 0.02907872340425532,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "vertical": false,
+        "visible": true,
+        "x": 0.4829545454545454,
+        "y": 0
+      },
+      "wrapped": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.015,
+        "y": 0.03
+      },
+      "zone": {
+        "font": "Inter",
+        "format": true,
+        "iconEdge": "none",
+        "iconEdgeSize": 1,
+        "icons": "phosphor",
+        "size": 0.036608,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.9936507936507936,
+        "y": 0.90711175616836
+      }
+    }
+  } },
+  { id: "narrow-album-art", name: "Narrow Album Art", layout: {
+    "aspect": 0.6739,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "anchor": null,
+        "size": 1,
+        "visible": true,
+        "x": 1,
+        "y": 0.19020069761879316
+      },
+      "info": {
+        "align": "center",
+        "anchor": null,
+        "font": "Lato",
+        "lines": 1,
+        "size": 0.023928971962616823,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.9874826147426982,
+        "x": 0.5,
+        "y": 0.8915094339622641
+      },
+      "quality": {
+        "anchor": null,
+        "font": "Lato",
+        "format": true,
+        "formatSide": "below",
+        "size": 0.011733333333333332,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.4996345029239766,
+        "y": 0.7785852713178295
+      },
+      "seek": {
+        "anchor": null,
+        "bar": "art",
+        "font": "Lato",
+        "labelScale": 0.8635488923696579,
+        "mirror": false,
+        "side": "bottom",
+        "size": 0.016026886401326698,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.995827538247566,
+        "waveform": false,
+        "x": 0.5,
+        "y": 0.7807061163600199
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "play": "plain",
+        "size": 0.028246586720867207,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.9927685950413224
+      },
+      "volume": {
+        "anchor": null,
+        "bar": "dots",
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "labelScale": 1.0307692307692309,
+        "len": 0.9965229485396384,
+        "mirror": true,
+        "side": "top",
+        "size": 0.01678358208955224,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "vertical": false,
+        "visible": true,
+        "x": 0.4,
+        "y": 0
+      },
+      "wrapped": {
+        "anchor": null,
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.011413194444444445,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.007922535211267605,
+        "y": 0.047081902893575285
+      },
+      "zone": {
+        "anchor": null,
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "size": 0.01464406779661017,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 1,
+        "y": 0.03152279340446169
+      }
+    }
+  } },
+  { id: "contour", name: "Contour", layout: {
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "anchor": null,
+        "size": 0.8670387654071529,
+        "visible": true,
+        "x": 0.5150289017341041,
+        "y": 0.05357142857142857
+      },
+      "info": {
+        "align": "left",
+        "anchor": null,
+        "font": "Inter",
+        "lines": 2,
+        "size": 0.0217875,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.314125,
+        "x": 0.0324573199917945,
+        "y": 0.9210526315789472
+      },
+      "quality": {
+        "anchor": null,
+        "font": "Lato",
+        "format": true,
+        "formatSide": "left",
+        "size": 0.011733333333333332,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.8725302740599108,
+        "y": 0.9136029411764706
+      },
+      "seek": {
+        "anchor": null,
+        "bar": "contour",
+        "font": "Inter",
+        "labelScale": 0.5,
+        "mirror": false,
+        "side": "top",
+        "size": 0.02709538461538461,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.9953,
+        "waveAlive": true,
+        "waveDynamics": "more",
+        "waveLoud": true,
+        "waveform": true,
+        "x": 0.5,
+        "y": 0.9991809991809992
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "play": "plain",
+        "size": 0.018684,
+        "visible": true,
+        "x": 0.5103092783505154,
+        "y": 0.9443037974683544
+      },
+      "volume": {
+        "anchor": null,
+        "bar": "ribbon",
+        "font": "Inter",
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "labelScale": 1,
+        "len": 0.8374,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0173,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "vertical": true,
+        "visible": true,
+        "x": 0.9974093264248703,
+        "y": 0.3759124087591241
+      },
+      "wrapped": {
+        "anchor": null,
+        "font": "Lato",
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.018344308560677328,
+        "y": 0.029712163416898793
+      },
+      "zone": {
+        "anchor": null,
+        "font": "Inter",
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "size": 0.024,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.9535836177474404,
+        "y": 0.9234629861982434
+      }
+    }
+  } },
+  { id: "illuminated", name: "Illuminated", layout: {
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "anchor": null,
+        "size": 0.8846927871772039,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.08974358974358974
+      },
+      "info": {
+        "align": "left",
+        "anchor": null,
+        "font": "Lato",
+        "lines": 1,
+        "size": 0.023928971962616823,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.41495327102803736,
+        "x": 0.02403204272363151,
+        "y": 0.970954356846473
+      },
+      "quality": {
+        "anchor": null,
+        "font": "Lato",
+        "format": true,
+        "formatSide": "left",
+        "size": 0.016,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.9045584045584044,
+        "y": 0.9707520891364902
+      },
+      "seek": {
+        "anchor": null,
+        "bar": "beam",
+        "font": "Lato",
+        "labelScale": 1,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.5359375,
+        "waveform": true,
+        "x": 0.5025252525252525,
+        "y": 0.9219858156028368
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "play": "plain",
+        "size": 0.02422,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.989855072463768
+      },
+      "volume": {
+        "anchor": null,
+        "bar": "contour",
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "labelScale": 0.5,
+        "len": 1,
+        "mirror": false,
+        "side": "bottom",
+        "size": 0.04306595744680851,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "vertical": false,
+        "visible": true,
+        "x": 0,
+        "y": 0
+      },
+      "wrapped": {
+        "anchor": null,
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.020141766497461928,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.016,
+        "y": 0.1441270073526722
+      },
+      "zone": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "size": 0.024,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.985,
+        "y": 0.975
+      }
+    }
+  } },
+  { id: "ribbon", name: "Ribbon", layout: {
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "anchor": null,
+        "size": 0.8913827922077922,
+        "visible": true,
+        "x": 0.500728862973761,
+        "y": 0.09782608695652174
+      },
+      "info": {
+        "align": "left",
+        "anchor": null,
+        "font": "Inter",
+        "lines": 2,
+        "size": 0.0238625,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.3440416666666667,
+        "x": 0.024390243902439025,
+        "y": 0.9268617021276596
+      },
+      "quality": {
+        "anchor": null,
+        "font": "Lato",
+        "format": true,
+        "formatSide": "left",
+        "size": 0.011733333333333332,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.8970588235294118,
+        "y": 0.9327731092436976
+      },
+      "seek": {
+        "anchor": null,
+        "bar": "ribbon",
+        "font": "Inter",
+        "labelScale": 0.5,
+        "mirror": false,
+        "side": "top",
+        "size": 0.02709538461538461,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "w": 0.9953,
+        "waveAlive": true,
+        "waveLoud": true,
+        "waveform": true,
+        "x": 0.5,
+        "y": 0.9986876640419948
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "play": "plain",
+        "size": 0.0173,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.9584382871536524
+      },
+      "volume": {
+        "anchor": null,
+        "bar": "particles",
+        "font": "Inter",
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "labelScale": 1,
+        "len": 0.8374,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0173,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "vertical": true,
+        "visible": true,
+        "x": 0.9975767366720516,
+        "y": 0.26590909090909093
+      },
+      "wrapped": {
+        "anchor": null,
+        "font": "Lato",
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.018344308560677328,
+        "y": 0.029712163416898793
+      },
+      "zone": {
+        "anchor": null,
+        "font": "Inter",
+        "iconEdge": "glow",
+        "iconEdgeSize": 2,
+        "icons": "phosphor",
+        "size": 0.024,
+        "textEdge": "glow",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.9795839753466872,
+        "y": 0.9428066037735848
+      }
+    }
+  } },
+  { id: "electric", name: "Electric", layout: {
+    "aspect": 1.8921,
+    "background": "art",
+    "barStyle": true,
+    "invertToggles": false,
+    "keepShape": true,
+    "pieces": {
+      "art": {
+        "size": 0.83,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.15
+      },
+      "info": {
+        "align": "left",
+        "anchor": null,
+        "font": "Lato",
+        "lines": 1,
+        "size": 0.01993898305084746,
+        "textEdge": "glow",
+        "textEdgeSize": 1,
+        "visible": true,
+        "w": 0.34576271186440677,
+        "x": 0.0382089552238806,
+        "y": 0.8926829268292683
+      },
+      "quality": {
+        "anchor": null,
+        "font": "Lato",
+        "format": true,
+        "formatSide": "right",
+        "size": 0.016,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.017806267806267807,
+        "y": 0.9435933147632312
+      },
+      "seek": {
+        "anchor": null,
+        "bar": "glow",
+        "font": "Lato",
+        "labelScale": 0.784,
+        "mirror": true,
+        "side": "top",
+        "size": 0.01865129980563654,
+        "textEdge": "glow",
+        "textEdgeSize": 1,
+        "visible": true,
+        "w": 0.9895688456189152,
+        "waveAlive": true,
+        "waveform": true,
+        "x": 0.5333333333333333,
+        "y": 1
+      },
+      "transport": {
+        "anchor": null,
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "play": "plain",
+        "size": 0.0173,
+        "visible": true,
+        "x": 0.5,
+        "y": 0.9277297721916732
+      },
+      "volume": {
+        "anchor": null,
+        "bar": "neon",
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "labelScale": 1,
+        "len": 0.78,
+        "mirror": true,
+        "side": "top",
+        "size": 0.0173,
+        "textEdge": "glow",
+        "textEdgeSize": 1,
+        "vertical": true,
+        "visible": true,
+        "x": 0.9856218547807332,
+        "y": 0.3393939393939394
+      },
+      "wrapped": {
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "size": 0.0173,
+        "textEdge": "none",
+        "textEdgeSize": 2,
+        "visible": true,
+        "x": 0.015,
+        "y": 0.03
+      },
+      "zone": {
+        "anchor": null,
+        "font": "Lato",
+        "iconEdge": "none",
+        "iconEdgeSize": 2,
+        "icons": "lucide",
+        "size": 0.024,
+        "textEdge": "glow",
+        "textEdgeSize": 1,
+        "visible": true,
+        "x": 0.9848942598187312,
+        "y": 0.9240506329113924
+      }
+    }
+  } },
 ];
 let profiles = []; // the user's: { id, name, layout }
 let activeProfile = "default";
@@ -783,6 +1676,8 @@ function setStageOpen(open) {
   // The Wrapped buttons over Roon have no place over Now Playing
   layoutWrapped();
   reportHole();
+  // (the player's walkthrough, the first time; a page's stops)
+  onboardingStage(open);
 }
 
 // ----- Icon packs -----
@@ -1027,36 +1922,63 @@ function styleControls() {
 
 const waves = {}; // piece id -> WaveBar while that piece is drawn on a canvas
 // The bar styles drawn on a canvas (bars.js); the rest are CSS
-// The seek bar's Waveform looks (bars.js painters), drawn from Roon's own
-// waveform of the playing track
-// Any of them can be Alive too (`waveAlive`: bouncing gently near the
-// playhead) and colored by loudness (`waveLoud`)
-const WAVEFORM_LOOKS = {
-  roon: "roonwave",
-  pills: "wfpills",
-  shape: "wfshape",
-  neon: "wfneon",
-  led: "wfled",
-  art: "wfart",
+// The bars' styles (one list, the editor's Style; Vulk, 2026-10-23), each
+// with how it's drawn (`paint`: a bars.js painter, none for the CSS ones)
+// and how with Waveform on (`wave`): its own waveform look, or (`ys`) the
+// same painter with the song's heights in place of the made-up profile.
+// No `wave`: Waveform is greyed out and it's drawn as ever. The waveform
+// looks without a waveform draw the made-up profile.
+const BAR_STYLES = {
+  line: {},
+  thick: {},
+  hairline: {},
+  segments: {},
+  roon: { paint: "roonwave", wave: "roonwave" },
+  pills: { paint: "wfpills", wave: "wfpills" },
+  shape: { paint: "wfshape", wave: "wfshape" },
+  linegraph: { paint: "wfline", wave: "wfline" },
+  contour: { paint: "wfcontour", wave: "wfcontour" },
+  caps: { paint: "wfcaps", wave: "wfcaps" },
+  pixel: { paint: "wfpixel", wave: "wfpixel" },
+  stitch: { paint: "wfstitch", wave: "wfstitch" },
+  neonline: { paint: "wfneon", wave: "wfneon" },
+  spectrum: { paint: "spectrum", wave: "spectrum", ys: true },
+  beam: { paint: "beam", wave: "beam", ys: true },
+  glow: { paint: "glow", wave: "glow", ys: true },
+  ribbon: { paint: "ribbon", wave: "ribbon", ys: true },
+  neon: { paint: "neon", wave: "neon", ys: true },
+  dots: { paint: "dots", wave: "wfled" },
+  art: { paint: "art", wave: "wfart" },
+  wave: { paint: "wave", wave: "wave", ys: true },
+  mountain: { paint: "mountain" },
+  particles: { paint: "particles" },
+  plasma: { paint: "plasma" },
 };
-// The piece's look, if it's one we have ("alive" and "<look>-alive" were
-// briefly separate looks while trying them out)
-function waveLookOf(p) {
+// The canvas painters (the rest are CSS on the slider)
+const CANVAS_BARS = [...new Set(Object.values(BAR_STYLES).flatMap((b) => [b.paint, b.wave]).filter(Boolean))];
+// Painters Loudness colors (waveform looks; Album art shows the cover)
+const LOUDNESS_PAINTERS = new Set(["roonwave", "wfpills", "wfshape", "wfline", "wfcontour", "wfcaps", "wfpixel", "wfstitch", "wfneon", "wfled"]);
+// The old waveform looks (before the one list) and the styles they became
+const OLD_WAVE_LOOKS = { roon: "roon", pills: "pills", shape: "shape", neon: "neonline", led: "dots", art: "art" };
+function oldWaveLook(p) {
   const look = p.waveLook === "alive" ? "roon" : (p.waveLook || "").replace(/-alive$/, "");
-  return WAVEFORM_LOOKS[look] ? look : "roon";
+  return OLD_WAVE_LOOKS[look] || "roon";
 }
 const waveAliveOf = (p) => !!p.waveAlive || p.waveLook === "alive" || !!p.waveLook?.endsWith("-alive");
-// Looks Loudness doesn't change (Album art shows the cover)
-const LOUDNESS_FIXED = ["art"];
-const CANVAS_BARS = ["wave", "spectrum", "beam", "glow", "dots", "ribbon", "neon", "mountain", "particles", "plasma", "art", ...Object.values(WAVEFORM_LOOKS)];
+const barStyleOf = (p) => (BAR_STYLES[p.bar] ? p.bar : "line");
 
-// The style a bar is drawn in: with Waveform on and a waveform for what's
-// playing, the picked waveform look; otherwise the Bar choice (which is
-// also the waveform's fallback)
-function barOf(id) {
+// How a bar is drawn now: the painter (or CSS style), and whether it's the
+// waveform (the seek bar, Waveform on, a style that has one, and Roon's
+// waveform for what's playing)
+function barDraw(id) {
   const p = layout.pieces[id];
-  if (id === "seek" && p.waveform && currentWaveform()) return WAVEFORM_LOOKS[waveLookOf(p)];
-  return p.bar || "line";
+  const name = barStyleOf(p);
+  const spec = BAR_STYLES[name];
+  const useWave = id === "seek" && !!p.waveform && !!spec.wave && !!currentWaveform();
+  return { name, style: useWave ? spec.wave : spec.paint || name, useWave, ys: useWave && !!spec.ys };
+}
+function barOf(id) {
+  return barDraw(id).style;
 }
 const BAR_INPUTS = { seek, volume };
 
@@ -1076,7 +1998,7 @@ function fitWaves() {
     const { mode, color } = barColor(p);
     // In the player bar the sliders are always shown, horizontal, at the
     // bar's own size
-    const style = barOf(id);
+    const { style, useWave, ys } = barDraw(id);
     const want = barStyled() && (!open || p.visible) && CANVAS_BARS.includes(style);
     if (!want) {
       waves[id]?.remove();
@@ -1087,10 +2009,14 @@ function fitWaves() {
     waves[id] ??= new WaveBar(input.parentElement, input);
     waves[id].fit({
       style,
-      // Roon's waveform, for the Waveform looks
-      waveform: Object.values(WAVEFORM_LOOKS).includes(style) ? currentWaveform() : null,
+      // Roon's waveform, with Waveform on (a waveform look without it draws
+      // the made-up profile); `waveYs`: the other styles take its heights
+      waveform: useWave ? currentWaveform() : null,
+      waveYs: ys,
       // Waveform colors by loudness, and the Alive versions
       loudColor: id === "seek" && !!p.waveLoud,
+      // How much the heights show the ups and downs (More unless set)
+      dynamics: id === "seek" ? p.waveDynamics || "more" : "more",
       alive: id === "seek" && waveAliveOf(p),
       // The cover, for the Album art style (the small one is plenty)
       art: artKey && !art.hidden ? art.src : null,
@@ -1147,6 +2073,17 @@ function normalizeLayout(saved) {
     for (const id of PIECE_IDS) {
       if (savedPieces[id] && typeof savedPieces[id] === "object") Object.assign(out.pieces[id], savedPieces[id]);
     }
+    // (a seek bar from before the one list: Waveform on with a look of its
+    // own becomes that look's style; the look's name goes)
+    const seekBar = out.pieces.seek;
+    if (seekBar.waveLook != null) {
+      if (seekBar.waveform) {
+        seekBar.waveAlive = waveAliveOf(seekBar);
+        seekBar.bar = oldWaveLook(seekBar);
+      }
+      delete seekBar.waveLook;
+    }
+    for (const id of ["seek", "volume"]) out.pieces[id].bar = barStyleOf(out.pieces[id]);
   }
   return out;
 }
@@ -1602,10 +2539,11 @@ const barSelect = $("#editor-bar-select");
 const editorWave = $("#editor-wave");
 const editorWaveform = $("#editor-waveform");
 const waveformCheck = $("#editor-waveform-check");
-const waveformLook = $("#editor-waveform-look");
+const waveformLabel = $("#editor-waveform-label");
 const waveformLoud = $("#editor-waveform-loud");
 const waveformLoudLabel = $("#editor-waveform-loud-label");
 const waveformAlive = $("#editor-waveform-alive");
+const waveformDynamics = $("#editor-waveform-dynamics");
 const waveformAliveLabel = $("#editor-waveform-alive-label");
 const colorInput = $("#editor-color");
 const mirrorCheck = $("#editor-mirror");
@@ -1712,27 +2650,36 @@ function refreshEditor() {
   editorBar.hidden = !withBar;
   editorWaveform.hidden = selected !== "seek";
   if (withBar) {
-    barSelect.value = withBar.bar || "line";
+    barSelect.value = barStyleOf(withBar);
     const { mode, color } = barColor(withBar);
     for (const chip of editorBar.querySelectorAll(".chip[data-color]")) chip.classList.toggle("on", chip.dataset.color === mode);
     // The picker and Top / Bottom stay in place, greyed out while they don't
     // apply, so nothing on the line moves when they come into play
     colorInput.disabled = mode !== "custom";
     colorInput.value = toHex(color);
-    // (Waveform: the seek bar's real waveform, drawn on the canvas too)
-    const waveform = selected === "seek" && !!withBar.waveform;
-    editorWave.hidden = !CANVAS_BARS.includes(barSelect.value) && !waveform;
+    // (Waveform: the seek bar's real waveform, for the styles that have
+    // one; greyed out for the rest, which draw as ever)
+    const spec = BAR_STYLES[barStyleOf(withBar)];
+    const can = selected === "seek" && !!spec.wave;
+    const waveform = can && !!withBar.waveform;
+    editorWave.hidden = !spec.paint;
+    // (unticked while greyed out; the setting is kept for the next style)
     waveformCheck.checked = waveform;
-    waveformLook.classList.toggle("off", !waveform);
-    waveformLook.value = waveLookOf(withBar);
-    // Loudness: with the picker; greyed out for the looks it doesn't change
+    waveformCheck.disabled = !can;
+    waveformLabel.classList.toggle("disabled", !can);
+    waveformLabel.title = can
+      ? "Draw the song's real waveform (Roon's, for local files and streaming). When Roon has none for a track, the style is drawn as usual."
+      : "This style has no waveform version";
+    // Loudness: with Waveform on, for the looks it colors
     waveformLoudLabel.classList.toggle("off", !waveform);
-    const fixed = LOUDNESS_FIXED.includes(waveformLook.value);
-    waveformLoudLabel.classList.toggle("disabled", fixed);
-    waveformLoud.disabled = fixed;
+    const loudable = LOUDNESS_PAINTERS.has(spec.wave);
+    waveformLoudLabel.classList.toggle("disabled", !loudable);
+    waveformLoud.disabled = !loudable;
     waveformLoud.checked = !!withBar.waveLoud;
     waveformAliveLabel.classList.toggle("off", !waveform);
     waveformAlive.checked = waveAliveOf(withBar);
+    waveformDynamics.classList.toggle("off", !waveform);
+    waveformDynamics.value = withBar.waveDynamics === "natural" ? "natural" : "more";
     mirrorCheck.checked = withBar.mirror !== false;
     editorSide.classList.toggle("disabled", mirrorCheck.checked);
     for (const chip of editorSide.querySelectorAll(".chip")) chip.disabled = mirrorCheck.checked;
@@ -1869,18 +2816,15 @@ waveformCheck.addEventListener("change", () => {
   layout.pieces.seek.waveform = waveformCheck.checked;
   changed();
 });
-waveformLook.addEventListener("change", () => {
-  if (selected !== "seek") return;
-  const p = layout.pieces.seek;
-  p.waveAlive = waveAliveOf(p); // (an old "-alive" look keeps its Alive)
-  p.waveLook = waveformLook.value;
-  changed();
-});
 waveformAlive.addEventListener("change", () => {
   if (selected !== "seek") return;
   const p = layout.pieces.seek;
-  p.waveLook = waveLookOf(p);
   p.waveAlive = waveformAlive.checked;
+  changed();
+});
+waveformDynamics.addEventListener("change", () => {
+  if (selected !== "seek") return;
+  layout.pieces.seek.waveDynamics = waveformDynamics.value;
   changed();
 });
 waveformLoud.addEventListener("change", () => {
@@ -3013,6 +3957,24 @@ let roonHere = false;
 window.addEventListener("resize", () => {
   lastResizeAt = Date.now();
 });
+// (Rust says when the filter goes see-through or shows again. The two
+// can't be made to change in the same frame, so the colors ease over
+// instead of switching, and a frame either side of the filter's change
+// is hardly off)
+let filterFadeTimer = null;
+listen("wrapper-filter", (event) => {
+  const shown = event.payload !== false;
+  if (shown === filterShown) return;
+  filterShown = shown;
+  wrappedBtn.classList.add("filter-fade");
+  wrappedSide.classList.add("filter-fade");
+  clearTimeout(filterFadeTimer);
+  filterFadeTimer = setTimeout(() => {
+    wrappedBtn.classList.remove("filter-fade");
+    wrappedSide.classList.remove("filter-fade");
+  }, 250);
+  layoutWrapped();
+});
 function setSidebar(px, color, here, header) {
   if (here !== roonHere) {
     roonHere = here;
@@ -3066,7 +4028,7 @@ function layoutWrapped() {
   if (sidebarPx !== null && sidebarPx !== undefined) sidebarSeen = true;
   const width = sidebarWidth();
   const collapsed = width === null;
-  const filtered = !collapsed && sidebarColor !== null;
+  const filtered = !FILTER_UNDER_PAGE && !collapsed && sidebarColor !== null && filterShown;
   const here = wrappedHere();
 
   // The sidebar button: over the logo while the sidebar is there (it goes
@@ -3331,7 +4293,7 @@ function placeWrappedSide() {
   // Over the sidebar it shows through skin.rs's color filter, like the
   // Wrapped button: drawn in Roon's own colors so the filter turns them
   // into ours (our colors would come out shifted)
-  const filtered = !collapsed && sidebarColor !== null;
+  const filtered = !FILTER_UNDER_PAGE && !collapsed && sidebarColor !== null && filterShown;
   wrappedSide.classList.toggle("through-filter", filtered);
   if (filtered) {
     const [r, g, b] = sidebarColor;
@@ -3343,7 +4305,8 @@ function placeWrappedSide() {
     wrappedSide.style.setProperty("--roon-bright", ROON_BRIGHT);
     wrappedSide.style.setProperty("--roon-accent", ROON_ACCENT);
   }
-  const top = !collapsed ? ROON_LOGO.y + ROON_LOGO.height + 6 : wrapped.hidden ? ROON_HEADER.y + ROON_HEADER.height + 6 : 0;
+  // (right under the Wrapped button, no gap where Roon's sidebar shows)
+  const top = !collapsed ? ROON_LOGO.y + ROON_LOGO.height : wrapped.hidden ? ROON_HEADER.y + ROON_HEADER.height + 6 : 0;
   wrappedSide.style.top = `${h.top + top}px`;
 }
 
@@ -3392,6 +4355,11 @@ wrappedSideBtn.addEventListener("click", toggleWrappedSide);
 // Closing keeps the page stack: "Wrapped" opens it where it was
 function setWrappedOpen(open) {
   if (open && !wrappedStack.length) wrappedStack = [{ page: "home" }];
+  // (opening: the side menu Settings says, Wrapped's or Roon's sidebar)
+  if (open && wrapped.hidden) {
+    const want = wrappedSettings?.sideMenu === "wrapped";
+    if (want === wrappedSide.hidden) setWrappedSide(want);
+  }
   wrapped.hidden = !open;
   if (open) renderWrapped();
   else discoverBtn.classList.remove("on");
@@ -3420,6 +4388,9 @@ function openWrappedPage(entry) {
   // (Deep Dive always opens on Deep Dive; Radio is the other tab)
   if (entry.page === "deepdive") deepDiveTab = "dive";
   wrappedForward = [];
+  // (opened from elsewhere, say the player: Wrapped's side menu with it
+  // when that's the one Settings says; one already open stays)
+  if (wrapped.hidden && wrappedSide.hidden && wrappedSettings?.sideMenu === "wrapped") setWrappedSide(true);
   wrappedStack.push({
     page: entry.page,
     albumId: entry.albumId,
@@ -3485,6 +4456,7 @@ function renderWrapped() {
   wrappedTicket++;
   const page = WRAPPED_PAGES[entry.page] || WRAPPED_PAGES.home;
   Promise.resolve(page(entry)).catch((err) => console.error("wrapped page", err));
+  onboardingStart(entry.page);
 }
 
 function wrappedHeading(title, sub) {
@@ -4540,7 +5512,8 @@ function divePicks() {
   });
   // (a press on the button itself mustn't close its menu before the click)
   pastBtn.addEventListener("pointerdown", (event) => event.stopPropagation());
-  head.append(title, pastBtn);
+  // (the tiers Deep Dive uses, small, in the corner)
+  head.append(title, pastBtn, tierStrip({ tier2: tier2Ready(), tier3: !!soundState?.ready }, "dive"));
   box.append(head);
   const row = document.createElement("div");
   row.className = "dive-pick-row";
@@ -7290,6 +8263,12 @@ function historyTop(rows, what) {
   return wrappedGrid(items, (item) => openFromHistory(what === "artists" ? "artist" : "album", item.row));
 }
 
+// A settings card's i (its words on hover)
+const INFO_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>';
+
+// Start here's X: closed once, it stays closed
+const START_CLOSED_KEY = "wrapped-start-closed";
+
 // Wrapped's own settings: the Last.fm key, how "Similar by" starts out,
 // and the state of Wrapped's records (history copy, tag cache)
 const SIMILAR_BY = [
@@ -7520,11 +8499,10 @@ WRAPPED_PAGES.settings = async function () {
 
   // How the Discover lists pick: three tiers, each adding to the one below
   if (discoveryOn) {
-    const tiers = field(
-      "How Discover picks",
-      "Each level adds to the one below it, and your thumbs on the lists' songs count at every level.",
-      right,
-    );
+    // (right under Discovery's Off / On, no heading of their own)
+    const tiers = document.createElement("div");
+    tiers.className = "wrapped-setting tiers-close";
+    right.append(tiers);
     const tierCards = document.createElement("div");
     tierCards.className = "picking-tiers";
     // Each tier is a section; the ones switched on, from tier 1 down, share
@@ -8241,13 +9219,37 @@ WRAPPED_PAGES.settings = async function () {
 
   // ----- The left column: cards, in the order they matter when setting
   // up: what Wrapped reads from Roon (everything builds on it), the
-  // Similar rows, the page size, then Toasted's own settings -----
-  const card = (title, text) => {
+  // Similar rows, the page size, the colors and Hearts & Library (Toasted's
+  // settings, shared). Onboarding and the rest of Toasted's settings go
+  // on the right, under the tiers -----
+  // (on the left, compact: the title's line has the title, an i with the
+  // words on hover, and room on the right for the card's control, as
+  // box.head; on the right, the words stay under the title)
+  const card = (title, text, where = left) => {
     const box = document.createElement("section");
     box.className = "settings-card";
     const h = document.createElement("div");
     h.className = "settings-card-title";
     h.textContent = title;
+    if (where === left) {
+      const head = document.createElement("div");
+      head.className = "settings-card-head";
+      const name = document.createElement("div");
+      name.className = "settings-card-name";
+      name.append(h);
+      if (text) {
+        const info = document.createElement("span");
+        info.className = "settings-card-info";
+        info.innerHTML = INFO_ICON;
+        hoverTip(info, text);
+        name.append(info);
+      }
+      head.append(name);
+      box.append(head);
+      box.head = head;
+      where.append(box);
+      return box;
+    }
     box.append(h);
     if (text) {
       const p = document.createElement("div");
@@ -8255,12 +9257,13 @@ WRAPPED_PAGES.settings = async function () {
       p.textContent = text;
       box.append(p);
     }
-    left.append(box);
+    where.append(box);
     return box;
   };
   // One line in a card: a name and what it says now on the left, its
-  // button (or pills) on the right
-  const cardRow = (box, name, status, control) => {
+  // button (or pills) on the right (`tipOnly`: the words only on the
+  // name's hover, so the row is one line)
+  const cardRow = (box, name, status, control, tipOnly = false) => {
     const row = document.createElement("div");
     row.className = "settings-card-row";
     const text = document.createElement("div");
@@ -8269,6 +9272,10 @@ WRAPPED_PAGES.settings = async function () {
     h.className = "settings-card-row-name";
     h.textContent = name;
     text.append(h);
+    if (status && tipOnly) {
+      hoverTip(h, status.textContent);
+      status = null;
+    }
     if (status) text.append(status);
     row.append(text);
     if (control) row.append(control);
@@ -8319,7 +9326,10 @@ WRAPPED_PAGES.settings = async function () {
       paintHistory(historyStatus);
       historyButton.textContent = historyStatus?.plays ? "Read it all again" : "Read it";
       paintStart();
-    } else historyText.textContent = p.wanted ? `Reading: ${n(p.loaded)} of ${n(p.wanted)} plays...` : "Checking Roon for new plays...";
+    } else {
+      historyText.textContent = p.wanted ? `Reading: ${n(p.loaded)} of ${n(p.wanted)} plays...` : "Checking Roon for new plays...";
+      startBusy(true);
+    }
   });
   // Your Last.fm account: its scrobbles reach back before Roon's history
   // (folded to its title until opened)
@@ -8395,7 +9405,10 @@ WRAPPED_PAGES.settings = async function () {
       paintStart();
       // The library's artists join the ones to tag
       invoke("wrapped_tags_status").then(showTagging).catch(() => {});
-    } else libText.textContent = `Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} ${p.what || "artists"}...`;
+    } else {
+      libText.textContent = `Reading: ${p.read.toLocaleString()} of ${p.total.toLocaleString()} ${p.what || "artists"}...`;
+      startBusy(true);
+    }
   });
   // Tags
   const tagText = statusLine("...");
@@ -8443,16 +9456,46 @@ WRAPPED_PAGES.settings = async function () {
       startGo.textContent = "Read my history and library";
     }
   });
-  start.append(startText, startGo);
+  // (an X to put it away by hand, remembered)
+  const startClose = document.createElement("button");
+  startClose.className = "discover-ask-x settings-start-x";
+  startClose.innerHTML = CLOSE_ICON;
+  startClose.title = "Close";
+  startClose.setAttribute("aria-label", "Close Start here");
+  startClose.addEventListener("click", () => {
+    try {
+      localStorage.setItem(START_CLOSED_KEY, "1");
+    } catch {}
+    start.hidden = true;
+  });
+  start.append(startText, startGo, startClose);
   start.hidden = true;
   columns.before(start);
   async function paintStart() {
-    const lib = await invoke("wrapped_library_status").catch(() => null);
+    // (both asked afresh: a read may have ended while this page was away)
+    const [lib, hist] = await Promise.all([invoke("wrapped_library_status").catch(() => null), invoke("wrapped_history_status").catch(() => null)]);
     if (ticket !== wrappedTicket) return;
+    if (hist) historyStatus = hist;
+    let closed = false;
     try {
-      start.hidden = !!historyStatus?.plays && !!lib?.artists;
+      closed = localStorage.getItem(START_CLOSED_KEY) === "1";
+    } catch {}
+    try {
+      paintHistory(historyStatus);
+      historyButton.textContent = historyStatus?.plays ? "Read it all again" : "Read it";
+      start.hidden = closed || (!!historyStatus?.plays && !!lib?.artists);
+      startBusy(!!historyStatus?.syncing || !!lib?.syncing);
     } catch {
       // (an event before the banner was made)
+    }
+  }
+  // (Reading... while either read runs, from here or its own row)
+  function startBusy(on) {
+    try {
+      startGo.disabled = on;
+      startGo.textContent = on ? "Reading..." : "Read my history and library";
+    } catch {
+      // (before the banner was made)
     }
   }
   paintStart();
@@ -8474,8 +9517,8 @@ WRAPPED_PAGES.settings = async function () {
     }
     return row;
   };
-  cardRow(similarCard, "Matched by", statusLine("Roon's own picks, or artists sharing the tags"), pillRow(SIMILAR_BY, wrappedSettings.similarBy, "similarBy"));
-  cardRow(similarCard, "Which it shows", statusLine("Artists you have, or ones you don't"), pillRow(SIMILAR_SCOPES, wrappedSettings.similarScope || "library", "similarScope"));
+  cardRow(similarCard, "Matched by", statusLine("Roon's own picks, or artists sharing the tags"), pillRow(SIMILAR_BY, wrappedSettings.similarBy, "similarBy"), true);
+  cardRow(similarCard, "Which it shows", statusLine("Artists you have, or ones you don't"), pillRow(SIMILAR_SCOPES, wrappedSettings.similarScope || "library", "similarScope"), true);
 
   // Page size: Wrapped's pages bigger or smaller, or with the window
   const sizeCard = card("Page size", "How big Wrapped's pages are, wider too; the top bar, side menu and player keep Roon's size. Scale with window follows the window's width, down to 90%.");
@@ -8494,11 +9537,133 @@ WRAPPED_PAGES.settings = async function () {
     });
     sizeRow.append(pill);
   }
-  sizeCard.append(sizeRow);
+  sizeCard.head.append(sizeRow);
 
-  // Toasted's own settings, last
+  // Colors: Wrapped's own, or the playing album's (Toasted's setting,
+  // shared with the Toaster)
+  const toastedNow = await invoke("get_settings").catch(() => ({}));
+  if (ticket !== wrappedTicket) return;
+  const toastedPills = (options, current, change) => {
+    const row = document.createElement("div");
+    row.className = "wrapped-tabs small";
+    for (const [value, label] of options) {
+      const pill = document.createElement("button");
+      pill.className = `wrapped-tab${current === value ? " selected" : ""}`;
+      pill.textContent = label;
+      pill.addEventListener("click", async () => {
+        if (pill.classList.contains("selected")) return;
+        try {
+          await invoke("update_settings", { changes: change(value) });
+          for (const other of row.children) other.classList.toggle("selected", other === pill);
+          wrappedToast("Saved");
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      });
+      row.append(pill);
+    }
+    return row;
+  };
+  const colorsCard = card("Colors", "Default keeps Wrapped's own colors; Album art takes them from the album that's playing.");
+  colorsCard.head.append(
+    toastedPills(
+      [
+        ["default", "Default"],
+        ["album", "Album art"],
+      ],
+      toastedNow.toasterColors === "album" ? "album" : "default",
+      (value) => ({ toasterColors: value }),
+    ),
+  );
+
+  // Side menu: which one shows when Wrapped opens
+  const sideCard = card("Side menu", "Which side menu shows when Wrapped opens: Wrapped's own, or Roon's sidebar. The arrow next to the Wrapped button switches between them any time.");
+  sideCard.head.append(pillRow(
+    [
+      ["wrapped", "Wrapped"],
+      ["roon", "Roon"],
+    ],
+    wrappedSettings.sideMenu === "wrapped" ? "wrapped" : "roon",
+    "sideMenu",
+  ));
+
+  // Hearts & Library: the link to Roon's library that the hearts, Add to
+  // library, the quality light and Wrapped's pages run on; and what Add to
+  // library adds
+  const heartsCard = card("Hearts & Library", "The link to Roon's library that hearts, Add to library, the quality light and Wrapped's own pages run on. It uses a part of Roon that isn't open to apps, so a Roon update can stop it for a while.");
+  const heartsState = statusLine();
+  const LINK_WORDS = {
+    off: "Off: Wrapped's pages can't read your library.",
+    connecting: "Connecting to the Roon Core...",
+    ready: "Connected.",
+    unsupported: "Not available with this Roon version.",
+    unavailable: "Waiting for the Roon Core...",
+  };
+  const paintLink = (st) => {
+    if (!st) return;
+    const words = LINK_WORDS[st.state] ?? st.state;
+    heartsState.textContent = st.reason && st.state !== "ready" && st.state !== "off" ? `${words} ${st.reason}` : words;
+  };
+  let addRow = null;
+  // (Off / On on the title's line, whether the Core takes the link under it)
+  heartsCard.head.append(
+    toastedPills(
+      [
+        [false, "Off"],
+        [true, "On"],
+      ],
+      !!toastedNow.libraryControls,
+      (on) => {
+        addRow?.classList.toggle("off", !on);
+        return { libraryControls: on };
+      },
+    ),
+  );
+  heartsCard.append(heartsState);
+  addRow = cardRow(
+    heartsCard,
+    "Add to library",
+    statusLine("What the + adds: the song that's playing, or its whole album"),
+    toastedPills(
+      [
+        ["track", "Single song"],
+        ["album", "Whole album"],
+      ],
+      toastedNow.libraryAddMode === "album" ? "album" : "track",
+      (value) => ({ libraryAddMode: value }),
+    ),
+  );
+  addRow.classList.toggle("off", !toastedNow.libraryControls);
+  invoke("library_status").then(paintLink).catch(() => {});
+  const unlistenLink = await listen("library-status", (event) => {
+    if (ticket !== wrappedTicket) return unlistenLink();
+    paintLink(event.payload);
+  });
+
+  // Onboarding on or off (off by itself once every page's walkthrough
+  // has been seen; on again shows them all once more), and Toasted's own
+  // settings: under the tiers, on the right
+  const onboardCard = card("Onboarding", "A walkthrough of each page the first time you open it: one part lit at a time, with a word about it. It switches itself off once you've seen every page.", right);
+  const onboardRow = document.createElement("div");
+  onboardRow.className = "wrapped-tabs small";
+  for (const [value, label] of [
+    [false, "Off"],
+    [true, "On"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${onboarding.on === value ? " selected" : ""}`;
+    pill.textContent = label;
+    pill.addEventListener("click", () => {
+      if (onboarding.on === value) return;
+      if (value) onboardingReset();
+      setOnboarding(value);
+    });
+    onboardRow.append(pill);
+  }
+  onboardCard.append(onboardRow);
+
   // (one line: its title and Open)
-  const toastedCard = card("Toasted's settings");
+  const toastedCard = card("Toasted's settings", "", right);
   toastedCard.classList.add("single");
   toastedCard.append(button("Open", () => send("open_window", { window: "settings" })));
 };
@@ -8676,38 +9841,66 @@ const CLOSE_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 // Fine Tuning, under Build now: what you'd like the next Discover Weekly
 // to bring, in your own words; then the requests standing, each for the
 // next list or, with Permanent, every one
-// Fine Tuning's tiers: one strip of three, each part its tier, whether
-// it's on and a few words on what it does; a click switches tier 2 or 3
-// for this list (tier 1 always runs; a tier not set up says so)
+// The tiers: one strip of three, each part its tier, whether it's on and a
+// few words on what it does. Discover Weekly's (in Fine Tuning): tier 1
+// always runs, a click switches tier 2 or 3 for the list. Deep Dive's
+// (small, in the picks' corner): tiers 1 and 2 always run (tier 2 is what
+// makes a Deep Dive), a click switches tier 3. A tier not set up says so
+// and takes you to Settings. Each has a light: green when on with all it
+// uses, yellow when on but missing a part (its hover says which), unlit
+// when off.
 const TIER_WORDS = {
   weekly: ["Listeners and tags", "Judged by AI", "Picks by sound"],
+  dive: ["Listeners and tags", "Made by AI", "Picks by sound"],
 };
+const TIER_FIXED = { weekly: [1], dive: [1, 2] };
+const tierSetting = (which, n) => (which === "dive" ? "diveTier3" : `weeklyTier${n}`);
+// What an on tier still lacks: tier 1 a Last.fm key, tier 2 a Discogs token
+function tierMissing(n, which) {
+  const s = wrappedSettings || {};
+  if (n === 1 && !s.lastfmKey?.trim()) {
+    return which === "dive"
+      ? "Missing: a Last.fm key (free, in Settings), for the listeners of your picks' artists. New artists come from tier 2 alone without it."
+      : "Missing: a Last.fm key (free, in Settings). Discover Weekly finds new artists through Last.fm's listeners, so it can't be built without one.";
+  }
+  if (n === 2 && !s.discogsToken?.trim()) return "Missing: a Discogs token (in Settings), for Discogs' styles of each album. It works without one, but the picks are smarter with it.";
+  return null;
+}
 function tierStrip(status, which) {
   const strip = document.createElement("div");
-  strip.className = "tier-strip";
+  strip.className = `tier-strip${which === "dive" ? " compact" : ""}`;
   const words = TIER_WORDS[which] || TIER_WORDS.weekly;
-  const setting = (n) => `weeklyTier${n}`;
+  const fixedOnes = TIER_FIXED[which] || TIER_FIXED.weekly;
   for (const n of [1, 2, 3]) {
+    const fixed = fixedOnes.includes(n);
     const ready = n === 1 || (n === 2 ? !!status.tier2 : !!status.tier3);
-    const on = n === 1 || (ready && wrappedSettings?.[setting(n)] !== false);
+    const on = ready && (fixed || wrappedSettings?.[tierSetting(which, n)] !== false);
+    const missing = on ? tierMissing(n, which) : null;
     const seg = document.createElement("button");
-    seg.className = `tier-seg${on ? " on" : " off"}${n === 1 ? " fixed" : ""}${ready ? "" : " unready"}`;
+    seg.className = `tier-seg${on ? " on" : " off"}${fixed ? " fixed" : ""}${ready ? "" : " unready"}`;
     const t = document.createElement("span");
     t.className = "tier-seg-title";
-    t.textContent = `Tier ${n} · ${n === 1 ? "Always on" : on ? "On" : "Off"}`;
+    const light = document.createElement("span");
+    light.className = `tier-light${on ? (missing ? " part" : " full") : ""}`;
+    if (missing) hoverTip(light, missing);
+    const label = document.createElement("span");
+    label.textContent = which === "dive" ? `Tier ${n}` : `Tier ${n} · ${fixed ? "Always on" : on ? "On" : "Off"}`;
+    t.append(light, label);
     const d = document.createElement("span");
     d.className = "tier-seg-words";
     d.textContent = !ready ? "Set up in Settings" : words[n - 1];
     seg.append(t, d);
-    if (n === 1) seg.title = "Tier 1 makes the list; it always runs";
-    else if (!ready) {
+    if (!ready) {
       seg.title = n === 2 ? "Tier 2 needs a language model: Wrapped's Settings" : "Tier 3 needs its models downloaded: Wrapped's Settings";
       seg.addEventListener("click", () => openWrappedPage({ page: "settings" }));
+    } else if (fixed) {
+      seg.title = which === "dive" ? (n === 2 ? "Tier 2 makes the Deep Dive; it always runs" : "Tier 1 always runs") : "Tier 1 makes the list; it always runs";
     } else {
-      seg.title = on ? "Click to switch it off for this list" : "Click to switch it on for this list";
+      const what = which === "dive" ? "Deep Dive" : "this list";
+      seg.title = on ? `Click to switch it off for ${what}` : `Click to switch it on for ${what}`;
       seg.addEventListener("click", async () => {
         try {
-          wrappedSettings = await invoke("wrapped_settings_update", { changes: { [setting(n)]: !on } });
+          wrappedSettings = await invoke("wrapped_settings_update", { changes: { [tierSetting(which, n)]: !on } });
           strip.replaceWith(tierStrip(status, which));
         } catch (err) {
           wrappedToast(String(err));
@@ -8789,7 +9982,7 @@ function discoverAskPanel(status, which = "weekly") {
   panel.append(row);
   if (!rediscover) panel.append(tierStrip(status, which));
   if (!status.tier2) {
-    panel.append(wrappedNote("Fine Tuning is read by tier 2, a language model (Wrapped's Settings). Until it's set up, what you add here waits.", "wrapped-note small"));
+    panel.append(wrappedNote("Fine Tuning is read by tier 2, a language model (Wrapped's Settings). Until it's set up, what you add here waits.", "wrapped-note small tier-needed"));
   }
 
   if (requests?.length) {
@@ -9677,6 +10870,552 @@ function fillWrappedNav() {
     link.addEventListener("click", () => openWrappedPage(item));
     wrappedNav.append(link);
   }
+  // Onboarding: a lit button right of Settings while it's on and this page
+  // has a tour left; a click offers to turn it off (or run this page again)
+  if (onboardingShows(current)) {
+    const link = document.createElement("button");
+    link.className = "wrapped-nav-link onboarding-nav";
+    link.insertAdjacentHTML("beforeend", ONBOARDING_ICON);
+    const label = document.createElement("span");
+    label.textContent = "Onboarding";
+    link.append(label);
+    link.title = "Onboarding is on: this page has a walkthrough";
+    link.addEventListener("click", (event) => {
+      event.stopPropagation();
+      onboardingMenu(link, current);
+    });
+    link.addEventListener("pointerdown", (event) => event.stopPropagation());
+    wrappedNav.append(link);
+  }
+}
+
+// ----- Onboarding: a walkthrough per page (ONBOARDING_TOURS), on until
+// every page's has been seen (or it's switched off in Settings, or from
+// the button in the bar). Each step lights one part of the page and dims
+// the rest, with a word about it; Next step (bottom right) moves on,
+// "Finish onboarding for this page" (top middle) ends the page's tour.
+// Kept in localStorage: { on, done: { page: true } } -----
+const ONBOARDING_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></svg>';
+// Each page's steps: `find` the part to light (null: skip the step), `text`
+// what to say, and `click` (optional): the part a click on moves the tour
+// on by itself (the lit part's button, say)
+const settingsCard = (title) => [...document.querySelectorAll(".settings-card")].find((c) => c.textContent.startsWith(title));
+const settingsRow = (name) => [...document.querySelectorAll(".settings-card-row")].find((r) => r.querySelector(".settings-card-row-name")?.textContent === name);
+// (a row by its title: the title's own text, without its hover tip's)
+const homeRowEl = (title) => [...document.querySelectorAll(".wrapped-home-row")].find((r) => r.querySelector(".wrapped-home-title")?.firstChild?.textContent === title);
+// The side menu's parts (shown ones only: a hidden menu's old buttons
+// don't count)
+const shown = (el) => (el && el.getClientRects().length ? el : null);
+const sideBtn = (label) => shown([...wrappedSide.querySelectorAll(".wrapped-side-btn")].find((b) => b.textContent.trim() === label));
+// A caption and the buttons under it, up to the next caption
+const sideGroup = (caption) => {
+  const kids = [...wrappedSide.children];
+  const at = kids.findIndex((k) => k.classList.contains("wrapped-side-caption") && k.textContent === caption);
+  if (at < 0 || !shown(kids[at])) return null;
+  const out = [kids[at]];
+  for (const k of kids.slice(at + 1)) {
+    if (k.classList.contains("wrapped-side-caption") || k.classList.contains("wrapped-side-lists") || k.classList.contains("wrapped-side-close")) break;
+    out.push(k);
+  }
+  return out;
+};
+// (a list of parts, or none: null, so the step is skipped)
+const partsOrNone = (list) => (list.length ? list : null);
+const ONBOARDING_TOURS = {
+  // The side menu: right after Settings' walkthrough (however it ended).
+  // `roon`: over Roon's sidebar, where the color filter turns Roon's accent
+  // into ours, so it's lit in Roon's; `place: "right"`: the word and Next
+  // to its right, over the page (the filter would recolor them too)
+  menu: [
+    // (just the button's face and arrow lit, tight around it: the page is
+    // over all of Roon during this walkthrough, so the ring shows)
+    { find: () => shown(wrappedBtn?.querySelector(".wrapped-face")) || shown(wrappedSideBtn), roon: () => !!shown(wrappedBtn), pad: 3, place: "right", text: "This is the Wrapped button. Click its name to open or close Wrapped's pages; the arrow beside it opens and closes this side menu." },
+    { find: () => sideBtn("Home"), roon: true, place: "right", text: "Wrapped Features are Wrapped's own pages.\n\nHome is your Wrapped playlists, your week, artists and new albums picked for you, and old favorites." },
+    { find: () => sideBtn("This album") || sideBtn("This artist"), roon: true, place: "right", text: "This album (or This artist) opens what Roon is showing right now in Wrapped, with its similar artists and more. It's there while Roon is on an album or an artist." },
+    { find: () => sideBtn("Discover"), roon: true, place: "right", text: "Discover is your weekly playlists, Discover Weekly and Library Rediscover, built every Monday from your listening habits. The playlists only get better as it learns from you." },
+    { find: () => sideBtn("Deep Dive"), roon: true, place: "right", text: "Deep Dive makes a playlist to order from songs, albums or artists you pick and what you ask for. Smart Radio needs nothing but the picks." },
+    { find: () => sideBtn("Radio"), roon: true, place: "right", text: "Radio starts Roon Radio from an artist, seeded with the artists that share its sound." },
+    { find: () => sideBtn("History"), roon: true, place: "right", text: "History: everything you've played, and your top artists, albums and tracks for any stretch of time." },
+    { find: () => sideBtn("Settings"), roon: true, place: "right", text: "Settings is where all of Wrapped's and Discovery's controls are." },
+    { find: () => sideGroup("Your library"), roon: true, place: "right", text: "Your library is your Roon library through Wrapped: Genres (Wrapped's own, from the artists' tags), Artists, Albums, Tracks (with a shuffle of its own), Playlists, Listen Later and Tags." },
+    { find: () => shown(wrappedSide.querySelector(".wrapped-side-lists .wrapped-side-caption")) && wrappedSide.querySelector(".wrapped-side-lists"), roon: true, place: "right", text: "Playlists: your Roon playlists, Wrapped's own first. Click one for its page, to play it, play from a song, or take songs out." },
+    { find: () => shown(wrappedNav), text: "The same pages are along the top too, so you can navigate around if the side menu is not open." },
+    // (last: the player bar; Next, or a click on the song, opens Now
+    // Playing and its own walkthrough)
+    { find: () => shown(document.querySelector(".panel > .player")), click: () => document.getElementById("info"), nextLabel: "Next step", text: "This is the player. Click the song or its album art to open it full size, or click Next step to open it and look around." },
+  ],
+  // Now Playing: the first time it opens (right after the side menu's, or
+  // whenever that is). `apart`: each part lit on its own; `place: "top"`:
+  // the word at the top middle, under the edit menu; `next`: what Next does
+  // first
+  player: [
+    { find: () => (stage.hidden ? null : shown(pieces.wrapped)), text: "This is the Wrapped menu. From here you can open Wrapped, Discover, a Deep Dive from this song, or the song's artist or album in Wrapped." },
+    { find: () => (stage.hidden || editing ? null : shown(stageEditBtn)), click: () => stageEditBtn, next: () => setEditing(true), pad: 4, text: "This pencil opens the edit menu, to make the player your own. Click it." },
+    { find: () => (stage.hidden ? null : shown(stageEditor)), text: "This is the edit menu. Start from a preset or one of your own in Profile, pick which pieces show and the background, and save what you make as your own profile. Done closes it." },
+    { find: () => (stage.hidden ? null : partsOrNone(PIECE_IDS.map((id) => shown(pieces[id])).filter((el) => el && !el.classList.contains("off")))), apart: true, place: "top", text: "Every piece of the player can be moved while the edit menu is open: drag it anywhere. Click one for its handles, to resize it, and for its own options in the edit menu, like fonts, icons, and the seek bar's style and waveform." },
+    { find: () => (stage.hidden ? null : partsOrNone([shown(document.getElementById("stage-close")), shown(document.getElementById("stage-minimize"))].filter(Boolean))), click: () => [document.getElementById("stage-close"), document.getElementById("stage-minimize")], apart: true, pad: 4, text: "The X or Minimize player takes you back to Roon. Click either one when you're ready, and the rest is yours to explore." },
+  ],
+  // (in the page's order: the top rows, then the suggestion rows, then
+  // the memories at the bottom; Refresh, top right, ends the page)
+  home: [
+    { find: () => homeRowEl("Your Wrapped Playlists"), text: "Home gathers what Wrapped made for you. Your Wrapped Playlists are this week's Discover Weekly and Library Rediscover, and your latest Deep Dives, a click away." },
+    { find: () => homeRowEl("Your week"), text: "Your week: what you've listened to in the last seven days, how much, and the artists and albums that stood out." },
+    { find: () => homeRowEl("Artists for you"), text: "Artists for you are picked from your all-time favorites by their tags, not by what's popular. Hover a card for an X to ban an artist you never want suggested again, anywhere in Wrapped." },
+    { find: () => homeRowEl("New albums from artists you listen to"), text: "New albums from the artists you play most, newest first, so a release you missed doesn't slip by." },
+    { find: () => homeRowEl("New albums from artists you may like"), text: "And new albums from artists suggested for you. Every row shows one line that fits; click its title for three lines, Keep looking for more." },
+    { find: () => homeRowEl("Forgotten favorites"), text: "Forgotten favorites are albums you once played a lot but haven't touched in a year or more. Worth a revisit." },
+    { find: () => homeRowEl("On this day"), text: "On this day shows what you were playing on today's date in earlier years." },
+    // (only pointed at: on a first visit Home was just put together, so
+    // pressing it would only redo the work)
+    { find: () => document.querySelector(".wrapped-home-corner"), text: "Home keeps itself up to date: new albums are looked for daily, artists for you every two weeks. Refresh does both right away, if you ever want it sooner. Hover a row's title for a word on what it is." },
+  ],
+  // (the two lists side by side, part by part down the page: each part of
+  // both lit at once; the player's song for the ratings, after Play)
+  discover: [
+    { find: () => partsOrNone([...document.querySelectorAll(".discover-head")].filter(shown)), apart: true, text: "Every Monday, Discover makes you two playlists, saved in Roon. Discover Weekly brings artists you've never played, one song each. Library Rediscover digs up favorites you haven't played in a year or more." },
+    { find: () => partsOrNone([...document.querySelectorAll(".discover-old")].filter((row) => row.children.length && shown(row))), apart: true, text: "The last two weeks' lists stay here. Click one to see its songs." },
+    {
+      find: () => partsOrNone([...document.querySelectorAll(".discover-card.large, .discover-empty")].filter(shown)),
+      apart: true,
+      text: () => (document.querySelector(".discover-card.large") ? "This week's lists. Click a card to see its songs and why each one was picked. Play starts it on your zone." : "Your first lists come next Monday, or right away with Build now, just below."),
+    },
+    { find: () => shown(document.getElementById("info")), text: "While a song from these lists plays, thumbs show next to it in the player, and in Now Playing's Wrapped menu with why it was picked. A thumbs up brings more like that artist; a thumbs down keeps them, and bands like them, out. Without a rating, playing a song through counts a little for it, skipping a little against, and a heart counts as a mild thumbs up." },
+    {
+      find: () => partsOrNone([...document.querySelectorAll(".discover-actions")].filter(shown)),
+      apart: true,
+      text: () => (document.querySelector(".discover-card.large") ? "Rebuild now makes a fresh list right away, and the one there becomes a dated copy. (This is purely optional, new lists always make themselves every Monday.)" : "Build now makes the list right away, instead of waiting for Monday. It takes a few minutes, in the background."),
+    },
+    { find: () => partsOrNone([...document.querySelectorAll(".discover-ask")].filter(shown)), apart: true, text: () => "Fine Tuning: tell the next list what you'd like, in your own words, like more of a sound, less of something, or an era. A request counts for the next list, or for every one with Permanent." + (document.querySelector(".discover-ask .tier-needed") ? " Tier 2 reads them, so it needs to be set up in Settings first." : "") },
+    { find: () => shown(document.querySelector(".tier-strip")), text: "Discover Weekly's tiers. Which ones you can use depends on the tiers you've set up in Settings; the higher the tier, the smarter the picks. Tier 1 always runs. Click tier 2 or 3 to switch it on or off for this list, or to set it up in Settings if it isn't yet. A green light means a tier has everything it uses; yellow means a part is missing, and hovering the light says which." },
+    { find: () => shown(document.querySelector(".discover-reset")), text: "Start fresh forgets your ratings and skips, so past suggestions can come back. Your listening history stays. It takes two clicks, so it can't happen by accident." },
+  ],
+  // (the Deep Dive tab, top to bottom: the picks and the words, how it's
+  // made, then what's been made; Sound check only while it shows)
+  deepdive: [
+    { find: () => shown(document.querySelector(".dive-tabs")), text: "Deep Dive makes you a playlist to order. The Radio tab next to it starts Roon Radio from one of your picks instead." },
+    { find: () => shown(document.querySelector(".dive-picks")), text: `Your picks: up to ${DIVE_MAX} songs, albums or artists for it to start from. Add one with the brain button next to any song, album or artist in Wrapped; + takes you back to find another. Picks are optional, words alone work too.` },
+    { find: () => shown(document.querySelector(".dive-past")), pad: 4, text: "History brings back anything you've picked before, newest first." },
+    { find: () => shown(document.querySelector(".dive-picks .tier-strip")), pad: 4, text: "The tiers Deep Dive uses, set up in Settings. The more you have set up and on, the smarter the playlist: tier 2 makes it, tier 1 brings in listeners and tags, and tier 3 listens to the songs so they sound like your picks. Click tier 3 to switch it off or on. A green light means a tier has everything it uses; yellow means a part is missing, and hovering the light says which." },
+    { find: () => shown(document.querySelector(".dive-input")), text: 'Say what the playlist should be, in your own words: a mood, a sound, an era, or something like "the heaviest songs in my library". With picks, this is optional.' },
+    { find: () => shown(document.querySelector(".dive-from")), pad: 6, text: "Where the songs come from: artists new to you, your own library, or both." },
+    { find: () => shown(document.querySelector(".dive-ask-buttons")), pad: 6, text: "With only picks, Smart Radio makes a playlist of songs that sound as close to them as can be, nothing asked. Once you've written something, it becomes Make the playlist, made straight from your words. Deeper Dive asks a few questions first, up to four and only what it needs, then makes it." },
+    { find: () => shown(document.querySelector(".sound-check")), text: "Sound check is tier 3's test. With a song and an album picked, it ranks the album's songs by how close they sound to the song. Nothing is made or played." },
+    { find: () => (document.querySelector(".dive-made-card") ? shown(document.querySelector(".dive-made")) : null), text: "Everything you've made stays here, and in Roon as a playlist. Click one for its songs and why each was picked, Play to start it, or Talk it over to tell it what hit and what missed, and it digs deeper from there." },
+  ],
+  settings: [
+    // (a fresh setup: the Start here banner reads both at once; set up
+    // already, Your music is only explained, so nothing is read again)
+    { find: () => shown(document.querySelector(".settings-start:not([hidden])")), click: () => document.querySelector(".settings-start .wrapped-play"), text: "New here? Start with this: it reads your listening history and your library from Roon in one go, a few minutes in the background. Everything else in Wrapped works from them. Click Read my history and library." },
+    { find: () => settingsCard("Your music"), text: "Your music shows what Wrapped has read: your listening history, your library, and the tags for your artists (genres, styles and scenes from Last.fm and MusicBrainz, filled in by themselves in the background). They keep up as you listen; read them again here after big changes." },
+    // (Last.fm: only while no username is saved; the box opens, Save
+    // flashes, and Save also starts the read of the scrobbles)
+    { find: () => (wrappedSettings?.lastfmUser?.trim() ? null : document.querySelector(".settings-card-sub")), open: () => (document.querySelector(".settings-card-sub").open = true), click: () => [...document.querySelectorAll(".settings-card-sub button")].find((b) => b.textContent === "Save"), ready: () => !!document.querySelector(".settings-card-sub input")?.value.trim(), text: "Roon's history only reaches back to when you started using Roon. If you scrobble to Last.fm, type your username and click Save: everything from before comes in (Save starts the read), so your all-time favorites and History's tops cover your whole listening life, not just the Roon years. No Last.fm? Next step." },
+    { find: () => document.querySelectorAll(".wrapped-settings-column")[1], text: "Wrapped Discovery builds your weekly playlists. Its tiers add up: tier 1 works from listeners and tags, tier 2 reads up on each pick with a language model, tier 3 listens to the songs. Each one is optional and set up here." },
+    { find: () => settingsCard("Page size"), text: "Page size makes Wrapped's pages bigger or smaller, or scales them with the window. The top bar, side menu and player keep Roon's size." },
+  ],
+};
+let onboarding = { on: true, done: {} };
+try {
+  const saved = JSON.parse(localStorage.getItem("wrapped-onboarding") || "null");
+  if (saved && typeof saved === "object") onboarding = { on: saved.on !== false, done: saved.done && typeof saved.done === "object" ? saved.done : {} };
+} catch {}
+function saveOnboarding() {
+  try {
+    localStorage.setItem("wrapped-onboarding", JSON.stringify(onboarding));
+  } catch {}
+}
+const onboardingLeft = (page) => !!ONBOARDING_TOURS[page] && !onboarding.done[page];
+const onboardingShows = (page) => onboarding.on && onboardingLeft(page);
+let onboardingRun = null; // { page, step, overlay, spot, tip, finish, next, frame }
+
+function setOnboarding(on) {
+  onboarding.on = on;
+  if (!on) onboardingEnd();
+  saveOnboarding();
+  if (!wrapped.hidden) renderWrapped();
+}
+// A page's tour seen: once every page's is, onboarding switches itself off
+function onboardingSeen(page) {
+  onboarding.done[page] = true;
+  if (Object.keys(ONBOARDING_TOURS).every((p) => onboarding.done[p])) onboarding.on = false;
+  saveOnboarding();
+}
+// (`ended`: by End onboarding for this page, rather than its last step)
+function onboardingDone(page, ended = false) {
+  onboardingSeen(page);
+  onboardingEnd();
+  fillWrappedNav();
+  // (after Settings, however it ended: the side menu's walkthrough)
+  if (page === "settings" && onboarding.on && !onboarding.done.menu) onboardingStart("menu");
+  // (after the side menu's, gone through to its end: the player opens, for
+  // its own; ended early, the player's waits for its first opening)
+  if (page === "menu" && !ended && onboarding.on && !onboarding.done.player && stage.hidden) setStageOpen(true);
+}
+// Now Playing opening: a page's walkthrough can't go on under it (the side
+// menu's counts as seen, as there's no page to come back to it on, and so
+// does one on its last step); the player's own starts the first time.
+// Closing: the player's walkthrough is over.
+function onboardingStage(open) {
+  try {
+    if (open) {
+      const run = onboardingRun;
+      if (run && run.page !== "player") {
+        const lastStep = !ONBOARDING_TOURS[run.page].slice(run.step + 1).some((s) => s.find());
+        if (run.page === "menu" || lastStep) onboardingSeen(run.page);
+        onboardingEnd();
+        fillWrappedNav();
+      }
+      if (onboardingShows("player")) onboardingStart("player");
+    } else if (onboardingRun?.page === "player") {
+      onboardingDone("player", true);
+    }
+  } catch {
+    // (at startup, before the walkthrough code has run)
+  }
+}
+function onboardingReset() {
+  onboarding = { on: true, done: {} };
+  saveOnboarding();
+}
+function onboardingMenu(anchor, page) {
+  closePlayMenu();
+  const menu = document.createElement("div");
+  menu.className = "wrapped-popmenu onboarding-menu";
+  const item = (label, run) => {
+    const btn = document.createElement("button");
+    btn.className = "wrapped-popmenu-item";
+    const text = document.createElement("span");
+    text.textContent = label;
+    btn.append(text);
+    btn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closePlayMenu();
+      run();
+    });
+    menu.append(btn);
+  };
+  item("Turn onboarding off", () => setOnboarding(false));
+  item("Show this page's walkthrough again", () => onboardingStart(page, true));
+  wrapped.append(menu);
+  const a = anchor.getBoundingClientRect();
+  const w = wrapped.getBoundingClientRect();
+  const m = menu.getBoundingClientRect();
+  menu.style.left = `${Math.max(8, Math.min(a.left - w.left, w.width - 8 - m.width))}px`;
+  menu.style.top = `${a.bottom - w.top + 4}px`;
+}
+
+// Starts the page's tour once the page has drawn (its parts come in over
+// a moment, so it looks a few times)
+const ONBOARDING_PREPARE = {
+  menu: () => {
+    if (wrappedSide.hidden) setWrappedSide(true);
+  },
+};
+let onboardingLooks = 0; // (each start's own number: a newer one stops an older one's looking)
+function onboardingStart(page, again = false) {
+  // (Now Playing open: a page drawn under it waits; the player's own
+  // walkthrough goes on)
+  if (page !== "player" && (!stage.hidden || onboardingRun?.page === "player")) return;
+  // (the same page drawn again mid-walkthrough, say after a build: back at
+  // the step it was on, once the page is back)
+  const resume = !again && onboardingRun?.page === page ? onboardingRun.step : 0;
+  onboardingEnd();
+  if (!onboarding.on || !ONBOARDING_TOURS[page] || (!again && onboarding.done[page])) return;
+  ONBOARDING_PREPARE[page]?.();
+  // (a page's parts come in over a moment, some after others, Home's top
+  // rows after its lower ones: the tour starts once what's there has
+  // stayed the same for a while, so no step is skipped for being late)
+  // (the player's: while Now Playing stays open; a page's: while that page
+  // stays up)
+  const look = ++onboardingLooks;
+  const entry = wrappedStack.at(-1);
+  const alive = page === "player" ? () => look === onboardingLooks && !stage.hidden : () => look === onboardingLooks && wrappedStack.at(-1) === entry && !wrapped.hidden && stage.hidden;
+  let tries = 0;
+  let seen = "";
+  let still = 0;
+  const check = () => {
+    if (!alive()) return;
+    const steps = ONBOARDING_TOURS[page];
+    const now = steps.map((s) => (s.find() ? "1" : "0")).join("");
+    if (now.includes("1")) {
+      still = now === seen ? still + 1 : 0;
+      seen = now;
+      if (still >= 4 || tries >= 25) return onboardingShow(page, resume);
+    }
+    if (++tries < 40) setTimeout(check, 200);
+  };
+  setTimeout(check, 250);
+}
+
+// A part's box as it shows: cut where a box around it that scrolls (or
+// clips) ends, like the side menu's playlists running on under the player.
+// `cut`: the sides cut there (the light goes no further on those)
+function onboardingBox(el) {
+  const b = el.getBoundingClientRect();
+  const r = { left: b.left, top: b.top, right: b.right, bottom: b.bottom, cut: {} };
+  for (let up = el.parentElement; up && up !== document.body; up = up.parentElement) {
+    const style = getComputedStyle(up);
+    if (style.overflowX === "visible" && style.overflowY === "visible") continue;
+    const c = up.getBoundingClientRect();
+    if (r.top < c.top) [r.top, r.cut.top] = [c.top, true];
+    if (r.bottom > c.bottom) [r.bottom, r.cut.bottom] = [c.bottom, true];
+    if (r.left < c.left) [r.left, r.cut.left] = [c.left, true];
+    if (r.right > c.right) [r.right, r.cut.right] = [c.right, true];
+  }
+  return r;
+}
+// (the box around several, cut where theirs are)
+function onboardingUnion(boxes) {
+  const r = {
+    left: Math.min(...boxes.map((x) => x.left)),
+    top: Math.min(...boxes.map((x) => x.top)),
+    right: Math.max(...boxes.map((x) => x.right)),
+    bottom: Math.max(...boxes.map((x) => x.bottom)),
+    cut: {},
+  };
+  for (const side of ["left", "top", "right", "bottom"]) r.cut[side] = boxes.some((x) => x.cut[side] && x[side] === r[side]);
+  return r;
+}
+// (a box as SVG: in a mask black lets what's under show and white hides it;
+// with no fill, a ring's line)
+function onboardingMaskRect({ left, top, right, bottom }, fill, round) {
+  const w = right - left;
+  const h = bottom - top;
+  const c = Math.max(0, Math.min(round, w / 2, h / 2));
+  return `<rect x="${Math.round(left)}" y="${Math.round(top)}" width="${Math.round(w)}" height="${Math.round(h)}" rx="${c}" fill="${fill}"/>`;
+}
+
+function onboardingShow(page, step) {
+  const steps = ONBOARDING_TOURS[page];
+  // (past a part that isn't there, to the next; none left: done)
+  while (step < steps.length && !steps[step].find()) step += 1;
+  if (step >= steps.length) return onboardingDone(page);
+  if (!onboardingRun || onboardingRun.page !== page) {
+    onboardingEnd();
+    const overlay = document.createElement("div");
+    overlay.className = "onboarding";
+    const spot = document.createElement("div");
+    spot.className = "onboarding-spot";
+    // (parts lit apart: one drawing. The dimming has a hole for each, made
+    // by a mask so holes that meet just add up; the rings are each part's
+    // outline with the inside of every hole masked away, so where parts
+    // meet there's one outline around them all, not lines across them)
+    const dim = document.createElement("div");
+    dim.className = "onboarding-dim";
+    dim.hidden = true;
+    const area = 'maskUnits="userSpaceOnUse" x="0" y="0" width="100%" height="100%"';
+    dim.innerHTML = `<svg width="100%" height="100%"><defs><mask id="onboarding-mask" ${area}><rect width="100%" height="100%" fill="#fff"/><g class="onboarding-holes"></g></mask><mask id="onboarding-ring-mask" ${area}><rect width="100%" height="100%" fill="#fff"/><g class="onboarding-ring-holes"></g></mask><filter id="onboarding-glow" x="-10%" y="-10%" width="120%" height="120%"><feGaussianBlur stdDeviation="6"/></filter></defs><rect width="100%" height="100%" fill="#000" fill-opacity="0.62" mask="url(#onboarding-mask)"/><g class="onboarding-ring-lines" mask="url(#onboarding-ring-mask)"><g class="onboarding-ring-glow" filter="url(#onboarding-glow)"></g><g class="onboarding-ring-line"></g></g></svg>`;
+    const tip = document.createElement("div");
+    tip.className = "onboarding-tip";
+    // (the end button sits in the title bar, above the menu)
+    const finish = document.createElement("button");
+    finish.className = "onboarding-btn onboarding-finish";
+    finish.textContent = "End onboarding for this page";
+    finish.addEventListener("click", () => onboardingDone(page, true));
+    document.body.append(finish);
+    const next = document.createElement("button");
+    next.className = "onboarding-btn onboarding-next";
+    next.addEventListener("click", () => {
+      const run = onboardingRun;
+      ONBOARDING_TOURS[page][run.step].next?.();
+      if (onboardingRun === run) onboardingShow(page, run.step + 1);
+    });
+    overlay.append(dim, spot, tip, next);
+    // (over the whole window: the side menu is outside the page)
+    document.body.append(overlay);
+    // (Wrapped's side menu over Roon's sidebar for the walkthrough, so it's
+    // dimmed with the rest; closed again after, if it was closed before.
+    // Not while Now Playing covers it all)
+    const sideOpened = wrappedSide.hidden && stage.hidden;
+    if (sideOpened) setWrappedSide(true);
+    onboardingRun = { page, step, overlay, spot, dim, drawn: "", tip, finish, next, frame: null, listening: null, sideOpened };
+    reportHole();
+  }
+  const run = onboardingRun;
+  run.step = step;
+  // A click on the step's part moves on by itself; that part flashes so
+  // it's clear what to press (a step can wait on either of two)
+  onboardingUnlisten(run);
+  const clickOn = [steps[step].click?.()].flat().filter(Boolean);
+  if (clickOn.length) {
+    const fn = () => {
+      if (onboardingRun !== run || run.step !== step) return;
+      if (steps[step].ready && !steps[step].ready()) return;
+      setTimeout(() => onboardingRun === run && run.step === step && onboardingShow(page, step + 1), 500);
+    };
+    for (const el of clickOn) {
+      if (getComputedStyle(el).position === "static") el.classList.add("onboarding-press-rel");
+      el.classList.add("onboarding-press");
+      el.addEventListener("click", fn);
+    }
+    run.listening = { els: clickOn, fn };
+  }
+  const last = !steps.slice(step + 1).some((s) => s.find());
+  run.next.textContent = steps[step].nextLabel || (last ? "Done" : "Next step");
+  // (a step's words can depend on what's there)
+  run.tip.textContent = typeof steps[step].text === "function" ? steps[step].text() : steps[step].text;
+  steps[step].open?.(); // (a folded part opens for its step)
+  const found = steps[step].find();
+  (Array.isArray(found) ? found[0] : found).scrollIntoView({ block: "nearest", behavior: "smooth" });
+  // (over Roon's sidebar the filter would recolor the light, so it's lit
+  // in Roon's accent; not with the filter under the page)
+  const roon = !FILTER_UNDER_PAGE && (typeof steps[step].roon === "function" ? steps[step].roon() : !!steps[step].roon);
+  run.spot.classList.toggle("roon", roon);
+  run.lit?.classList.remove("onboarding-lit", "onboarding-lit-rel", "roon");
+  run.lit = null;
+  // (`ring: false`: the spot dims but draws no ring of its own)
+  run.spot.classList.toggle("no-ring", steps[step].ring === false);
+  if (typeof steps[step].lit === "function" ? steps[step].lit() : steps[step].lit) {
+    run.lit = Array.isArray(found) ? found[0] : found;
+    run.lit.classList.add("onboarding-lit");
+    // (its layer needs a place to sit: a part laid out in the flow gets one)
+    if (getComputedStyle(run.lit).position === "static") run.lit.classList.add("onboarding-lit-rel");
+    run.lit.classList.toggle("roon", roon);
+  }
+  // (the light follows its part while the page scrolls or resizes)
+  const place = () => {
+    if (onboardingRun !== run) return;
+    const found = steps[run.step].find();
+    const els = (Array.isArray(found) ? found : [found]).filter(Boolean);
+    if (!els.length || !els[0].isConnected) return onboardingShow(page, run.step);
+    const w = { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    const padding = steps[run.step].pad ?? 8;
+    // Each part's box as it shows; the light goes a little past it, except
+    // where it's cut, and stays in the window
+    const boxes = els.map(onboardingBox);
+    const padded = (b) => ({
+      left: Math.max(0, b.left - (b.cut.left ? 0 : padding)),
+      top: Math.max(0, b.top - (b.cut.top ? 0 : padding)),
+      right: Math.min(w.width, b.right + (b.cut.right ? 0 : padding)),
+      bottom: Math.min(w.height, b.bottom + (b.cut.bottom ? 0 : padding)),
+    });
+    const all = onboardingUnion(boxes);
+    const top = Math.max(0, all.top);
+    const bottom = Math.min(w.height, all.bottom);
+    const r = { left: all.left, right: all.right, top, bottom, width: all.right - all.left, height: Math.max(0, bottom - top) };
+    const apart = !!steps[run.step].apart && boxes.length > 1;
+    const lights = apart ? boxes.map(padded) : [padded(all)];
+    // (the edit menu, open over the player and not what's lit, stays dim
+    // and clear of the word: it sits over the pieces)
+    const editor = !stage.hidden && shown(stageEditor) && !els.some((e) => stageEditor.contains(e)) ? stageEditor.getBoundingClientRect() : null;
+    const keep = editor ? [editor] : [];
+    const px = (v) => `${Math.round(v)}px`;
+    const box = (el, b) => {
+      el.style.left = px(b.left);
+      el.style.top = px(b.top);
+      el.style.width = px(b.right - b.left);
+      el.style.height = px(b.bottom - b.top);
+    };
+    // One part (or several in one box): the spot, its shadow the dimming.
+    // Apart: the drawing, holes and outlines (redrawn only when they move)
+    run.spot.hidden = apart;
+    run.dim.hidden = !apart;
+    if (apart) {
+      const holes = lights.map((b) => onboardingMaskRect(b, "#000", 12)).join("");
+      const kept = keep.map((b) => onboardingMaskRect(b, "#fff", 10)).join("");
+      const lines = lights.map((b) => onboardingMaskRect(b, "none", 12)).join("");
+      const drawn = holes + kept;
+      if (drawn !== run.drawn) {
+        run.drawn = drawn;
+        run.dim.querySelector(".onboarding-holes").innerHTML = holes + kept;
+        // (the outlines: not inside any hole, nor over the edit menu)
+        run.dim.querySelector(".onboarding-ring-holes").innerHTML = holes + keep.map((b) => onboardingMaskRect(b, "#000", 10)).join("");
+        run.dim.querySelector(".onboarding-ring-glow").innerHTML = lines;
+        run.dim.querySelector(".onboarding-ring-line").innerHTML = lines;
+      }
+    } else {
+      box(run.spot, lights[0]);
+    }
+    // (End: right of Minimize player while Now Playing is open, as that
+    // takes the middle of the title bar)
+    const mini = shown(document.getElementById("stage-minimize"));
+    run.finish.style.left = mini ? px(mini.getBoundingClientRect().right + 12 + run.finish.offsetWidth / 2) : "";
+    const tipW = run.tip.offsetWidth;
+    const tipH = run.tip.offsetHeight;
+    const nextW = run.next.offsetWidth;
+    const nextH = run.next.offsetHeight;
+    let tipX;
+    let tipY;
+    let nextX;
+    let nextY;
+    if (steps[run.step].place === "right") {
+      // To its right (the side menu's parts): the word level with the
+      // part's top, Next under the word's right end. (Past the side menu
+      // and on the page: beside the menu, Roon's own window shows through
+      // and would cover it.)
+      const pageLeft = wrapped.hidden ? Math.max(r.right, wrappedSide.hidden ? 0 : wrappedSide.getBoundingClientRect().right) : wrapped.getBoundingClientRect().left;
+      tipX = Math.min(Math.max(r.right + padding + 16, pageLeft + 16), w.width - 12 - tipW);
+      tipY = Math.max(48, Math.min(r.top - padding, w.height - 24 - tipH - nextH));
+      nextX = tipX + tipW - nextW;
+      nextY = tipY + tipH + 10;
+    } else if (steps[run.step].place === "top") {
+      // At the top middle (parts all over the player), under the edit menu
+      // when it's open; Next under the word's right end
+      const area = stage.hidden ? { left: 0, top: 40, width: w.width } : stage.getBoundingClientRect();
+      tipX = Math.max(12, area.left + (area.width - tipW) / 2);
+      tipY = (editor ? editor.bottom : area.top) + 12;
+      nextX = tipX + tipW - nextW;
+      nextY = tipY + tipH + 10;
+    } else {
+      // The word under the part (above it when there's no room), and Next
+      // step at the part's bottom right
+      const below = r.bottom - w.top + padding + 12;
+      const roomBelow = below + Math.max(tipH, nextH) < w.height - 12;
+      tipX = Math.max(12, Math.min(r.left - w.left, w.width - 12 - tipW - nextW - 16));
+      tipY = roomBelow ? below : Math.max(60, r.top - w.top - padding - 12 - tipH);
+      nextX = Math.max(12, Math.min(r.right - w.left + padding - nextW, w.width - 12 - nextW));
+      nextY = roomBelow ? below : Math.max(60, r.top - w.top - padding - 12 - nextH);
+      // (a part narrower than the word: Next would sit on it, so it goes
+      // under the word's right end)
+      if (tipX + tipW + 12 > nextX) {
+        const stack = tipH + 10 + nextH;
+        tipY = below + stack < w.height - 12 ? below : Math.max(60, r.top - w.top - padding - 12 - stack);
+        nextX = tipX + tipW - nextW;
+        nextY = tipY + tipH + 10;
+      }
+    }
+    // (over the open edit menu: down, under it; Next goes along when it
+    // sits under the word, and stays by its part otherwise)
+    for (const k of keep) {
+      const hit = (x, y, wd, ht) => x < k.right && k.left < x + wd && y < k.bottom && k.top < y + ht;
+      const stacked = nextY >= tipY + tipH;
+      if (hit(tipX, tipY, tipW, tipH)) {
+        const dy = k.bottom + 12 - tipY;
+        tipY += dy;
+        if (stacked) nextY += dy;
+      }
+      if (hit(nextX, nextY, nextW, nextH)) nextY = k.bottom + 12;
+    }
+    run.tip.style.left = px(tipX);
+    run.tip.style.top = px(tipY);
+    run.next.style.left = px(nextX);
+    run.next.style.top = px(nextY);
+    run.frame = requestAnimationFrame(place);
+  };
+  if (run.frame != null) cancelAnimationFrame(run.frame);
+  place();
+}
+
+// (the step's parts stop waiting on a click)
+function onboardingUnlisten(run) {
+  for (const el of run.listening?.els || []) {
+    el.removeEventListener("click", run.listening.fn);
+    el.classList.remove("onboarding-press", "onboarding-press-rel");
+  }
+  run.listening = null;
+}
+
+function onboardingEnd() {
+  if (!onboardingRun) return;
+  if (onboardingRun.frame != null) cancelAnimationFrame(onboardingRun.frame);
+  onboardingUnlisten(onboardingRun);
+  onboardingRun.lit?.classList.remove("onboarding-lit", "onboarding-lit-rel", "roon");
+  onboardingRun.overlay.remove();
+  onboardingRun.finish.remove();
+  const sideOpened = onboardingRun.sideOpened;
+  onboardingRun = null;
+  if (sideOpened && !wrappedSide.hidden) setWrappedSide(false);
+  reportHole();
 }
 
 // Searching from the bar opens the Search page with what's typed (and
@@ -10048,10 +11787,12 @@ listen("roon-seek", (event) => {
 });
 darkScheme.addEventListener("change", applyColors);
 invoke("library_status").then(setLibraryStatus);
-// (the build number, from Rust: only a real rebuild changes it)
+// (the build number, from Rust: only a real rebuild changes it; a dev
+// build's only, a release has none)
 invoke("wrapper_build")
   .then((n) => {
-    $("#titlebar-build").textContent = `Build: ${n}`;
+    $("#titlebar-build").textContent = n == null ? "" : `Build: ${n}`;
+    $("#titlebar-build").hidden = n == null;
   })
   .catch(() => {});
 listen("library-status", (event) => setLibraryStatus(event.payload));

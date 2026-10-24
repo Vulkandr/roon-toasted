@@ -34,7 +34,7 @@ const RAINBOW = { top: ["#ff2a2a", "#ffe600"], bottom: ["#1f3bff", "#00c8ff"] };
 const APP_SHADES = { light: "#a9a6ff", main: "#7a6cf7", deep: "#3b21c2", hot: "#b356ff" };
 
 // Waveform looks whose unplayed part is grey, as in Roon (the rest dim)
-const GREY_UNPLAYED = new Set(["roonwave", "wfpills"]);
+const GREY_UNPLAYED = new Set(["roonwave", "wfpills", "wfcaps", "wfpixel", "wfstitch"]);
 
 const PAINTERS = {
   // Layered colors from the outside in, white core
@@ -120,9 +120,12 @@ const PAINTERS = {
   glow(g) {
     const { ctx, pad, step, n, line, reach, sides, em, fades } = g;
     const s = this.shades();
-    // Lower away from the playhead (the peak keeps its height)
+    // Lower away from the playhead (the peak keeps its height). On the
+    // waveform (`g.wf`) the heights are the song's, so it's wild only near
+    // the playhead, by distance
     const near = (y) => Math.min(1, y / 0.45); // 1 at the rise, small elsewhere
-    const base = smooth(g.ys, 1).map((y) => y * (0.5 + 0.5 * near(y)));
+    const base = smooth(g.ys, 1).map((y) => (g.wf ? y : y * (0.5 + 0.5 * near(y))));
+    const nearAt = (i) => (g.wf ? Math.exp(-((pad + i * step - g.head) ** 2) / (2 * (g.sigma * 1.5) ** 2)) : near(base[i]));
     const thick = Math.max(2, em * 0.16);
     const room = Math.max(1, reach - thick);
     // About 5 strikes a second, each sliding smoothly into the next (no
@@ -136,7 +139,7 @@ const PAINTERS = {
     const bolt = (seed) => {
       const out = new Float32Array(n + 1);
       for (let i = 0; i <= n; i++) {
-        const amp = (0.03 + 0.6 * near(base[i]) * base[i]) * fades[i];
+        const amp = (0.03 + 0.6 * nearAt(i) * base[i]) * fades[i];
         const kink = hash(i, strike * 7 + seed) * (1 - t) + hash(i, (strike + 1) * 7 + seed) * t;
         out[i] = Math.min(1, Math.max(0, base[i] + amp * (kink * 2 - 1)));
       }
@@ -361,6 +364,137 @@ const PAINTERS = {
           ctx.fill();
         }
         ctx.fillStyle = w.color(w.avg[k]);
+      }
+    }
+  },
+
+  // Peak caps: thin, see-through columns, each with a small bright cap
+  // floating just above its top
+  wfcaps(g) {
+    const width = Math.min(Math.max(1.5, g.em * 0.12), 3);
+    const w = this.wave(g, width, 2.4);
+    if (!w) return;
+    const { ctx, line, reach, sides } = g;
+    const s = this.shades();
+    const cap = Math.max(1.5, width * 0.8);
+    const gap = Math.max(1.5, cap);
+    for (let k = 0; k < w.count; k++) {
+      const h = Math.max(1, w.level[k] * reach * 0.72);
+      const color = w.color(w.avg[k]);
+      for (const [sign] of sides) {
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = color;
+        ctx.fillRect(w.x(k), sign < 0 ? line - h : line, width, h);
+        ctx.globalAlpha = 1;
+        const y = line + sign * (h + gap);
+        ctx.fillStyle = this.opts.loudColor ? color : s.light;
+        ctx.fillRect(w.x(k) - 0.5, sign < 0 ? y - cap : y, width + 1, cap);
+      }
+    }
+  },
+
+  // Line graph: one smooth line along the top, the area under it softly
+  // filled
+  wfline(g) {
+    const w = this.wave(g, 2, 1);
+    if (!w) return;
+    const { ctx, line, reach, sides, em } = g;
+    const s = this.shades();
+    const ys = smooth(w.level, 2);
+    const end = w.x(w.count - 1) + w.width;
+    const along = this.opts.loudColor ? w.alongBar(ctx) : null;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    for (const [sign] of sides) {
+      const at = (k) => line + sign * Math.max(0.5, ys[k] * reach * 0.8);
+      ctx.beginPath();
+      ctx.moveTo(w.x(0), line);
+      for (let k = 0; k < w.count; k++) ctx.lineTo(w.x(k) + w.width / 2, at(k));
+      ctx.lineTo(end, line);
+      ctx.closePath();
+      if (along) {
+        ctx.globalAlpha = 0.35;
+        ctx.fillStyle = along;
+      } else {
+        const grad = ctx.createLinearGradient(0, line, 0, line + sign * reach * 0.8);
+        grad.addColorStop(0, alpha(s.main, 0.06));
+        grad.addColorStop(1, alpha(s.main, 0.5));
+        ctx.fillStyle = grad;
+      }
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      ctx.beginPath();
+      for (let k = 0; k < w.count; k++) ctx.lineTo(w.x(k) + w.width / 2, at(k));
+      ctx.lineWidth = Math.max(1.5, em * 0.11);
+      ctx.strokeStyle = along || s.light;
+      ctx.shadowColor = s.main;
+      ctx.shadowBlur = em * 0.35;
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    }
+  },
+
+  // Pixel: the song in square blocks, stacked like an old game's meter
+  wfpixel(g) {
+    const { ctx, line, reach, sides } = g;
+    const rows = Math.min(6, Math.max(3, Math.floor(reach / 3)));
+    const pitch = reach / rows;
+    const size = Math.max(1, pitch - Math.max(1, pitch * 0.22));
+    const w = this.wave(g, size, pitch / size);
+    if (!w) return;
+    const inset = (pitch - size) / 2;
+    for (let k = 0; k < w.count; k++) {
+      const lit = Math.min(rows, Math.max(1, Math.round(w.level[k] * 0.85 * rows)));
+      ctx.fillStyle = w.color(w.avg[k]);
+      for (const [sign] of sides) {
+        for (let j = 0; j < lit; j++) {
+          const y = sign < 0 ? line - (j + 1) * pitch + inset : line + j * pitch + inset;
+          ctx.fillRect(w.x(k), y, size, size);
+        }
+      }
+    }
+  },
+
+  // Contour: three nested outlines of the song, like a topographic map
+  wfcontour(g) {
+    const w = this.wave(g, 2, 1);
+    if (!w) return;
+    const { ctx, line, reach, sides, em } = g;
+    const s = this.shades();
+    const ys = smooth(w.level, 2);
+    const end = w.x(w.count - 1) + w.width;
+    const along = this.opts.loudColor ? w.alongBar(ctx) : null;
+    ctx.lineJoin = "round";
+    for (const [scale, color] of [[1, s.light], [0.66, s.main], [0.33, s.deep]]) {
+      for (const [sign] of sides) {
+        ctx.beginPath();
+        ctx.moveTo(w.x(0), line);
+        for (let k = 0; k < w.count; k++) ctx.lineTo(w.x(k) + w.width / 2, line + sign * Math.max(0.5, ys[k] * reach * 0.8 * scale));
+        ctx.lineTo(end, line);
+        ctx.lineWidth = Math.max(1, em * 0.08);
+        ctx.strokeStyle = along || color;
+        ctx.stroke();
+      }
+    }
+  },
+
+  // Stitch: each column made of short dashes stacked up, like stitching
+  wfstitch(g) {
+    const { ctx, line, reach, sides, em } = g;
+    const dash = Math.max(1, Math.round(em * 0.1));
+    const every = dash * 2;
+    const width = Math.max(2, em * 0.25);
+    const w = this.wave(g, width, 2);
+    if (!w) return;
+    for (let k = 0; k < w.count; k++) {
+      const h = w.level[k] * reach * 0.8;
+      const count = Math.max(1, Math.round(h / every));
+      ctx.fillStyle = w.color(w.avg[k]);
+      for (const [sign] of sides) {
+        for (let j = 0; j < count; j++) {
+          const y = line + sign * j * every;
+          ctx.fillRect(w.x(k), sign < 0 ? y - dash : y, width, dash);
+        }
       }
     }
   },
@@ -805,6 +939,75 @@ function hash(i, seed) {
 }
 
 // The profile smoothed (a few passes of a 3-point average)
+// Waveform heights from Roon's loudness (`dynamics`, the seek bar's
+// Dynamics in Edit layout). Stretching the values as they come blows the
+// column-to-column jitter up as much as the song's real rises and falls (a
+// dense, even song turned into noise: Vulk's Novembers Doom), so the two
+// are taken apart:
+// - the envelope: the loudness smoothed over about 1.5% of the track, the
+//   song's sections, laid out on a curve in three parts (heights as a
+//   share of the track's loud top):
+//   - the loud body (the loudest sections, at 80% of the top or more, from
+//     their bottom quarter up: below that it's mostly the blurred edges
+//     where one section turns into the next, which made some songs look
+//     more varied than they are) gets `span` of the height, stretched by at
+//     most `gain` times its real spread, whether the song is loud all the
+//     way (Novembers Doom) or rises and falls between loud stretches
+//     (Merrimack);
+//   - the quiet end (under 45% of the top) keeps `quiet` of its own height,
+//     so intros, breaks and fades don't shrink away;
+//   - between them, a straight run joining the two, with some height of
+//     its own when the song has a fair share of in-between sections.
+// - the texture: each column's difference from the envelope, put back at
+//   `texture` times its real size (1: as Roon has it).
+// Natural is Roon's values as they are; More is the one stretched look
+// (Vulk, 2026-10-23, picked on five of his songs' real waveforms). There
+// were More / Max / Extreme for a while, but they only differed in how far
+// a song may stretch and most songs need less than any of them, so they
+// looked the same; a "max" or "extreme" saved then is More.
+const DYNAMICS = {
+  natural: null,
+  more: { span: 0.7, gain: 16, texture: 1.7, quiet: 0.9 },
+};
+function shapeHeights(avg, dynamics) {
+  const how = DYNAMICS[dynamics];
+  if (!how) return avg;
+  const n = avg.length;
+  const env = smooth(avg, Math.max(4, Math.round(n / 16)));
+  const sorted = Float32Array.from(env).sort();
+  const at = (list, q) => list[Math.round((list.length - 1) * q)];
+  const top = Math.max(at(sorted, 0.98), 0.01);
+  // (the loud part of the track: its spread, from its loudest sections
+  // only, at 80% of the top or more: with the quieter sections counted, a
+  // song that rises and falls (Merrimack) looked varied enough and its loud
+  // stretches stayed flat)
+  const body = sorted.filter((v) => v >= top * 0.8);
+  const bodyLow = body.length > 8 ? at(body, 0.25) : at(sorted, 0.25);
+  const spread = Math.min(0.9, Math.max(0.01, (top - bodyLow) / top));
+  const span = Math.max(spread, Math.min(how.span, spread * how.gain));
+  const xb = 1 - spread; // the loud body starts here (share of the top)
+  const xq = Math.min(0.45, xb * 0.8); // the quiet end stops here
+  const lowTop = how.quiet * xq;
+  // (the sections between quiet and loud keep some room of their own, more
+  // the more of the song they are, so opening up the loud body doesn't
+  // squash them onto the quiet ones)
+  let middle = 0;
+  for (const v of env) if (v / top >= xq && v / top < xb) middle += 1;
+  const midRoom = Math.min(0.25, (middle / n) * 0.6);
+  const bodyFloor = Math.max(lowTop + midRoom, 1 - span);
+  const curve = (x) => {
+    if (x >= xb) return bodyFloor + ((Math.min(x, 1) - xb) / (1 - xb)) * (1 - bodyFloor);
+    if (x >= xq) return lowTop + ((x - xq) / (xb - xq)) * (bodyFloor - lowTop);
+    return how.quiet * x;
+  };
+  const out = new Float32Array(n);
+  for (let k = 0; k < n; k++) {
+    const h = curve(env[k] / top) + (how.texture * (avg[k] - env[k])) / top;
+    out[k] = Math.min(1, Math.max(0, h));
+  }
+  return out;
+}
+
 function smooth(ys, passes) {
   let a = Float32Array.from(ys);
   for (let p = 0; p < passes; p++) {
@@ -920,12 +1123,13 @@ export class WaveBar {
   /// Null when there's no waveform.
   wave(g, width, pitch) {
     const data = this.opts.waveform;
-    if (!data?.length) return null;
+    if (!data?.length) return this.profileWave(g, width, pitch);
     const span = g.n * g.step;
     const every = width * pitch;
     const count = Math.max(2, Math.min(data.length, Math.floor(span / every)));
     const start = g.pad + (span - count * every + (every - width)) / 2;
-    if (this.waveCache?.data !== data || this.waveCache.count !== count) {
+    const dynamics = this.opts.dynamics === "natural" ? "natural" : "more";
+    if (this.waveCache?.data !== data || this.waveCache.count !== count || this.waveCache.dynamics !== dynamics) {
       const avg = new Float32Array(count);
       for (let k = 0; k < count; k++) {
         const from = Math.floor((k / count) * data.length);
@@ -942,12 +1146,12 @@ export class WaveBar {
         lo = Math.min(lo, v);
         hi = Math.max(hi, v);
       }
-      this.waveCache = { data, count, avg, lo, hi: Math.max(hi, lo + 0.05) };
+      this.waveCache = { data, count, avg, lo, hi: Math.max(hi, lo + 0.05), dynamics, heights: shapeHeights(avg, dynamics) };
     }
-    const { avg, lo, hi } = this.waveCache;
+    const { avg, lo, hi, heights } = this.waveCache;
     // Alive: near the playhead each column bounces gently around its real
     // height, on its own clock (the rest stays still)
-    let level = avg;
+    let level = heights;
     if (this.opts.alive) {
       const rates = new Float32Array(count);
       const near = new Float32Array(count);
@@ -960,8 +1164,33 @@ export class WaveBar {
       for (let k = 0; k < count; k++) lift[k] = near[k] * (0.22 * Math.sin(clocks[k]) + 0.12 * Math.sin(clocks[k] * 2.3 + 1));
       // (narrow columns, as in the shapes: smoothed, so edges don't fizz)
       if (width < 3) lift = smooth(lift, 2);
-      level = avg.map((v, k) => Math.min(1.25, v * (1 + lift[k])));
+      level = heights.map((v, k) => Math.min(1.25, v * (1 + lift[k])));
     }
+    return this.columnsOf(start, every, count, width, avg, level, lo, hi);
+  }
+
+  /// The waveform looks without a waveform (Waveform off, or nothing from
+  /// Roon for the track): the same columns, from the made-up profile the
+  /// other styles use (the rise at the playhead, the gentle ripple)
+  profileWave(g, width, pitch) {
+    if (!g.ys) return null;
+    const span = g.n * g.step;
+    const every = width * pitch;
+    const count = Math.max(2, Math.floor(span / every));
+    const start = g.pad + (span - count * every + (every - width)) / 2;
+    const level = new Float32Array(count);
+    for (let k = 0; k < count; k++) {
+      const f = Math.min(g.n, Math.max(0, (start + k * every + width / 2 - g.pad) / g.step));
+      const i = Math.floor(f);
+      const t = f - i;
+      level[k] = g.ys[i] * (1 - t) + g.ys[Math.min(g.n, i + 1)] * t;
+    }
+    return this.columnsOf(start, every, count, width, level, level, 0, 1);
+  }
+
+  /// Columns as the waveform looks draw them: where each starts, its
+  /// height (`level`), its loudness (`avg`) and colors
+  columnsOf(start, every, count, width, avg, level, lo, hi) {
     const s = this.shades();
     const ramp = this.opts.loudColor ? this.loudRamp(s) : null;
     const loudness = (t) => (t - lo) / (hi - lo);
@@ -1131,7 +1360,20 @@ export class WaveBar {
     // is painted straight in, each time, so its dimmed colors stay as they
     // were; the blurred styles are painted once on a layer and laid down
     // twice (a blur painted into a clip fades out at the clip's edge).
-    const geom = { ctx, pad, step, n, ys, fades, line, reach, sides, T, em, head, sigma };
+    // Spectrum, Beam, Glow line, Ribbon and Neon tube with Waveform on: the
+    // song's heights (with Dynamics and Alive) in place of the profile, at
+    // the waveform looks' 80%, the whole length
+    const wf = !!(o.waveYs && o.waveform?.length);
+    if (wf) {
+      const w = this.wave({ pad, step, n, head, sigma, em }, step, 1);
+      if (w) {
+        for (let i = 0; i <= n; i++) {
+          ys[i] = w.level[Math.min(i, w.count - 1)] * 0.8;
+          fades[i] = 1;
+        }
+      }
+    }
+    const geom = { ctx, pad, step, n, ys, fades, line, reach, sides, T, em, head, sigma, wf };
     const paint = PAINTERS[o.style] || PAINTERS.wave;
     let layer = null;
     if (paint !== PAINTERS.wave) {

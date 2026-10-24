@@ -970,9 +970,9 @@ button:disabled {
 
 /* Waveform's look picker and Loudness keep their room while it's off, so
    the line keeps its height and nothing moves when they appear */
-#editor-waveform-look.off,
 #editor-waveform-loud-label.off,
-#editor-waveform-alive-label.off {
+#editor-waveform-alive-label.off,
+#editor-waveform-dynamics.off {
   visibility: hidden;
 }
 
@@ -1186,7 +1186,8 @@ button:disabled {
 .editor-color:disabled,
 #editor-side.disabled,
 #editor-format-side.disabled,
-#editor-waveform-loud-label.disabled {
+#editor-waveform-loud-label.disabled,
+#editor-waveform-label.disabled {
   opacity: 0.35;
   cursor: default;
 }
@@ -2310,6 +2311,12 @@ html.invert-colors {
   background: var(--hover);
 }
 
+/* (the square around the face is solid in our colors too, so Roon's logo
+   never shows through it, the colors easing over included) */
+.wrapped-btn {
+  background: var(--bg);
+}
+
 .wrapped-btn.through-filter {
   background: var(--roon-bg);
 }
@@ -2327,6 +2334,17 @@ html.invert-colors {
 .wrapped-btn.through-filter .wrapped-arrow:hover,
 .wrapped-btn.through-filter.on .wrapped-arrow {
   background: var(--roon-hover);
+}
+
+/* The Wrapped button and side menu easing between Roon's colors and ours
+   when the sidebar filter goes see-through or comes back (a resize, say;
+   wrapper.js adds this for a moment around the change) */
+.filter-fade,
+.filter-fade * {
+  transition:
+    background-color 0.15s linear,
+    color 0.15s linear,
+    border-color 0.15s linear !important;
 }
 
 /* The name lit while the Wrapped page is open, like the arrow while the
@@ -2723,13 +2741,14 @@ html.invert-colors {
   cursor: pointer;
 }
 
-/* Fine Tuning's tier strip: three parts, the on ones lit */
+/* The tier strip (Fine Tuning's, and Deep Dive's small one): three parts,
+   the on ones lit and glowing, each with a light (green: on with all it
+   uses; yellow: on, a part missing, said on hover; unlit: off) */
 .tier-strip {
   display: flex;
   margin-top: 12px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  overflow: hidden;
 }
 
 .tier-seg {
@@ -2744,12 +2763,22 @@ html.invert-colors {
   color: var(--muted);
 }
 
+/* (no overflow clipping on the strip, so a light's hover can show below
+   it: the end parts round their own corners) */
+.tier-seg:first-child {
+  border-radius: 9px 0 0 9px;
+}
+
 .tier-seg:last-child {
   border-right: 0;
+  border-radius: 0 9px 9px 0;
 }
 
 .tier-seg.on {
   background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--accent) 30%, transparent);
   color: var(--text);
 }
 
@@ -2770,18 +2799,49 @@ html.invert-colors {
   white-space: nowrap;
 }
 
-.tier-seg-title::before {
-  content: "";
+/* The light: like the player's quality light, drawn in the middle of a
+   bigger spot to hover (for the yellow one's word) that takes no more
+   room than the light */
+.tier-light {
+  --q: #8a8a93;
   flex: none;
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  border: 1px solid var(--muted);
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  margin: -4px;
 }
 
-.tier-seg.on .tier-seg-title::before {
-  border-color: var(--accent);
-  background: var(--accent);
+.tier-light::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px var(--muted);
+}
+
+.tier-light.full::before,
+.tier-light.part::before {
+  background: radial-gradient(circle, #fff 0 18%, var(--q) 60%);
+  box-shadow:
+    0 0 3px 1px color-mix(in srgb, var(--q) 75%, transparent),
+    0 0 9px 2px color-mix(in srgb, var(--q) 35%, transparent);
+}
+
+.tier-light.full {
+  --q: #3ccf86;
+}
+
+.tier-light.part {
+  --q: #f2b03d;
+  cursor: help;
+}
+
+/* (its word under the strip, not over the part's own words) */
+.tier-light .hover-tip {
+  top: calc(100% + 26px);
+  max-width: 300px;
+  white-space: normal;
 }
 
 .tier-seg-words {
@@ -2794,6 +2854,40 @@ html.invert-colors {
 
 .tier-seg.unready .tier-seg-words {
   font-style: italic;
+}
+
+/* Deep Dive's: small, in the top right of the picks */
+.tier-strip.compact {
+  margin: 0 0 0 auto;
+  border-radius: 8px;
+}
+
+.tier-strip.compact .tier-seg {
+  flex: none;
+  width: 116px;
+  padding: 4px 9px;
+}
+
+.tier-strip.compact .tier-seg:first-child {
+  border-radius: 7px 0 0 7px;
+}
+
+.tier-strip.compact .tier-seg:last-child {
+  border-radius: 0 7px 7px 0;
+}
+
+.tier-strip.compact .tier-seg-title {
+  font-size: 11.5px;
+}
+
+.tier-strip.compact .tier-seg-words {
+  font-size: 10.5px;
+}
+
+/* (its lights' words open leftward: the strip is at the right edge) */
+.tier-strip.compact .tier-light .hover-tip {
+  left: auto;
+  right: -110px;
 }
 
 /* Tier 3's music folder */
@@ -3337,15 +3431,23 @@ html.invert-colors {
   text-transform: none;
   white-space: normal;
   pointer-events: none;
-  opacity: 0;
-  visibility: hidden;
-  transition: none;
+  /* (not there at all until hovered, so a hidden one never makes room
+     for itself, as a scroll bar for nothing) */
+  display: none;
 }
 
 .has-tip:hover > .hover-tip {
-  opacity: 1;
-  visibility: visible;
-  transition: opacity 0.12s 0.5s, visibility 0s 0.5s;
+  display: block;
+  animation: hover-tip-in 0.12s 0.5s both;
+}
+
+@keyframes hover-tip-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
 }
 
 /* Home's Refresh, top right (its tip opens to the left) */
@@ -6243,10 +6345,10 @@ body > .wrapped-toast {
 .settings-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   max-width: 640px;
-  margin-bottom: 16px;
-  padding: 14px 16px;
+  margin-bottom: 12px;
+  padding: 11px 14px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--card);
@@ -6267,7 +6369,7 @@ body > .wrapped-toast {
   align-items: center;
   justify-content: space-between;
   gap: 8px 16px;
-  padding-top: 10px;
+  padding-top: 8px;
   border-top: 1px solid var(--border);
 }
 
@@ -6287,9 +6389,57 @@ body > .wrapped-toast {
   color: var(--muted);
 }
 
+/* (a control never breaks inside: with no room beside its name, the
+   whole of it goes under) */
 .settings-card .wrapped-tabs {
+  flex: none;
+  flex-wrap: nowrap;
   width: fit-content;
   margin: 0;
+}
+
+/* A left-column card's title line: the title and its i, the card's
+   control on the right (under it when there's no room) */
+.settings-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  min-height: 28px;
+}
+
+.settings-card-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.settings-card-info {
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  cursor: help;
+}
+
+.settings-card-info svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Settings ends with its last card: no margin under it, and less room
+   under the page, so there's no scroll bar for empty space */
+.wrapped-settings-column > :last-child {
+  margin-bottom: 0;
+}
+
+.wrapped-body:has(> .wrapped-settings-columns) {
+  padding-bottom: 14px;
+}
+
+/* Discover's tier cards, right under its Off / On */
+.tiers-close {
+  margin-top: -6px;
 }
 
 /* Wrapped Discovery's On, glowing while a tier is working */
@@ -6330,6 +6480,34 @@ body > .wrapped-toast {
 
 .settings-start[hidden] {
   display: none;
+}
+
+/* (its X, top right; the banner keeps room for it, and its button stays
+   beside the words, never under them) */
+.settings-start {
+  position: relative;
+  flex-wrap: nowrap;
+  padding: 12px 48px 12px 18px;
+}
+
+.settings-start .settings-start-text {
+  min-width: 0;
+}
+
+.settings-start .wrapped-play {
+  flex: none;
+  white-space: nowrap;
+}
+
+.settings-start-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+/* A row that does nothing while its card's switch is off */
+.settings-card-row.off {
+  opacity: 0.45;
 }
 
 .settings-start-text {
@@ -6402,4 +6580,205 @@ details.settings-card-sub:not([open]) {
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
+}
+
+/* The Style list's group titles: set apart from the styles under them
+   (the options get their own look back, since they take the group's) */
+#editor-bar-select optgroup {
+  color: var(--accent);
+  background: var(--bg);
+  font-style: normal;
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+#editor-bar-select option {
+  color: var(--text);
+  background: var(--bg);
+  font-weight: 400;
+  font-size: 13px;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* ----- Onboarding: the rest of the page dimmed around one lit part, a
+   word about it, and the glowing buttons (all in the accent) ----- */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 15;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Over Roon's sidebar the color filter recolors what's drawn: lit in
+   Roon's accent, which comes out as ours */
+.onboarding-spot.roon {
+  --accent: rgb(106, 110, 217);
+}
+
+.onboarding-spot {
+  position: absolute;
+  border-radius: 12px;
+  box-shadow:
+    0 0 0 9999px rgba(0, 0, 0, 0.62),
+    0 0 0 2px var(--accent),
+    0 0 18px 4px color-mix(in srgb, var(--accent) 70%, transparent),
+    inset 0 0 14px color-mix(in srgb, var(--accent) 35%, transparent);
+  transition: left 0.25s, top 0.25s, width 0.25s, height 0.25s;
+  animation: onboarding-pulse 2.4s ease-in-out infinite;
+}
+
+/* A spot that only dims (its part glows from inside instead) */
+.onboarding-spot.no-ring {
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.62);
+  animation: none;
+}
+
+/* Parts lit apart (the player's pieces, its X and Minimize player): one
+   SVG (filled in by wrapper.js) with the dimming, a hole for each part,
+   and their outlines: half of each line falls inside its part and is
+   masked away with the rest of the inside, so 2px shows outside, as the
+   spot's ring does */
+.onboarding-dim {
+  position: absolute;
+  inset: 0;
+}
+
+.onboarding-dim svg {
+  display: block;
+}
+
+.onboarding-ring-lines {
+  animation: onboarding-pulse-svg 2.4s ease-in-out infinite;
+}
+
+.onboarding-ring-line rect {
+  stroke: var(--accent);
+  stroke-width: 4px;
+}
+
+.onboarding-ring-glow rect {
+  stroke: color-mix(in srgb, var(--accent) 75%, transparent);
+  stroke-width: 12px;
+}
+
+@keyframes onboarding-pulse-svg {
+  0%, 100% { opacity: 0.85; }
+  50% { opacity: 1; }
+}
+
+.onboarding-tip {
+  position: absolute;
+  max-width: 440px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, var(--border));
+  background: var(--card);
+  color: var(--text);
+  font-size: 13.5px;
+  line-height: 1.45;
+  white-space: pre-line;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  transition: left 0.12s ease-out, top 0.12s ease-out;
+}
+
+.onboarding-btn {
+  position: absolute;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, var(--card));
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  pointer-events: auto;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 40%, transparent),
+    0 0 14px color-mix(in srgb, var(--accent) 60%, transparent);
+  animation: onboarding-pulse 2.4s ease-in-out infinite;
+}
+
+.onboarding-btn:hover {
+  background: color-mix(in srgb, var(--accent) 32%, var(--card));
+}
+
+/* End onboarding: in the title bar, above the menu */
+.onboarding-finish {
+  position: fixed;
+  top: 5px;
+  left: 50%;
+  z-index: 20;
+  transform: translateX(-50%);
+  padding: 5px 14px;
+  font-size: 12.5px;
+  -webkit-app-region: no-drag;
+}
+
+/* Next step: at the lit part's bottom right (placed by wrapper.js) */
+.onboarding-next {
+  transition: left 0.12s ease-out, top 0.12s ease-out;
+}
+
+@keyframes onboarding-pulse {
+  0%, 100% { filter: brightness(1); }
+  50% { filter: brightness(1.25); }
+}
+
+/* The Onboarding button in the bar, lit like the walkthrough */
+.wrapped-nav-link.onboarding-nav {
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 60%, transparent);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--accent) 50%, transparent);
+  animation: onboarding-pulse 2.4s ease-in-out infinite;
+}
+
+/* The button a step waits on: lit and flashing (over the dimmed page, so
+   it needs to come forward) */
+.onboarding-press {
+  z-index: 7;
+  border-color: var(--accent) !important;
+  color: var(--text) !important;
+  background: color-mix(in srgb, var(--accent) 22%, var(--card)) !important;
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 16px 4px color-mix(in srgb, var(--accent) 75%, transparent);
+  animation: onboarding-flash 1.1s ease-in-out infinite;
+}
+
+/* (one laid out in the flow gets a place to come forward from; one placed
+   already, like Minimize player, keeps its own) */
+.onboarding-press-rel {
+  position: relative;
+}
+
+@keyframes onboarding-flash {
+  0%, 100% { box-shadow: 0 0 0 2px var(--accent), 0 0 16px 4px color-mix(in srgb, var(--accent) 75%, transparent); filter: brightness(1); }
+  50% { box-shadow: 0 0 0 3px var(--accent), 0 0 26px 8px color-mix(in srgb, var(--accent) 90%, transparent); filter: brightness(1.35); }
+}
+
+/* A lit part that glows inside itself (the ring around it would fall
+   where Roon's own window shows through): a layer over the part, so its
+   own face (the Wrapped button's has a background) can't hide it */
+.onboarding-lit-rel {
+  position: relative;
+}
+
+.onboarding-lit::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: 8px;
+  pointer-events: none;
+  box-shadow:
+    inset 0 0 0 2px var(--accent),
+    inset 0 0 14px color-mix(in srgb, var(--accent) 70%, transparent);
+  animation: onboarding-pulse 2.4s ease-in-out infinite;
+}
+
+.onboarding-lit.roon {
+  --accent: rgb(106, 110, 217);
 }

@@ -302,38 +302,49 @@
               <!-- Seek only, next to Font: Roon's real waveform of the track
                    (local files), with the Bar as its fallback -->
               <div id="editor-waveform" class="editor-group" hidden>
-                <label class="editor-check" title="Roon's own waveform of the playing track (local files, needs Hearts &amp; Library). When there isn't one, the Bar below is used."><input id="editor-waveform-check" type="checkbox" /> Waveform</label>
-                <select id="editor-waveform-look" class="editor-select off" title="The waveform's look">
-                  <option value="roon">Roon</option>
-                  <option value="pills">Pills</option>
-                  <option value="shape">Solid shape</option>
-                  <option value="neon">Neon outline</option>
-                  <option value="led">LED</option>
-                  <option value="art">Album art</option>
-                </select>
-                <label id="editor-waveform-loud-label" class="editor-check off" title="Color each part by how loud it is: quiet in the deep shade, loud in the hot one (not for Album art)"><input id="editor-waveform-loud" type="checkbox" /> Loudness</label>
+                <label id="editor-waveform-label" class="editor-check"><input id="editor-waveform-check" type="checkbox" /> Waveform</label>
+                <label id="editor-waveform-loud-label" class="editor-check off" title="Color each part by how loud it is: quiet in the deep shade, loud in the hot one (the column and line styles; not Wave, Album art, Spectrum, Beam, Glow line, Ribbon or Neon tube)"><input id="editor-waveform-loud" type="checkbox" /> Loudness</label>
                 <label id="editor-waveform-alive-label" class="editor-check off" title="Near the playhead the waveform bounces gently around its real height; the rest stays still"><input id="editor-waveform-alive" type="checkbox" /> Alive</label>
+                <select id="editor-waveform-dynamics" class="editor-select off" title="How much the waveform's heights show the track's ups and downs. Natural: Roon's values as they are (loud masters sit near the top). More dynamic: the loud stretches opened up so they rise and fall with the song; quiet parts stay as they are.">
+                  <option value="natural">Natural</option>
+                  <option value="more">More dynamic</option>
+                </select>
               </div>
               <!-- Always a line of its own, so the options that come and go
                    (custom color, Mirrored's Top / Bottom) never reflow it -->
               <div id="editor-bar" class="editor-group" hidden>
-                <label class="editor-label" for="editor-bar-select">Bar</label>
-                <select id="editor-bar-select" class="editor-select" title="The bar's look (with Waveform on: when there's no waveform)">
-                  <option value="line">Line</option>
-                  <option value="thick">Thick</option>
-                  <option value="hairline">Hairline</option>
-                  <option value="segments">Segments</option>
-                  <option value="wave">Wave</option>
-                  <option value="spectrum">Spectrum</option>
-                  <option value="beam">Beam</option>
-                  <option value="glow">Glow line</option>
-                  <option value="dots">LED meter</option>
-                  <option value="ribbon">Ribbon</option>
-                  <option value="neon">Neon tube</option>
-                  <option value="mountain">Mountains</option>
-                  <option value="particles">Particles</option>
-                  <option value="plasma">Plasma</option>
-                  <option value="art">Album art</option>
+                <label class="editor-label" for="editor-bar-select">Style</label>
+                <select id="editor-bar-select" class="editor-select" title="The bar's look (Waveform, for the seek bar: the song's real waveform in it, for the styles that have one)">
+                  <optgroup label="Simple">
+                    <option value="line">Line</option>
+                    <option value="thick">Thick</option>
+                    <option value="hairline">Hairline</option>
+                    <option value="segments">Segments</option>
+                  </optgroup>
+                  <optgroup label="Waveform or animated">
+                    <option value="roon">Roon</option>
+                    <option value="pills">Pills</option>
+                    <option value="caps">Peak caps</option>
+                    <option value="pixel">Pixel</option>
+                    <option value="stitch">Stitch</option>
+                    <option value="dots">LED meter</option>
+                    <option value="shape">Solid shape</option>
+                    <option value="linegraph">Line graph</option>
+                    <option value="contour">Contour</option>
+                    <option value="neonline">Neon outline</option>
+                    <option value="neon">Neon tube</option>
+                    <option value="wave">Wave</option>
+                    <option value="spectrum">Spectrum</option>
+                    <option value="beam">Beam</option>
+                    <option value="glow">Glow line</option>
+                    <option value="ribbon">Ribbon</option>
+                    <option value="art">Album art</option>
+                  </optgroup>
+                  <optgroup label="Animated only">
+                    <option value="mountain">Mountains</option>
+                    <option value="particles">Particles</option>
+                    <option value="plasma">Plasma</option>
+                  </optgroup>
                 </select>
                 <span class="editor-label">Color</span>
                 <button class="chip" data-color="app" title="The app's colors (Wave: the rainbow; the other drawn bars: blue-purple)">App</button>

@@ -112,6 +112,15 @@ pub(crate) fn player_busy() -> bool {
     windows_wrapper::player_busy()
 }
 
+/// Whether the Wrapper was resized (maximized, restored) in the last few
+/// seconds. For skin.rs: that's when Roon folds its sidebar away or brings
+/// it back, so it only looks at pictures of Roon's window then (taking one
+/// makes Roon flicker where it shows).
+#[cfg(windows)]
+pub(crate) fn resized_lately() -> bool {
+    windows_wrapper::resized_lately()
+}
+
 /// Roon's search run for `text` (blocking). For ocr.rs.
 #[cfg(windows)]
 pub(crate) fn roon_search_for(text: &str) -> bool {
@@ -144,6 +153,39 @@ pub(crate) const BUTTON_WINDOW: &str = "wrapper-button";
 #[cfg(windows)]
 pub(crate) fn moving() -> bool {
     windows_wrapper::moving()
+}
+
+/// While the Wrapper is dragged by its title bar and shows a live picture
+/// of Roon in place of the hole (until the hole is open again after it):
+/// the page's parts over the hole, relative to the hole's top-left corner
+/// (real pixels). For skin.rs: its filter goes above the Wrapper meanwhile,
+/// recoloring that picture, with these cut out so they keep their own
+/// colors.
+#[cfg(windows)]
+pub(crate) fn drag_cuts() -> Option<Vec<[i32; 4]>> {
+    windows_wrapper::drag_cuts()
+}
+
+/// The sidebar filter is set up for a drag (its cut-out made, the Wrapper
+/// in its picture): the Wrapper can swap Roon for its live picture and go
+/// under the filter. For skin.rs.
+#[cfg(windows)]
+pub(crate) fn drag_ready() {
+    windows_wrapper::drag_ready()
+}
+
+/// Whether the Wrapper is showing its live picture of Roon for a drag (the
+/// hole closed, Roon away). For skin.rs.
+#[cfg(windows)]
+pub(crate) fn live_picture() -> bool {
+    windows_wrapper::live_picture()
+}
+
+/// One line in `drag-log.txt` (app data): what a drag of the Wrapper did,
+/// for when the sidebar filter doesn't keep up with one. Dev builds only.
+#[cfg(windows)]
+pub(crate) fn drag_log(line: &str) {
+    windows_wrapper::drag_log(line)
 }
 
 /// What the page shows in its title bar when something isn't right.
@@ -180,8 +222,12 @@ pub fn enabled(app: &AppHandle) -> bool {
 /// `covers` are the page's own panels and menus over the hole ([x, y,
 /// width, height] each), which stay part of the window; `radii`, one per
 /// cover (0 or missing = square), round a cover's corners, so what's
-/// outside them is Roon, not the page's background.
+/// outside them is Roon, not the page's background. `dim`: the side menu's
+/// walkthrough is showing, so the page draws over all of Roon (its dimming
+/// reaches Roon's corner by the Wrapped button too) while the sidebar
+/// filter stays as it was, for the side menu drawn under it.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn wrapper_hole(
     app: AppHandle,
     x: f64,
@@ -190,6 +236,7 @@ pub fn wrapper_hole(
     height: f64,
     covers: Option<Vec<[f64; 4]>>,
     radii: Option<Vec<f64>>,
+    dim: Option<bool>,
 ) {
     #[cfg(windows)]
     windows_wrapper::set_hole(
@@ -197,9 +244,10 @@ pub fn wrapper_hole(
         [x, y, width, height],
         covers.unwrap_or_default(),
         radii.unwrap_or_default(),
+        dim.unwrap_or(false),
     );
     #[cfg(not(windows))]
-    let _ = (app, x, y, width, height, covers, radii);
+    let _ = (app, x, y, width, height, covers, radii, dim);
 }
 
 /// Flashes the Wrapper's taskbar button: Deep Dive asked something or is
@@ -473,6 +521,9 @@ mod windows_wrapper {
         covers: Vec<[f64; 4]>,
         /// Corner radius per cover (CSS px; 0 = square)
         radii: Vec<f64>,
+        /// The side menu's walkthrough: the page over all of Roon, the
+        /// filter as the covers alone would have it (see `wrapper_hole`)
+        dim: bool,
     }
     static HOLE: Mutex<Option<Hole>> = Mutex::new(None);
 
@@ -516,6 +567,9 @@ mod windows_wrapper {
     /// What the page draws over the hole (screen pixels), as of the last
     /// sync pass that showed Roon.
     static VISIBLE_COVERS: Mutex<Vec<[i32; 4]>> = Mutex::new(Vec::new());
+    /// Whether the sidebar filter is showing (not see-through), as last
+    /// told to the page ("wrapper-filter").
+    static FILTER_SHOWN: AtomicBool = AtomicBool::new(true);
 
     /// While the Wrapper is dragged by its title bar, Roon isn't moved
     /// along at all: the hole is closed, Roon waits just off the screen,
@@ -528,6 +582,15 @@ mod windows_wrapper {
     /// The live pictures of Roon (one per piece of the hole not under a
     /// cover), to remove once the hole is open again.
     static THUMBNAILS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
+    /// The page's parts over the hole at the drag's start, relative to the
+    /// hole's corner (see `drag_cuts`).
+    static DRAG_CUTS: Mutex<Vec<[i32; 4]>> = Mutex::new(Vec::new());
+    /// A drag's start waiting for the sidebar filter to be ready (since
+    /// when), and whether it is (see `start_drag`).
+    static DRAG_PENDING: Mutex<Option<Instant>> = Mutex::new(None);
+    static DRAG_READY: AtomicBool = AtomicBool::new(false);
+    /// How long a drag's start waits for the filter at most.
+    const DRAG_READY_WAIT: Duration = Duration::from_millis(100);
     static APP: OnceLock<AppHandle> = OnceLock::new();
 
     /// Only once the Wrapper has actually moved: pressing the title bar
@@ -536,6 +599,45 @@ mod windows_wrapper {
     pub fn moving() -> bool {
         DRAGGING.load(Ordering::Relaxed)
             || LAST_MOVE.lock().unwrap().is_some_and(|at| at.elapsed() < MOVE_QUIET)
+    }
+
+    pub fn drag_log(line: &str) {
+        use std::io::Write;
+        // (a dev build's only)
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        let Some(dir) = APP.get().and_then(|app| app.path().app_data_dir().ok()) else {
+            return;
+        };
+        let path = dir.join("drag-log.txt");
+        // (kept short: started over past 64 KB)
+        let too_big = std::fs::metadata(&path).is_ok_and(|m| m.len() > 64 * 1024);
+        let file = std::fs::OpenOptions::new().create(true).append(!too_big).write(true).truncate(too_big).open(&path);
+        if let Ok(mut file) = file {
+            let ms = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() % 100_000_000).unwrap_or(0);
+            let _ = writeln!(file, "{ms} {line}");
+        }
+    }
+
+    pub fn drag_cuts() -> Option<Vec<[i32; 4]>> {
+        let pending = DRAG_PENDING.lock().unwrap().is_some();
+        let picture = pending || DRAGGING.load(Ordering::Relaxed) || !THUMBNAILS.lock().unwrap().is_empty();
+        picture.then(|| DRAG_CUTS.lock().unwrap().clone())
+    }
+
+    pub fn drag_ready() {
+        DRAG_READY.store(true, Ordering::Relaxed);
+    }
+
+    pub fn live_picture() -> bool {
+        DRAGGING.load(Ordering::Relaxed)
+    }
+
+    /// A drag's start no longer waits (it ended first, or the Wrapper
+    /// closed).
+    fn cancel_pending() -> bool {
+        DRAG_PENDING.lock().unwrap().take().is_some()
     }
 
     pub fn visible_hole() -> Option<(HWND, [i32; 4])> {
@@ -738,8 +840,12 @@ mod windows_wrapper {
         sync(app);
     }
 
-    pub fn set_hole(app: &AppHandle, rect: [f64; 4], covers: Vec<[f64; 4]>, radii: Vec<f64>) {
-        *HOLE.lock().unwrap() = Some(Hole { rect, covers, radii });
+    pub fn resized_lately() -> bool {
+        LAST_RESIZE.lock().unwrap().is_some_and(|at| at.elapsed() < Duration::from_secs(6))
+    }
+
+    pub fn set_hole(app: &AppHandle, rect: [f64; 4], covers: Vec<[f64; 4]>, radii: Vec<f64>, dim: bool) {
+        *HOLE.lock().unwrap() = Some(Hole { rect, covers, radii, dim });
         sync(app);
     }
 
@@ -831,6 +937,7 @@ mod windows_wrapper {
         *VISIBLE_HOLE.lock().unwrap() = None;
         *COVERED_HOLE.lock().unwrap() = None;
         DRAGGING.store(false, Ordering::Relaxed);
+        cancel_pending();
         drop_thumbnails();
         if let Some(window) = app.get_webview_window(WRAPPER_WINDOW) {
             let _ = window.hide();
@@ -851,6 +958,7 @@ mod windows_wrapper {
         *VISIBLE_HOLE.lock().unwrap() = None;
         *COVERED_HOLE.lock().unwrap() = None;
         DRAGGING.store(false, Ordering::Relaxed);
+        cancel_pending();
         drop_thumbnails();
         // Roon goes back where the Wrapper is, at its size, so putting it
         // back looks like the Wrapper's bars just going away
@@ -1034,7 +1142,7 @@ mod windows_wrapper {
                 (r[3] * scale).round() as i32,
             ]
         };
-        let (hole, covers, radii) = {
+        let (hole, covers, radii, dim) = {
             let guard = HOLE.lock().unwrap();
             let Some(saved) = guard.as_ref() else {
                 return;
@@ -1042,7 +1150,7 @@ mod windows_wrapper {
             let radii: Vec<i32> = (0..saved.covers.len())
                 .map(|i| (saved.radii.get(i).copied().unwrap_or(0.0) * scale).round() as i32)
                 .collect();
-            (to_window(&saved.rect), saved.covers.iter().map(to_window).collect::<Vec<_>>(), radii)
+            (to_window(&saved.rect), saved.covers.iter().map(to_window).collect::<Vec<_>>(), radii, saved.dim)
         };
         let hole_on_screen = (host_rect.0 + hole[0], host_rect.1 + hole[1], hole[2], hole[3]);
 
@@ -1070,11 +1178,20 @@ mod windows_wrapper {
         ];
         // The sidebar filter goes see-through while nothing of Roon shows,
         // and solid again just before the hole opens, so it shows (and
-        // hides) in the same frame as Roon
+        // hides) in the same frame as Roon. (The side menu's walkthrough
+        // closes the hole but not the filter: the side menu under it is
+        // drawn for it.)
         let exposed = open_hole && !subtract(hole, &covers).is_empty();
         crate::skin::wait(!exposed);
+        // (the page draws the Wrapped button and side menu in Roon's colors
+        // for the filter to recolor, and in its own while the filter is
+        // see-through, during a resize, say: it's told when that changes)
+        if FILTER_SHOWN.swap(exposed, Ordering::Relaxed) != exposed {
+            let _ = app.emit_to(WRAPPER_WINDOW, "wrapper-filter", exposed);
+        }
         let mut region_key = bounds.to_vec();
         region_key.push(open_hole as i32);
+        region_key.push(dim as i32);
         if open_hole {
             region_key.extend_from_slice(&hole);
             for cover in &covers {
@@ -1094,7 +1211,7 @@ mod windows_wrapper {
             changed
         };
         if region_changed {
-            set_region(host, bounds, open_hole.then_some(hole), &covers, &radii);
+            set_region(host, bounds, (open_hole && !dim).then_some(hole), &covers, &radii);
         }
         // A drag just ended: the hole is back, so the live pictures that
         // stood in for Roon can go (after the next screen refresh, so the
@@ -1139,9 +1256,9 @@ mod windows_wrapper {
 
         // Roon's client area = the hole plus its transport bar below it
         let client = (hole.0, hole.1, hole.2, hole.3 + bar);
-        // Roon goes right below us (the sidebar filter sits right above
-        // us, see skin.rs)
-        place_roon(roon, client, host);
+        // Roon goes right below us (below the sidebar filter, which sits
+        // between us, see skin.rs)
+        place_roon(roon, client, roon_anchor(host));
         keep_order(host, roon);
         if let (Some(r), Some(h)) = (window_rect(roon), window_rect(host)) {
             *ROON_OFFSET.lock().unwrap() = Some((r.0 - h.0, r.1 - h.1));
@@ -1160,7 +1277,9 @@ mod windows_wrapper {
             } else {
                 report.1 = Some(hole);
             }
-            *VISIBLE_COVERS.lock().unwrap() = covers;
+            // (the walkthrough's page over all of Roon: a click anywhere in
+            // the hole is on the page, not Roon)
+            *VISIBLE_COVERS.lock().unwrap() = if dim { vec![hole] } else { covers };
         } else {
             // Roon is in place behind the closed hole, repainting after a
             // resize: the sidebar filter gets ready below us meanwhile, so
@@ -1410,6 +1529,14 @@ mod windows_wrapper {
     /// Moves Roon so its client area is `client` (x, y, width, height in
     /// real pixels), accounting for Roon's own title bar and borders, shows
     /// it, and puts it directly behind `behind`.
+    /// What Roon goes right behind: the sidebar filter while it's showing
+    /// (it sits between us and Roon, see skin.rs), else us.
+    fn roon_anchor(host: HWND) -> HWND {
+        // (Only while it's right below us: during a drag it's above us, see
+        // `drag_cuts`, and Roon below it would be over us)
+        crate::skin::filter_window().filter(|f| is_visible(*f) && crate::skin::right_below(host, *f)).unwrap_or(host)
+    }
+
     fn place_roon(roon: HWND, client: (i32, i32, i32, i32), behind: HWND) {
         use windows::Win32::UI::WindowsAndMessaging::{SetWindowPos, SWP_NOACTIVATE};
         let (Some(rect), Some(origin), Some(size)) =
@@ -1511,8 +1638,8 @@ mod windows_wrapper {
         }
     }
 
-    /// Keeps Roon directly behind the Wrapper (and the sidebar filter
-    /// directly in front of it when it's showing, see skin.rs). If Roon has come out on top
+    /// Keeps Roon directly behind the Wrapper (with the sidebar filter in
+    /// between when it's showing, see skin.rs). If Roon has come out on top
     /// (it was clicked, which activates it), the Wrapper goes back above it
     /// without taking focus, so typing still goes to Roon.
     fn keep_order(host: HWND, roon: HWND) {
@@ -1542,17 +1669,18 @@ mod windows_wrapper {
                     _ => break,
                 }
             }
-            // The filter right above us (it's on another thread: never wait
-            // on it). It recolors whatever is under it: Roon through the
-            // hole, or Roon's live picture while we're dragged. (While Now
-            // Playing covers Roon it waits there see-through, see skin.rs.)
+            // The filter right below us, over Roon (it's on another thread:
+            // never wait on it). It recolors Roon through the hole, and the
+            // page's parts over the sidebar stay on top of it in their own
+            // colors. (While Now Playing covers Roon it waits there
+            // see-through, see skin.rs.)
             let hole_there = VISIBLE_HOLE.lock().unwrap().is_some() || COVERED_HOLE.lock().unwrap().is_some();
-            if let Some(filter) = crate::skin::filter_window().filter(|_| hole_there) {
-                let above = GetWindow(host, GW_HWNDPREV).ok().filter(|w| !w.is_invalid());
-                if above != Some(filter) {
+            let filter = crate::skin::filter_window().filter(|_| hole_there);
+            if let Some(filter) = filter {
+                if !crate::skin::right_below(host, filter) {
                     let _ = SetWindowPos(
                         filter,
-                        Some(above.unwrap_or(HWND_TOP)),
+                        Some(host),
                         0,
                         0,
                         0,
@@ -1561,11 +1689,12 @@ mod windows_wrapper {
                     );
                 }
             }
-            // Roon right below us
-            if GetWindow(host, GW_HWNDNEXT).ok() != Some(roon) {
+            // Roon right below that (below us when there's no filter)
+            let over_roon = filter.unwrap_or(host);
+            if GetWindow(over_roon, GW_HWNDNEXT).ok() != Some(roon) {
                 let _ = SetWindowPos(
                     roon,
-                    Some(host),
+                    Some(over_roon),
                     0,
                     0,
                     0,
@@ -2003,6 +2132,9 @@ mod windows_wrapper {
                 start_drag(hwnd);
             } else if msg == WM_EXITSIZEMOVE && DRAGGING.load(Ordering::Relaxed) {
                 end_drag(hwnd);
+            } else if msg == WM_EXITSIZEMOVE && cancel_pending() {
+                // (let go before the live picture came: Roon followed along)
+                drag_log("end (before the live picture)");
             }
         }
         if msg == WM_WINDOWPOSCHANGING && STATE.load(Ordering::Relaxed) == OPEN {
@@ -2198,6 +2330,13 @@ mod windows_wrapper {
     /// page's panels stay on top), closes the hole, and moves Roon just off
     /// the screen, where it waits out the drag. Only when Roon is showing
     /// through the hole right now.
+    ///
+    /// With the sidebar filter showing, the first step only asks the filter
+    /// to get ready for it (skin.rs, on its own thread: its cut-out for the
+    /// page's parts, the Wrapper in its picture), and Roon follows along as
+    /// usual meanwhile; a later step, once it's ready, does the rest, going
+    /// under the filter in the same go. Doing it all at once showed Roon's
+    /// own grey sidebar for a moment, until the filter caught up.
     fn start_drag(host: HWND) {
         use windows::Win32::Foundation::TRUE;
         use windows::Win32::Graphics::Dwm::{
@@ -2206,25 +2345,57 @@ mod windows_wrapper {
             DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
         };
         use windows::Win32::UI::WindowsAndMessaging::{
-            SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+            SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+        };
+        let give_up = |why: &str| {
+            cancel_pending();
+            drag_log(&format!("start: no live picture ({why})"));
         };
         let Some(hole) = *VISIBLE_HOLE.lock().unwrap() else {
-            return;
+            return give_up("Roon isn't showing through the hole");
         };
         let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
-            return;
+            return give_up("Roon's window isn't showing");
         };
         let (Some(origin), Some(host_rect), Some((client_w, client_h))) =
             (client_origin(host), window_rect(host), client_size(host))
         else {
-            return;
+            return give_up("no size for our window");
         };
         // Somewhere off the screen for Roon to wait (none: no live picture,
         // Roon just follows the drag as before)
         let Some(away) = off_screen_spot(roon) else {
-            return;
+            return give_up("no spot off the screen for Roon");
         };
-        let covers = VISIBLE_COVERS.lock().unwrap().clone();
+        let filter = crate::skin::filter_window();
+        let pending = *DRAG_PENDING.lock().unwrap();
+        match pending {
+            None => {
+                // The page's parts over the hole, from its corner (the hole
+                // moves with the drag from here on, these don't)
+                let covers = VISIBLE_COVERS.lock().unwrap().clone();
+                *DRAG_CUTS.lock().unwrap() = covers.iter().map(|c| [c[0] - hole[0], c[1] - hole[1], c[2], c[3]]).collect();
+                if filter.is_some() {
+                    DRAG_READY.store(false, Ordering::Relaxed);
+                    *DRAG_PENDING.lock().unwrap() = Some(Instant::now());
+                    drag_log(&format!("start: hole {hole:?}, covers {covers:?}, waiting for the filter"));
+                    return;
+                }
+            }
+            Some(at) => {
+                let ready = DRAG_READY.load(Ordering::Relaxed);
+                if !ready && at.elapsed() < DRAG_READY_WAIT {
+                    return;
+                }
+                drag_log(&format!(
+                    "start: the filter {} after {} ms",
+                    if ready { "ready" } else { "not ready, going ahead" },
+                    at.elapsed().as_millis()
+                ));
+            }
+        }
+        cancel_pending();
+        let covers: Vec<[i32; 4]> = DRAG_CUTS.lock().unwrap().iter().map(|c| [hole[0] + c[0], hole[1] + c[1], c[2], c[3]]).collect();
         let pieces = subtract(hole, &covers);
 
         let mut thumbnails = Vec::new();
@@ -2265,8 +2436,24 @@ mod windows_wrapper {
             }
         }
         if thumbnails.is_empty() {
+            drag_log("start: no live picture (Windows made none)");
             return;
         }
+        // Under the filter (ready over Roon's sidebar), so it recolors the
+        // live picture from the first frame. Only while it's right below
+        // us, so we don't go under anything else; otherwise it comes up on
+        // its own (skin.rs).
+        // SAFETY: plain window queries, and our own window moved.
+        let under = unsafe {
+            filter.filter(|f| crate::skin::right_below(host, *f)).is_some_and(|f| {
+                SetWindowPos(host, Some(f), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE).is_ok()
+            })
+        };
+        drag_log(&format!(
+            "start: {} pieces, {} live pictures, Roon waits at {away:?}, under the filter {under}",
+            pieces.len(),
+            thumbnails.len(),
+        ));
         THUMBNAILS.lock().unwrap().extend(thumbnails);
         DRAGGING.store(true, Ordering::Relaxed);
 
@@ -2332,11 +2519,12 @@ mod windows_wrapper {
         {
             // SAFETY: valid window handles.
             unsafe {
-                let _ = SetWindowPos(roon, Some(host), now.0 + ox, now.1 + oy, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+                let _ = SetWindowPos(roon, Some(roon_anchor(host)), now.0 + ox, now.1 + oy, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
         DRAGGING.store(false, Ordering::Relaxed);
         *LAST_MOVE.lock().unwrap() = None;
+        drag_log("end");
         if let Some(app) = APP.get() {
             let app = app.clone();
             tauri::async_runtime::spawn(async move { sync(&app) });
@@ -2391,14 +2579,25 @@ mod windows_wrapper {
     /// hole (its sidebar, say) while the page has something over the rest of
     /// it: the page gets a "roon-click" event with the screen point and
     /// closes its Wrapped page, like any Roon page would get out of the way.
-    /// The hook only looks; every click goes on to Roon. Set up on the main
-    /// thread, whose message loop delivers the hook's calls.
+    /// The hook only looks; every click goes on to Roon. It runs on a
+    /// thread of its own with its own message loop (it was on the main
+    /// thread: whenever that was held up, Windows waited on the hook for
+    /// every mouse move in every app, so the whole PC crawled with almost no
+    /// CPU used, Vulk 2026-10-23, and a dev build stuck writing to a stalled
+    /// terminal kept it up until the terminal closed).
     fn watch_clicks() {
-        use windows::Win32::UI::WindowsAndMessaging::{SetWindowsHookExW, WH_MOUSE_LL};
-        // SAFETY: a valid callback that lives for the whole program.
-        unsafe {
-            let _ = SetWindowsHookExW(WH_MOUSE_LL, Some(on_mouse), None, 0);
-        }
+        use windows::Win32::UI::WindowsAndMessaging::{GetMessageW, SetWindowsHookExW, MSG, WH_MOUSE_LL};
+        let _ = std::thread::Builder::new().name("mouse-hook".into()).spawn(|| {
+            // SAFETY: a valid callback that lives for the whole program; the
+            // loop only delivers the hook's calls on this thread.
+            unsafe {
+                if SetWindowsHookExW(WH_MOUSE_LL, Some(on_mouse), None, 0).is_err() {
+                    return;
+                }
+                let mut msg = MSG::default();
+                while GetMessageW(&mut msg, None, 0, 0).0 > 0 {}
+            }
+        });
     }
 
     unsafe extern "system" fn on_mouse(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {

@@ -1058,7 +1058,8 @@ async fn build(app: &AppHandle, picks: Vec<DivePick>, text: &str, plan: &DivePla
         }
         albums.push(Album { artist: i, album, songs, about: Default::default(), sound: Vec::new() });
     }
-    let hearing = crate::sound::Sound::ready(app);
+    // (tier 3 listens when it's set up and Deep Dive's switch for it is on)
+    let hearing = crate::sound::Sound::ready(app) && settings.dive_tier3;
     let jobs: Vec<Job<crate::judge::AlbumBrief>> = albums
         .iter()
         .map(|al| {
