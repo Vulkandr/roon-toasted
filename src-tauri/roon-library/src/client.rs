@@ -274,6 +274,11 @@ pub struct ArtistAlbum {
     pub popularity: Option<f64>,
     /// The cover's image key for the Core's image service, when there is one.
     pub image_key: Option<String>,
+    /// A live album: Roon's IsLive on it, or its title says so.
+    pub live: bool,
+    /// The Core's id for the album's main artist, as Roon links it (a
+    /// discography can hold another artist's albums of the same name).
+    pub performer_id: Option<u64>,
 }
 
 /// An album as a page header or a search hit (see `album_card`).
@@ -1810,17 +1815,9 @@ impl LibraryClient {
         }
         let total = count(&self.inner.graph.lock().unwrap()).unwrap_or(0).max(0) as usize;
         let target = total.min(limit);
-        // This query's plays: what its new rows point at, and any play that
-        // is new to the graph (oids, each once)
-        let mine = |g: &ObjectGraph| -> Vec<u64> {
-            let mut oids: Vec<u64> = history_rows(g).filter(|r| !before.contains(&r.oid)).filter_map(|r| r.ref_field("Data")).collect();
-            oids.extend(g.find_by_type("HistoryPlay").filter(|p| !before.contains(&p.oid)).map(|p| p.oid));
-            oids.sort_unstable();
-            oids.dedup();
-            oids
-        };
-        let new_rows = |g: &ObjectGraph| history_rows(g).filter(|r| !before.contains(&r.oid)).count();
-        let arrived = |g: &ObjectGraph| new_rows(g).max(mine(g).len());
+        // This query's rows and plays, gathered as they come in (see
+        // `HistoryScan`): each look only goes over what's new
+        let mut scan = HistoryScan::default();
         let pages = target.div_ceil(page_size);
         // (for the log: what had arrived after each page)
         let mut seen_after: Vec<usize> = Vec::new();
@@ -1833,29 +1830,47 @@ impl LibraryClient {
                 return Err(RemotingError::Failed { method: format!("RetainPage({page})"), status: res.status }.into());
             }
             let want = total.min((page + 1) * page_size);
-            // The page's rows, then their plays' tracks and albums (names),
-            // up to 5 s
-            self.wait_until(Duration::from_secs(5), |g| arrived(g) >= want).await;
-            self.wait_until(Duration::from_secs(3), |g| {
-                mine(g)
-                    .into_iter()
-                    .all(|oid| g.get(oid).is_some_and(|p| p.has_field("Time") && g.deref(p.field("Track")).is_some_and(|t| t.has_field("Title"))))
-            })
-            .await;
+            let had = scan.plays.len();
+            // The page's rows (up to 5 s), then their plays' tracks and
+            // albums (names, up to 3 s more)
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                scan.look(&self.inner.graph.lock().unwrap(), before);
+                if scan.arrived() >= want || Instant::now() > deadline || !self.is_connected() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            let deadline = Instant::now() + Duration::from_secs(3);
+            loop {
+                {
+                    let g = self.inner.graph.lock().unwrap();
+                    scan.look(&g, before);
+                    scan.check_described(&g);
+                }
+                if scan.waiting.is_empty() || Instant::now() > deadline || !self.is_connected() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            // (one that never got its song, a track Roon no longer has,
+            // is given up on: it doesn't hold up every page after it)
+            scan.given_up += scan.waiting.len();
+            scan.waiting.clear();
             let _ = self.inner.remoting.call_no_reply(query, SIG_HISTORY_RELEASE, arg.as_bytes());
-            seen_after.push(arrived(&self.inner.graph.lock().unwrap()));
+            seen_after.push(scan.arrived());
             progress(want, target);
             // Reached what the caller already has: no need for older pages
             if let Some(stop_at) = stop_at {
                 let g = self.inner.graph.lock().unwrap();
-                let reached = mine(&g).into_iter().filter_map(|oid| g.get(oid)).filter_map(|p| describe_play(&g, p)).any(|p| p.played_at <= stop_at);
+                let reached = scan.order[had..].iter().filter_map(|oid| g.get(*oid)).filter_map(|p| describe_play(&g, p)).any(|p| p.played_at <= stop_at);
                 if reached {
                     break;
                 }
             }
         }
         let g = self.inner.graph.lock().unwrap();
-        let ours = mine(&g);
+        let ours: Vec<u64> = scan.order.clone();
         let mut seen = HashSet::new();
         let mut plays: Vec<Play> = ours
             .iter()
@@ -1867,7 +1882,7 @@ impl LibraryClient {
         plays.truncate(target);
         let all = g.find_by_type("HistoryPlay").count();
         let fresh = g.find_by_type("HistoryPlay").filter(|o| !before.contains(&o.oid)).count();
-        let rows = new_rows(&g);
+        let rows = scan.rows.len();
         let row_fields: Vec<String> = history_rows(&g)
             .find(|r| !before.contains(&r.oid))
             .map(|r| r.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k).to_string()).collect())
@@ -1882,12 +1897,13 @@ impl LibraryClient {
         let types: Vec<String> = g.type_counts("History").into_iter().map(|(t, n)| format!("{t} {n}")).collect();
         let query_fields: Vec<String> = g.get(query).map(|q| q.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k).to_string()).collect()).unwrap_or_default();
         let debug = format!(
-            "total {total}, target {target}, pages read {} of {pages} in {} s, stop at {stop_at:?}; objects in the graph before {}; plays after {all} ({fresh} new to the graph), this read's rows {rows} pointing at {} plays, described {}; arrived after each page {}; types {}; query fields {}; row fields {}",
+            "total {total}, target {target}, pages read {} of {pages} in {} s, stop at {stop_at:?}; objects in the graph before {}; plays after {all} ({fresh} new to the graph), this read's rows {rows} pointing at {} plays, described {} ({} never named); arrived after each page {}; types {}; query fields {}; row fields {}",
             seen_after.len(),
             started.elapsed().as_secs(),
             before.len(),
             ours.len(),
             plays.len(),
+            scan.given_up,
             shown(&seen_after),
             types.join(", "),
             query_fields.join(", "),
@@ -4394,13 +4410,82 @@ fn describe_album(g: &ObjectGraph, a: &RoonObject, group: &str, profile: Option<
         released: date_of(a.field("OriginalReleaseDate")).or_else(|| date_of(a.field("ReleaseDate"))),
         popularity: number_of(a.field("Popularity")),
         image_key: image_key(g, a, "Image"),
+        live: a.field("IsLive").and_then(Value::as_bool) == Some(true) || looks_live(a.str_field("Title").unwrap_or_default()),
+        performer_id: g
+            .deref(a.field("MainPerformers"))
+            .and_then(|list| list.items.as_ref()?.first().copied())
+            .and_then(|oid| g.get(oid))
+            .and_then(|p| p.long_field("PerformerId")),
     }
 }
 
 /// The rows of history queries (VirtualQueryElement<HistoryPlay>), each
 /// pointing at its play by Data.
 fn history_rows(g: &ObjectGraph) -> impl Iterator<Item = &RoonObject> {
-    g.objects.values().filter(|r| r.type_name.contains("VirtualQueryElement<") && r.type_name.contains("HistoryPlay"))
+    g.objects.values().filter(|r| is_history_row(r))
+}
+
+fn is_history_row(o: &RoonObject) -> bool {
+    o.type_name.ends_with("HistoryPlay>") && o.type_name.contains("VirtualQueryElement<")
+}
+
+fn is_history_play(o: &RoonObject) -> bool {
+    o.type_name.ends_with(".HistoryPlay") || o.type_name == "HistoryPlay"
+}
+
+/// A history read's rows and plays as they come in: one pass over the
+/// graph per look with a cheap type test, the sets only for the matches,
+/// and the names waited for only on the plays not yet described. (Looking
+/// at everything every time, sorting and checking every play read so far,
+/// held the graph's lock long enough to slow the pushes down: a full read
+/// took three times as long.)
+#[derive(Default)]
+struct HistoryScan {
+    /// This read's rows.
+    rows: HashSet<u64>,
+    /// The plays they point at, or new to the graph (each once), and in
+    /// the order they came.
+    plays: HashSet<u64>,
+    order: Vec<u64>,
+    /// Plays still without their time or song name.
+    waiting: Vec<u64>,
+    /// Plays given up on that way (for the log).
+    given_up: usize,
+}
+
+impl HistoryScan {
+    fn look(&mut self, g: &ObjectGraph, before: &HashSet<u64>) {
+        for o in g.objects.values() {
+            let play = if is_history_row(o) {
+                if before.contains(&o.oid) || self.rows.contains(&o.oid) {
+                    continue;
+                }
+                // (a row only counts once it says which play it is)
+                let Some(play) = o.ref_field("Data") else { continue };
+                self.rows.insert(o.oid);
+                play
+            } else if is_history_play(o) {
+                if before.contains(&o.oid) {
+                    continue;
+                }
+                o.oid
+            } else {
+                continue;
+            };
+            if self.plays.insert(play) {
+                self.order.push(play);
+                self.waiting.push(play);
+            }
+        }
+    }
+
+    fn arrived(&self) -> usize {
+        self.rows.len().max(self.plays.len())
+    }
+
+    fn check_described(&mut self, g: &ObjectGraph) {
+        self.waiting.retain(|oid| !g.get(*oid).is_some_and(|p| p.has_field("Time") && g.deref(p.field("Track")).is_some_and(|t| t.has_field("Title"))));
+    }
 }
 
 /// What tells one HistoryPlay from another (its id, or failing that its
@@ -4816,7 +4901,7 @@ fn looks_compilation(album: &str) -> bool {
     .any(|m| w.contains(m))
 }
 
-fn looks_live(title: &str) -> bool {
+pub fn looks_live(title: &str) -> bool {
     let t = title.to_lowercase();
     ["(live", "[live", "- live", "live at ", "live in ", "live from ", "unplugged", "in concert", "live session", "live version"]
         .iter()

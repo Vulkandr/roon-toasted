@@ -884,9 +884,14 @@ mod windows_wrapper {
             }
         }
 
-        STATE.store(OPEN, Ordering::Relaxed);
+        let was = STATE.swap(OPEN, Ordering::Relaxed);
         check_soon();
         super::button::refresh(app);
+        // Opened (not already open): the page shows what Settings' Default
+        // Menu says
+        if was != OPEN {
+            let _ = app.emit_to(WRAPPER_WINDOW, "wrapper-opened", ());
+        }
         *LAST_REGION.lock().unwrap() = None;
         // A remembered size still has to fit the screen it opens on
         crate::fit_to_screen(app, WRAPPER_WINDOW, false);

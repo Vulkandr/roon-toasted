@@ -785,7 +785,12 @@ pub async fn library_save_queue(app: AppHandle, zone_id: String, name: String, s
 /// The Wrapped radio: a mix of the artists' top songs (by handle), queued
 /// on the zone at once (see `play_artist_mix`).
 #[tauri::command]
-pub async fn library_play_artist_mix(app: AppHandle, zone_id: String, artists: Vec<String>, options: MixOptions) -> Result<MixPlayed, String> {
+pub async fn library_play_artist_mix(app: AppHandle, zone_id: String, artists: Vec<String>, mut options: MixOptions) -> Result<MixPlayed, String> {
+    // (no live recordings while Settings' Live albums is off, whatever the
+    // radio's own switch says)
+    if !crate::wrapped::live_albums(&app) {
+        options.include_live = false;
+    }
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     let played = client.play_artist_mix(&zone_id, &artists, &options).await.map_err(describe)?;

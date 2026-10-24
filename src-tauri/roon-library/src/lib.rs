@@ -27,5 +27,5 @@ pub mod graph;
 pub mod remoting;
 pub mod wire;
 
-pub use client::{read_state, AddMode, AlbumCard, AlbumExtras, AlbumInfo, ArtistCard, ArtistExtras, AudioQuality, AlbumTrack, ArtistAlbum, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, order_mix, Play, PlayHow, PlaylistCard, QueueSong, RadioSeeds, RecentEntry, SearchHits, TopTrack, TrackFile, LibraryTrack, QueueTracks, TrackEntry, PlaylistEntry, TagCard, TagContents, ListenLaterEntry, TrackHit, TrackInfo};
+pub use client::{looks_live, read_state, AddMode, AlbumCard, AlbumExtras, AlbumInfo, ArtistCard, ArtistExtras, AudioQuality, AlbumTrack, ArtistAlbum, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, order_mix, Play, PlayHow, PlaylistCard, QueueSong, RadioSeeds, RecentEntry, SearchHits, TopTrack, TrackFile, LibraryTrack, QueueTracks, TrackEntry, PlaylistEntry, TagCard, TagContents, ListenLaterEntry, TrackHit, TrackInfo};
 pub use connection::{broker_id_from_core_id, DEFAULT_PORT};

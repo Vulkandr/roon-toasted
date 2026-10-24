@@ -45,6 +45,7 @@ const muteBtn = $("#mute");
 const volume = $("#volume");
 const volumeValue = $("#volume-value");
 const libraryBtn = $("#library-btn");
+const barDiveBtn = $("#bar-dive-btn");
 const queueBtn = $("#queue-btn");
 const queuePanel = $("#queue-panel");
 const queueSummary = $("#queue-summary");
@@ -1643,22 +1644,10 @@ function setStageOpen(open) {
       pieces[id].querySelector(".piece-content").append(control);
       parked[id] = { control, placeholder };
     }
-    // Like Roon: the heart sits right after the title
-    const heartHome = document.createComment("the heart is by the title");
-    libraryBtn.replaceWith(heartHome);
-    const titleRow = document.createElement("div");
-    titleRow.className = "title-row";
-    title.replaceWith(titleRow);
-    titleRow.append(title, libraryBtn);
-    parked.heart = { heartHome, titleRow };
+    // (the heart comes along by the title, where it always is: Roon's way)
   } else {
     if (editing) setEditing(false);
     dropWaves();
-    if (parked.heart) {
-      parked.heart.titleRow.replaceWith(title);
-      parked.heart.heartHome.replaceWith(libraryBtn);
-      delete parked.heart;
-    }
     for (const id of PIECE_IDS) {
       const home = parked[id];
       if (!home) continue;
@@ -3275,6 +3264,14 @@ function discoverSeen() {
   markDiscoverFresh();
 }
 discoverBtn.addEventListener("click", () => openWrappedPage({ page: "discover" }));
+// (in the bar, or with the controls in Now Playing: then its lines go
+// there, and Now Playing closes for the Deep Dive page)
+barDiveBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (editing) return;
+  if (stage.hidden) diveFromPlaying(wrappedToast, async () => {});
+  else diveFromPlaying(wrappedToastStage, closeStage);
+});
 // Switched in Toasted's Settings window (or here): the star, thumbs and
 // menu follow, and an open Settings or Discover page redraws
 listen("wrapped-settings-changed", (event) => {
@@ -3505,7 +3502,9 @@ for (const btn of document.querySelectorAll(".rate-btn[data-vote]")) {
 }
 ratingReady = true;
 
-libraryBtn.addEventListener("click", async () => {
+libraryBtn.addEventListener("click", async (event) => {
+  // (by the song's name in the bar: not a click that opens Now Playing)
+  event.stopPropagation();
   const track = zone ? libraryTracks[zone.zoneId] : null;
   if (!zone || !track || libraryBusy) return;
   const zoneId = zone.zoneId;
@@ -4951,7 +4950,11 @@ const WRAPPED_PAGES = {
       open.innerHTML = `${WRAPPED_ICONS[here.icon] || ""}<span>${here.label}</span>`;
       open.title = "Open what Roon is showing now";
       open.addEventListener("click", () => (here.find ? wrappedFindOnScreen() : openWrappedPage(here)));
-      wrappedBody.append(open);
+      // (a bar of its own: Refresh goes at its right end, see paintHome)
+      const bar = document.createElement("div");
+      bar.className = "wrapped-here-bar";
+      bar.append(open);
+      wrappedBody.append(bar);
     }
     if (wrappedNeedsLibrary()) return;
     const holder = document.createElement("div");
@@ -6406,14 +6409,18 @@ async function wrappedRadioPage(entry, ticket) {
   const livePill = document.createElement("button");
   const savePill = document.createElement("button");
   const paintSwitches = () => {
-    livePill.classList.toggle("selected", radioPrefs.includeLive);
+    // (Settings' Live albums off: no live recordings in the radio either)
+    const liveAllowed = wrappedSettings?.liveAlbums === true;
+    livePill.disabled = !liveAllowed;
+    livePill.title = liveAllowed ? "Live albums and songs are left out unless this is on" : "Live albums are off in Settings (Wrapped Discovery)";
+    livePill.classList.toggle("selected", liveAllowed && radioPrefs.includeLive);
     savePill.classList.toggle("selected", radioPrefs.savePlaylist);
     libraryPill.classList.toggle("selected", radioPrefs.libraryOnly && !discover());
     libraryPill.disabled = discover();
     libraryPill.title = discover() ? "Discover seeds are outside your library" : "Play only tracks in your library";
   };
   for (const [pill, label, key, tip] of [
-    [livePill, "Include live recordings", "includeLive", "Live albums and songs are left out unless this is on"],
+    [livePill, "Include live recordings", "includeLive", ""],
     [libraryPill, "Library tracks only", "libraryOnly", ""],
     [savePill, "Save as playlist", "savePlaylist", "Also keep the mix as a Roon playlist"],
   ]) {
@@ -6468,7 +6475,7 @@ async function wrappedRadioPage(entry, ticket) {
     const on = zone ? ` on ${zone.name}` : "";
     const each = radioPrefs.perArtist;
     const top = each === 1 ? "The top song" : `Up to ${each} top songs`;
-    const live = radioPrefs.includeLive ? "" : ", no live recordings";
+    const live = radioPrefs.includeLive && wrappedSettings?.liveAlbums === true ? "" : ", no live recordings";
     if (discover()) {
       status.textContent = n
         ? `${top} by each of the ${n} artist${n === 1 ? "" : "s"} below (none by ${entry.name}), one per album${live}, mixed so no artist plays twice in a row${on}. Click an artist to leave it out.`
@@ -6588,7 +6595,7 @@ async function wrappedRadioPage(entry, ticket) {
         artists,
         options: {
           perArtist: radioPrefs.perArtist,
-          includeLive: radioPrefs.includeLive,
+          includeLive: radioPrefs.includeLive && wrappedSettings?.liveAlbums === true,
           libraryOnly: radioPrefs.libraryOnly && !discover(),
         },
       });
@@ -6845,10 +6852,11 @@ function paintHome(holder, status, ticket) {
       ),
     );
   }
-  if (status.newFromFavorites.length) rows.append(homeRow("favorites", "New albums from artists you listen to", status.newFromFavorites.map(albumItem), openHomeAlbum, ban, "Albums from the last year by the artists you listen to most, newest first"));
-  if (status.newFromSuggested.length) rows.append(homeRow("suggested", "New albums from artists you may like", status.newFromSuggested.map(albumItem), openHomeAlbum, ban, "Albums from the last year by the artists suggested for you"));
+  if (status.newFromFavorites.length) rows.append(homeRow("favorites", "New albums from artists you listen to", status.newFromFavorites.map(albumItem), openHomeAlbum, ban, "Full albums (no singles or EPs) from the last year by the artists you listen to most, newest first"));
+  if (status.newFromSuggested.length) rows.append(homeRow("suggested", "New albums from artists you may like", status.newFromSuggested.map(albumItem), openHomeAlbum, ban, "Full albums (no singles or EPs) from the last year by the artists suggested for you"));
+  if (status.missed?.length) rows.append(homeRow("missed", "Newer albums from your favorite artists you may have missed", status.missed.map(albumItem), openHomeAlbum, ban, "Full albums from the last three years (not the last two months) by the artists you play most, that you haven't played a song of and don't have in your library. The artists you play most come first, three albums each at most"));
   // Refresh, top right of the page; when it was put together on hover
-  holder.querySelector(".wrapped-home-corner")?.remove();
+  (holder.parentElement || holder).querySelectorAll(".wrapped-home-corner").forEach((el) => el.remove());
   const corner = document.createElement("div");
   corner.className = "wrapped-home-corner";
   const again = document.createElement("button");
@@ -6864,7 +6872,11 @@ function paintHome(holder, status, ticket) {
     `${status.builtAt ? `Put together ${historyWhen(status.builtAt)}. ` : ""}Refresh looks for artists for you and new albums again. New albums are also looked for daily, artists every two weeks.`,
   );
   corner.append(tip);
-  holder.prepend(corner);
+  // (with Home's This album / This artist button above the rows: on its
+  // line, at the page's top, not pushed down with the rows)
+  const bar = holder.parentElement?.querySelector(":scope > .wrapped-here-bar");
+  if (bar) bar.append(corner);
+  else holder.prepend(corner);
   holder.querySelector(".wrapped-home-rows")?.remove();
   // (between the rows from your listening: above, Your Wrapped Playlists
   // and Your week; below, Forgotten favorites and On this day)
@@ -8424,7 +8436,35 @@ WRAPPED_PAGES.settings = async function () {
     });
     onOff.append(pill);
   }
-  discovery.append(onOff);
+  // Live albums, small on the same row (it's for everything Wrapped picks:
+  // Home's rows, Discover's lists, Deep Dive and the radio; off by default)
+  const liveBox = document.createElement("div");
+  liveBox.className = "settings-live";
+  const liveLabel = document.createElement("span");
+  liveLabel.textContent = "Live albums";
+  const livePills = document.createElement("div");
+  livePills.className = "wrapped-tabs small";
+  const liveOn = wrappedSettings.liveAlbums === true;
+  for (const [value, label] of [
+    [false, "Off"],
+    [true, "On"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = `wrapped-tab${liveOn === value ? " selected" : ""}`;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      if (liveOn === value) return;
+      await save({ liveAlbums: value });
+      redrawSettingsInPlace();
+    });
+    livePills.append(pill);
+  }
+  liveBox.append(liveLabel, livePills);
+  hoverTip(liveBox, "Live albums and songs in what Wrapped picks for you: Home's new albums and suggestions, Discover's lists, Deep Dive and the radio. Off leaves them all out.");
+  const discoveryRow = document.createElement("div");
+  discoveryRow.className = "settings-discovery-row";
+  discoveryRow.append(onOff, liveBox);
+  discovery.append(discoveryRow);
 
   // The Last.fm key: inside Tier 1 while Wrapped Discovery is on (it's what
   // switches tier 1 on), on its own otherwise (Similar and the radio use it
@@ -9576,8 +9616,9 @@ WRAPPED_PAGES.settings = async function () {
     ),
   );
 
-  // Side menu: which one shows when Wrapped opens
-  const sideCard = card("Side menu", "Which side menu shows when Wrapped opens: Wrapped's own, or Roon's sidebar. The arrow next to the Wrapped button switches between them any time.");
+  // Default Menu: what shows when Wrapped opens (see applyDefaultMenu),
+  // and which side menu comes with a Wrapped page
+  const sideCard = card("Default Menu", "What shows when Wrapped opens: Wrapped's side menu and Home page, or Roon's own sidebar and page. Opening a Wrapped page brings this side menu with it too. The arrow next to the Wrapped button switches menus any time.");
   sideCard.head.append(pillRow(
     [
       ["wrapped", "Wrapped"],
@@ -10963,6 +11004,7 @@ const ONBOARDING_TOURS = {
     { find: () => homeRowEl("Artists for you"), text: "Artists for you are picked from your all-time favorites by their tags, not by what's popular. Hover a card for an X to ban an artist you never want suggested again, anywhere in Wrapped." },
     { find: () => homeRowEl("New albums from artists you listen to"), text: "New albums from the artists you play most, newest first, so a release you missed doesn't slip by." },
     { find: () => homeRowEl("New albums from artists you may like"), text: "And new albums from artists suggested for you. Every row shows one line that fits; click its title for three lines, Keep looking for more." },
+    { find: () => homeRowEl("Newer albums from your favorite artists you may have missed"), text: "Newer albums from your favorite artists you may have missed: albums from the last three years that you haven't played a song of, from the artists you play most first. Easy to have slipped past, even when they're no longer new." },
     { find: () => homeRowEl("Forgotten favorites"), text: "Forgotten favorites are albums you once played a lot but haven't touched in a year or more. Worth a revisit." },
     { find: () => homeRowEl("On this day"), text: "On this day shows what you were playing on today's date in earlier years." },
     // (only pointed at: on a first visit Home was just put together, so
@@ -11564,9 +11606,12 @@ function showWrappedRecent() {
 // The third button: Deep Dive with tier 2, Roon Radio from the song without
 // it (repainted when the settings or the local model change, and on hover)
 function paintPieceDive() {
+  const dive = tier2Ready();
+  // (the bar's Deep Dive: only with tier 2; the bar has its own radio)
+  barDiveBtn.hidden = !dive;
+  if (dive && !barDiveBtn.firstChild) barDiveBtn.innerHTML = diveIcon();
   const btn = document.querySelector('.wrapped-piece-btn[data-action="dive"]');
   if (!btn) return;
-  const dive = tier2Ready();
   if (btn.dataset.mode === (dive ? "dive" : "radio")) return;
   btn.dataset.mode = dive ? "dive" : "radio";
   btn.innerHTML = dive ? diveIcon() : RADIO_ICON;
@@ -11614,37 +11659,44 @@ for (const btn of document.querySelectorAll(".wrapped-piece-btn")) {
       await closeStage();
       if (stage.hidden) openWrappedPage({ page: "album", handle: card.handle });
     } else if (action === "dive") {
-      // The playing song into Deep Dive's picks, as its button on an album
-      // page does
-      const id = track.trackId ?? track.libraryTrackId;
-      if (id == null) return wrappedToastStage("Roon gave no id for this song.");
-      // Without tier 2: Roon Radio from the song, Now Playing stays
-      if (!tier2Ready()) {
-        paintPieceDive();
-        try {
-          const handle = await invoke("library_track_handle", { trackId: Number(id) });
-          await invoke("library_play_radio", { zoneId: zone.zoneId, seeds: { tracks: [handle] } });
-          wrappedToastStage(`Radio from "${track.title}" on ${zone.name}`);
-        } catch (err) {
-          wrappedToastStage(typeof err === "string" ? err : "Roon didn't start the radio.");
-        }
-        return;
-      }
-      let handle;
-      let card = null;
-      try {
-        [handle, card] = await Promise.all([
-          invoke("library_track_handle", { trackId: Number(id) }),
-          invoke("library_playing_album", { zoneId: zone.zoneId }).catch(() => null),
-        ]);
-      } catch (err) {
-        return wrappedToastStage(String(err));
-      }
-      const artist = (card?.artist || track.album?.artist || "").split(/ \/ |, /)[0];
-      await closeStage();
-      if (stage.hidden) divePickAdd({ kind: "song", handle, title: track.title, artist, album: card?.title || "", albumHandle: card?.handle, imageKey: card?.imageKey });
+      diveFromPlaying(wrappedToastStage, closeStage);
     }
   });
+}
+
+// The playing song into Deep Dive's picks, as its button on an album page
+// does (Now Playing's Wrapped menu and the bar's button); without tier 2,
+// Roon Radio from it. `say` puts up a line, `leave` closes Now Playing.
+async function diveFromPlaying(say, leave) {
+  const track = zone ? libraryTracks[zone.zoneId] : null;
+  if (!libraryReady || !track) return say("Wrapped needs the Hearts & Library link for this.");
+  const id = track.trackId ?? track.libraryTrackId;
+  if (id == null) return say("Roon gave no id for this song.");
+  // Without tier 2: Roon Radio from the song, Now Playing stays
+  if (!tier2Ready()) {
+    paintPieceDive();
+    try {
+      const handle = await invoke("library_track_handle", { trackId: Number(id) });
+      await invoke("library_play_radio", { zoneId: zone.zoneId, seeds: { tracks: [handle] } });
+      say(`Radio from "${track.title}" on ${zone.name}`);
+    } catch (err) {
+      say(typeof err === "string" ? err : "Roon didn't start the radio.");
+    }
+    return;
+  }
+  let handle;
+  let card = null;
+  try {
+    [handle, card] = await Promise.all([
+      invoke("library_track_handle", { trackId: Number(id) }),
+      invoke("library_playing_album", { zoneId: zone.zoneId }).catch(() => null),
+    ]);
+  } catch (err) {
+    return say(String(err));
+  }
+  const artist = (card?.artist || track.album?.artist || "").split(/ \/ |, /)[0];
+  await leave();
+  if (stage.hidden) divePickAdd({ kind: "song", handle, title: track.title, artist, album: card?.title || "", albumHandle: card?.handle, imageKey: card?.imageKey });
 }
 
 // A line at the bottom of Now Playing for a moment
@@ -11802,10 +11854,31 @@ listen("library-track", (event) => {
 });
 invoke("roon_queue").then(renderQueue);
 listen("roon-queue", (event) => renderQueue(event.payload));
-// (Wrapped's page size from the start)
+// (Wrapped's page size from the start, and what shows: Settings' Default
+// Menu)
 invoke("wrapped_settings_get")
   .then((s) => {
     if (!wrappedSettings) wrappedSettings = s;
     applyPageSize();
+    applyDefaultMenu();
   })
   .catch(() => {});
+// (opened again, from the tray or with Roon: the same)
+listen("wrapper-opened", () => applyDefaultMenu());
+
+// What shows when Wrapped opens, as Settings' Default Menu says: Wrapped's
+// side menu and its Home page, or Roon's own sidebar and page
+function applyDefaultMenu() {
+  if (!wrappedSettings) return;
+  if (wrappedSettings.sideMenu === "wrapped") {
+    // (already showing it: left as it is)
+    if (!wrapped.hidden && !wrappedSide.hidden && wrappedStack.length === 1 && wrappedStack[0].page === "home") return;
+    wrappedStack = [{ page: "home" }];
+    wrappedForward = [];
+    if (wrappedSide.hidden) setWrappedSide(true);
+    setWrappedOpen(true);
+  } else {
+    if (!wrapped.hidden) setWrappedOpen(false);
+    if (!wrappedSide.hidden) setWrappedSide(false);
+  }
+}

@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use roon_library::LibraryClient;
@@ -39,6 +39,14 @@ const NEW_DAYS: i64 = 365;
 const FAVORITES: usize = 80;
 /// Roon lookups at once.
 const AT_ONCE: usize = 4;
+/// Your most played artists looked at for albums you may have missed.
+const MISSED_ARTISTS: usize = 100;
+/// Albums you may have missed: released from this many days ago...
+const MISSED_FROM_DAYS: i64 = 1095;
+/// ...to this many (newer ones are new albums).
+const MISSED_TO_DAYS: i64 = 60;
+/// At most this many of one artist's albums in that row.
+const MISSED_PER_ARTIST: usize = 3;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -75,6 +83,11 @@ pub struct HomeData {
     pub artists: Vec<HomeArtist>,
     pub new_from_favorites: Vec<HomeAlbum>,
     pub new_from_suggested: Vec<HomeAlbum>,
+    /// Albums from your favorite artists you may have missed: from the
+    /// last three years but not the last two months, not played at all and
+    /// not in the library, the artists you play most first (an unplayed one
+    /// from the last year shows in the new albums rows too).
+    pub missed: Vec<HomeAlbum>,
     /// When the artists were last looked for (the whole build).
     pub built_at: i64,
     /// When new albums were last looked for.
@@ -191,7 +204,8 @@ async fn build(app: &AppHandle) -> Result<HomeData, String> {
     let (favorites, suggested) = crate::discover::home_taste(app, &client, &key, ARTISTS + 10, &tick).await?;
     let by_name = library_by_name(app, &client).await;
     let like = your_genres(&client, &by_name, &favorites).await;
-    let new_from_favorites = favorite_albums(app, &client, &by_name, favorites).await;
+    let (new_from_favorites, missed) = favorite_albums(app, &client, &by_name, favorites).await;
+    let live = crate::wrapped::live_albums(app);
     // The suggested artists, found in Roon, and their new albums
     progress(app, "Finding the suggested artists in Roon...".into());
     let mut artists: Vec<HomeArtist> = Vec::new();
@@ -203,7 +217,7 @@ async fn build(app: &AppHandle) -> Result<HomeData, String> {
             let (client, like) = (client.clone(), like.clone());
             set.spawn(async move {
                 let card = find_artist(&client, &t.name, &like).await?;
-                let albums = new_albums(&client, &card, &t.name, 1.0).await;
+                let albums = new_albums(&client, &card, &t.name, 1.0, live, &Window::new_albums()).await;
                 Some((i, t, card, albums))
             });
         }
@@ -227,14 +241,15 @@ async fn build(app: &AppHandle) -> Result<HomeData, String> {
     }
     let new_from_suggested = newest(suggested_albums, &since(), |a, _| a.why.clone());
     println!(
-        "[home] {} artists, {} new albums from your artists, {} from the suggested, in {} s",
+        "[home] {} artists, {} new albums from your artists, {} from the suggested, {} you may have missed, in {} s",
         artists.len(),
         new_from_favorites.len(),
         new_from_suggested.len(),
+        missed.len(),
         started.elapsed().as_secs()
     );
     let now = now_ms();
-    Ok(HomeData { artists, new_from_favorites, new_from_suggested, built_at: now, albums_at: now, error: String::new() })
+    Ok(HomeData { artists, new_from_favorites, new_from_suggested, missed, built_at: now, albums_at: now, error: String::new() })
 }
 
 /// The daily look for new albums: your favorites' and the suggested
@@ -246,8 +261,10 @@ async fn albums_again(app: &AppHandle, mut data: HomeData) -> Result<HomeData, S
     let (favorites, _) = crate::discover::home_favorites(app, &client).await;
     let by_name = library_by_name(app, &client).await;
     let like = your_genres(&client, &by_name, &favorites).await;
-    let fresh = favorite_albums(app, &client, &by_name, favorites).await;
-    let (added_favorites, new_from_favorites) = merge(data.new_from_favorites, fresh);
+    let (fresh, missed) = favorite_albums(app, &client, &by_name, favorites).await;
+    let live = crate::wrapped::live_albums(app);
+    let kept = |list: Vec<HomeAlbum>| -> Vec<HomeAlbum> { without_left_out(list).into_iter().filter(|a| live || !roon_library::looks_live(&a.title)).collect() };
+    let (added_favorites, new_from_favorites) = merge(kept(data.new_from_favorites), fresh);
     progress(app, "Looking for new albums from the suggested artists...".into());
     let mut rows: Vec<(f64, HomeAlbum)> = Vec::new();
     for chunk in data.artists.chunks(AT_ONCE) {
@@ -256,7 +273,7 @@ async fn albums_again(app: &AppHandle, mut data: HomeData) -> Result<HomeData, S
             let (client, like) = (client.clone(), like.clone());
             set.spawn(async move {
                 let card = find_artist(&client, &a.name, &like).await?;
-                let mut albums = new_albums(&client, &card, &a.name, 1.0).await;
+                let mut albums = new_albums(&client, &card, &a.name, 1.0, live, &Window::new_albums()).await;
                 for (_, album) in albums.iter_mut() {
                     album.why = a.because.clone();
                 }
@@ -269,10 +286,15 @@ async fn albums_again(app: &AppHandle, mut data: HomeData) -> Result<HomeData, S
             }
         }
     }
-    let (added_suggested, new_from_suggested) = merge(data.new_from_suggested, newest(rows, &since(), |a, _| a.why.clone()));
-    println!("[home] new albums looked for: {added_favorites} new from your artists, {added_suggested} from the suggested, in {} s", started.elapsed().as_secs());
+    let (added_suggested, new_from_suggested) = merge(kept(data.new_from_suggested), newest(rows, &since(), |a, _| a.why.clone()));
+    println!(
+        "[home] new albums looked for: {added_favorites} new from your artists, {added_suggested} from the suggested, {} you may have missed, in {} s",
+        missed.len(),
+        started.elapsed().as_secs()
+    );
     data.new_from_favorites = new_from_favorites;
     data.new_from_suggested = new_from_suggested;
+    data.missed = missed;
     data.albums_at = now_ms();
     data.error.clear();
     Ok(data)
@@ -307,35 +329,106 @@ async fn library_by_name(app: &AppHandle, client: &LibraryClient) -> HashMap<Str
     cards.into_iter().map(|c| (fold(&c.name), c)).collect()
 }
 
-/// New albums from your FAVORITES most played artists, newest first.
-async fn favorite_albums(app: &AppHandle, client: &LibraryClient, by_name: &HashMap<String, roon_library::ArtistCard>, favorites: Vec<(String, f64)>) -> Vec<HomeAlbum> {
+/// New albums from your FAVORITES most played artists, newest first, and
+/// the albums your MISSED_ARTISTS most played may have slipped past you
+/// (see `Window::missed`), the artists you play most first.
+async fn favorite_albums(app: &AppHandle, client: &LibraryClient, by_name: &HashMap<String, roon_library::ArtistCard>, favorites: Vec<(String, f64)>) -> (Vec<HomeAlbum>, Vec<HomeAlbum>) {
     progress(app, "Looking for new albums from the artists you play...".into());
     let mut rows: Vec<(f64, HomeAlbum)> = Vec::new();
-    let top: Vec<(String, f64)> = favorites.into_iter().take(FAVORITES).collect();
+    let mut missed_rows: Vec<(f64, HomeAlbum)> = Vec::new();
+    let live = crate::wrapped::live_albums(app);
+    let played = {
+        let app = app.clone();
+        Arc::new(tauri::async_runtime::spawn_blocking(move || played_albums(&app)).await.unwrap_or_default())
+    };
+    let (fresh, missed) = (Window::new_albums(), Window::missed(played));
+    let top: Vec<(usize, String, f64)> = favorites.into_iter().take(FAVORITES.max(MISSED_ARTISTS)).enumerate().map(|(i, (n, w))| (i, n, w)).collect();
     let total = top.len();
     let mut done = 0;
     for chunk in top.chunks(AT_ONCE) {
         let mut set = tokio::task::JoinSet::new();
-        for (name, weight) in chunk.iter().cloned() {
+        for (rank, name, weight) in chunk.iter().cloned() {
             let (client, card) = (client.clone(), by_name.get(&fold(&name)).cloned());
+            let (fresh, missed) = (fresh.clone(), missed.clone());
             set.spawn(async move {
                 let card = match card {
                     Some(c) => Some(c),
                     None => find_artist(&client, &name, &HashSet::new()).await,
                 };
-                let Some(card) = card else { return Vec::new() };
-                new_albums(&client, &card, &name, weight).await
+                let Some(card) = card else { return (Vec::new(), Vec::new()) };
+                let new = if rank < FAVORITES { new_albums(&client, &card, &name, weight, live, &fresh).await } else { Vec::new() };
+                let old = if rank < MISSED_ARTISTS { new_albums(&client, &card, &name, weight, live, &missed).await } else { Vec::new() };
+                (new, old)
             });
         }
         while let Some(found) = set.join_next().await {
-            if let Ok(list) = found {
-                rows.extend(list);
+            if let Ok((new, old)) = found {
+                rows.extend(new);
+                missed_rows.extend(old);
             }
         }
         done += chunk.len();
         progress(app, format!("Looking for new albums from the artists you play... {done} of {total}"));
     }
-    newest(rows, &since(), |a, w| format!("You listen to {} ({})", a.artist, listens_text(w)))
+    let why = |a: &HomeAlbum, w: f64| format!("You listen to {} ({})", a.artist, listens_text(w));
+    (newest(rows, &since(), why), by_artist_rank(missed_rows, why))
+}
+
+/// The releases an album row looks at: from and to (inclusive,
+/// "YYYY-MM-DD"), and for the albums you may have missed, only the ones
+/// you haven't played or added to the library.
+#[derive(Clone)]
+struct Window {
+    from: String,
+    to: String,
+    unplayed: Option<Arc<Played>>,
+}
+
+impl Window {
+    /// New albums: the last NEW_DAYS (and anything dated up to tomorrow).
+    fn new_albums() -> Self {
+        Window { from: since(), to: date_string(now_ms() + 86_400_000), unplayed: None }
+    }
+
+    /// Albums you may have missed: MISSED_FROM_DAYS to MISSED_TO_DAYS old,
+    /// none of their songs played, not in the library.
+    fn missed(played: Arc<Played>) -> Self {
+        let now = now_ms();
+        Window { from: date_string(now - MISSED_FROM_DAYS * 86_400_000), to: date_string(now - MISSED_TO_DAYS * 86_400_000), unplayed: Some(played) }
+    }
+}
+
+/// The albums you've played any song of: in Roon's history (any play at
+/// all) or your Last.fm scrobbles, by Roon's album id and by artist and
+/// title.
+#[derive(Default)]
+struct Played {
+    ids: HashSet<u64>,
+    keys: HashSet<String>,
+}
+
+impl Played {
+    fn has(&self, a: &HomeAlbum) -> bool {
+        a.album_id.is_some_and(|id| self.ids.contains(&id)) || self.keys.contains(&memory_key(&a.artist, &a.title))
+    }
+}
+
+fn played_albums(app: &AppHandle) -> Played {
+    let mut played = Played::default();
+    app.state::<crate::wrapped::Wrapped>().with_plays(app, |plays| {
+        for p in plays.iter().filter(|p| !p.album.is_empty()) {
+            if let Some(id) = p.album_id {
+                played.ids.insert(id);
+            }
+            played.keys.insert(memory_key(&p.artist, &p.album));
+        }
+    });
+    crate::scrobbles::with(app, |s| {
+        for p in s.plays.iter().filter(|p| !p.album.is_empty()) {
+            played.keys.insert(memory_key(&p.artist, &p.album));
+        }
+    });
+    played
 }
 
 /// The day NEW_DAYS ago, as "YYYY-MM-DD".
@@ -350,6 +443,7 @@ pub fn banned(app: &AppHandle, name: &str) {
     data.artists.retain(|a| fold(&a.name) != k);
     data.new_from_favorites.retain(|a| fold(&a.artist) != k);
     data.new_from_suggested.retain(|a| fold(&a.artist) != k);
+    data.missed.retain(|a| fold(&a.artist) != k);
     if let Some(p) = path(app) {
         write_json(&p, &data);
     }
@@ -377,43 +471,115 @@ async fn find_artist(client: &LibraryClient, name: &str, like: &HashSet<String>)
     client.artist_card(&handle)
 }
 
-/// The artist's own albums with a release date (not appearances on
+/// Albums left out as another artist's of the same name (see
+/// `new_albums`), by `album_key`: the ones already on the page go too.
+static LEFT_OUT: Mutex<Option<HashSet<String>>> = Mutex::new(None);
+
+/// The artist's own albums from the last NEW_DAYS (not appearances on
 /// others', not collaborations or various-artists releases), each with
-/// the weight given: its main albums, and its singles, EPs and live
-/// albums only when it has no main album from the last year (a new
-/// album's singles would otherwise crowd the row).
-async fn new_albums(client: &LibraryClient, card: &roon_library::ArtistCard, artist: &str, weight: f64) -> Vec<(f64, HomeAlbum)> {
+/// the weight given: its main albums only. No singles or EPs: the row is
+/// for albums, and Roon's discography for a name like Samael holds a
+/// dozen other artists' singles, all linked to the one artist.
+///
+/// Roon's discographies come from Qobuz, which lumps artists of one name
+/// together (Samael's page had other Samaels' albums): an album whose Roon
+/// genres share none with the artist's is someone else's and is left out.
+/// Without genres on either side there's nothing to tell, and it stays.
+/// Roon's umbrella genres (Pop/Rock, over nearly all rock and metal) don't
+/// count either way: a Latin pop single tagged Pop/Rock shared that with
+/// a black metal band. Live albums only with `live` (Settings). Only the
+/// ones released in `window` (and unplayed, when it says so).
+async fn new_albums(client: &LibraryClient, card: &roon_library::ArtistCard, artist: &str, weight: f64, live: bool, window: &Window) -> Vec<(f64, HomeAlbum)> {
     let Ok(albums) = client.artist_albums_for(&card.handle, None).await else { return Vec::new() };
     let mine = fold(artist);
-    let since = since();
     let own: Vec<roon_library::ArtistAlbum> = albums
         .into_iter()
         .filter(|a| a.group != "appearance")
+        .filter(|a| live || !a.live)
         .filter(|a| {
             let by = fold(&a.artist);
             by.is_empty() || by == mine
         })
         .collect();
-    let has_main = own.iter().any(|a| a.group == "main" && a.released.as_deref().is_some_and(|d| d >= since.as_str()));
-    own.into_iter()
-        .filter(|a| a.group == "main" || !has_main)
-        .filter_map(|a| {
-            let released = a.released.clone()?;
-            Some((
-                weight,
-                HomeAlbum {
-                    title: a.title,
-                    artist: if a.artist.is_empty() { artist.to_string() } else { a.artist },
-                    album_id: a.album_id,
-                    performer_id: card.performer_id,
-                    image_key: a.image_key,
-                    released,
-                    in_library: a.in_library,
-                    why: String::new(),
-                },
-            ))
-        })
-        .collect()
+    let recent: Vec<roon_library::ArtistAlbum> = own
+        .into_iter()
+        .filter(|a| a.group == "main")
+        .filter(|a| !looks_episode(&a.title))
+        .filter(|a| a.released.as_deref().is_some_and(|d| d >= window.from.as_str() && d <= window.to.as_str()))
+        .collect();
+    if recent.is_empty() {
+        return Vec::new();
+    }
+    let mut cache: HashMap<String, Vec<String>> = HashMap::new();
+    let theirs: HashSet<String> = crate::discover::genres_of(client, &mut cache, &card.handle).await.into_iter().filter(|g| !umbrella(g)).collect();
+    let mut out = Vec::new();
+    for a in recent {
+        let Some(released) = a.released.clone() else { continue };
+        let album = HomeAlbum {
+            title: a.title.clone(),
+            artist: if a.artist.is_empty() { artist.to_string() } else { a.artist.clone() },
+            album_id: a.album_id,
+            performer_id: card.performer_id,
+            image_key: a.image_key.clone(),
+            released,
+            in_library: a.in_library,
+            why: String::new(),
+        };
+        // (for albums you may have missed: not ones you've heard or have)
+        if window.unplayed.as_ref().is_some_and(|played| a.in_library || played.has(&album)) {
+            continue;
+        }
+        // (Roon linking it to another artist of that name: someone else's)
+        if let (Some(theirs_id), Some(card_id)) = (a.performer_id, card.performer_id) {
+            if theirs_id != card_id {
+                println!("[home] left out \"{}\" by {}: Roon links it to another artist of that name (id {theirs_id}, not {card_id})", album.title, album.artist);
+                LEFT_OUT.lock().unwrap().get_or_insert_with(HashSet::new).insert(album_key(&album));
+                continue;
+            }
+        }
+        if !theirs.is_empty() {
+            let all: Vec<String> = client.album_facts(&a.handle).await.map(|f| f.genres).unwrap_or_default().into_iter().map(|g| g.to_lowercase()).collect();
+            // (a podcast's episodes or an audiobook, filed with the albums)
+            if all.iter().any(|g| spoken(g)) {
+                println!("[home] left out \"{}\" by {}: spoken word ({})", album.title, album.artist, all.join(", "));
+                continue;
+            }
+            let genres: Vec<String> = all.into_iter().filter(|g| !umbrella(g)).collect();
+            if !genres.is_empty() && !genres.iter().any(|g| theirs.contains(g)) {
+                println!("[home] left out \"{}\" by {}: its genres ({}) aren't the artist's ({})", album.title, album.artist, genres.join(", "), theirs.iter().cloned().collect::<Vec<_>>().join(", "));
+                LEFT_OUT.lock().unwrap().get_or_insert_with(HashSet::new).insert(album_key(&album));
+                continue;
+            }
+        }
+        out.push((weight, album));
+    }
+    out
+}
+
+/// A podcast episode by its title ("Episode 114: ...", "Ep. 12", "#45",
+/// "... Podcast"): Qobuz files some bands' podcasts with their albums
+/// (Metallica's The Metallica Report, an album an episode).
+fn looks_episode(title: &str) -> bool {
+    let t = title.trim().to_lowercase();
+    let numbered = |rest: &str| rest.trim_start().chars().next().is_some_and(|c| c.is_ascii_digit());
+    t.contains("podcast") || ["episode ", "ep. ", "ep "].iter().any(|p| t.strip_prefix(p).is_some_and(numbered)) || t.strip_prefix('#').is_some_and(numbered)
+}
+
+/// A genre for talk, not music (not comedy rock and the like).
+fn spoken(genre: &str) -> bool {
+    genre == "comedy/spoken" || ["spoken word", "podcast", "audiobook"].iter().any(|w| genre.contains(w))
+}
+
+/// One of Roon's umbrella genres, too wide to tell artists apart by.
+fn umbrella(genre: &str) -> bool {
+    matches!(genre, "pop/rock" | "rock" | "pop")
+}
+
+/// `list` without the albums `new_albums` has left out as another artist's.
+fn without_left_out(list: Vec<HomeAlbum>) -> Vec<HomeAlbum> {
+    let left_out = LEFT_OUT.lock().unwrap();
+    let Some(left_out) = left_out.as_ref() else { return list };
+    list.into_iter().filter(|a| !left_out.contains(&album_key(a))).collect()
 }
 
 /// The albums released since `since`, newest first, then by weight; one
@@ -422,6 +588,22 @@ fn newest(mut rows: Vec<(f64, HomeAlbum)>, since: &str, why: impl Fn(&HomeAlbum,
     let today = date_string(now_ms() + 86_400_000);
     rows.retain(|(_, a)| a.released.as_str() >= since && a.released.as_str() <= today.as_str());
     rows.sort_by(|a, b| b.1.released.cmp(&a.1.released).then(b.0.total_cmp(&a.0)));
+    one_each(rows, why, None)
+}
+
+/// The albums by artist, the most played artist first (each one's newest
+/// first, MISSED_PER_ARTIST at most); one entry per album, ALBUMS at most,
+/// each with its why line.
+fn by_artist_rank(mut rows: Vec<(f64, HomeAlbum)>, why: impl Fn(&HomeAlbum, f64) -> String) -> Vec<HomeAlbum> {
+    rows.sort_by(|a, b| b.0.total_cmp(&a.0).then(fold(&a.1.artist).cmp(&fold(&b.1.artist))).then(b.1.released.cmp(&a.1.released)));
+    one_each(rows, why, Some(MISSED_PER_ARTIST))
+}
+
+/// One entry per album (and one edition of it), ALBUMS at most (and
+/// `per_artist` of one artist's), in the order given, each with its why
+/// line.
+fn one_each(rows: Vec<(f64, HomeAlbum)>, why: impl Fn(&HomeAlbum, f64) -> String, per_artist: Option<usize>) -> Vec<HomeAlbum> {
+    let mut each: HashMap<String, usize> = HashMap::new();
     // (one entry per album, and one edition of it: "Sad Wings of Destiny
     // (50th Anniversary)" and "(Original 1976 Mix)" are one)
     let mut seen: HashSet<String> = HashSet::new();
@@ -430,6 +612,13 @@ fn newest(mut rows: Vec<(f64, HomeAlbum)>, since: &str, why: impl Fn(&HomeAlbum,
     for (w, mut a) in rows {
         if !seen.insert(album_key(&a)) || !titles.insert(format!("{}|{}", fold(&a.artist), crate::sound::base_title(&a.title))) {
             continue;
+        }
+        if let Some(most) = per_artist {
+            let n = each.entry(fold(&a.artist)).or_default();
+            if *n >= most {
+                continue;
+            }
+            *n += 1;
         }
         a.why = why(&a, w);
         out.push(a);
@@ -570,6 +759,10 @@ fn local_day(ms: i64, offset_min: i32) -> String {
 
 fn memories(app: &AppHandle, offset_min: i32, now: i64) -> HomeMemories {
     let listens = all_listens(app);
+    // (Forgotten favorites and On this day suggest albums: no live ones
+    // while Settings' Live albums is off; Your week is what you played)
+    let live = crate::wrapped::live_albums(app);
+    let suggestable = |a: &MemoryAlbum| live || !roon_library::looks_live(&a.title);
     // What Roon's history knows of each album (ids, cover), for the
     // scrobbled ones
     let mut known: HashMap<String, (Option<u64>, Option<u64>, Option<String>)> = HashMap::new();
@@ -600,6 +793,7 @@ fn memories(app: &AppHandle, offset_min: i32, now: i64) -> HomeMemories {
     let mut forgotten: Vec<MemoryAlbum> = tally(&|_| true)
         .into_values()
         .filter(|a| a.plays >= FORGOTTEN_PLAYS && now - a.last_played >= FORGOTTEN_AFTER)
+        .filter(suggestable)
         .collect();
     fill_ids(app, &mut forgotten, &known);
     forgotten.retain(|a| a.album_id.is_some());
@@ -650,7 +844,7 @@ fn memories(app: &AppHandle, offset_min: i32, now: i64) -> HomeMemories {
     years.sort_unstable_by(|a, b| b.cmp(a));
     let mut on_this_day = Vec::new();
     for year in years {
-        let mut albums: Vec<MemoryAlbum> = by_year.remove(&year).unwrap_or_default().into_values().collect();
+        let mut albums: Vec<MemoryAlbum> = by_year.remove(&year).unwrap_or_default().into_values().filter(suggestable).collect();
         albums.sort_by(|a, b| b.plays.cmp(&a.plays));
         on_this_day.extend(albums.into_iter().take(ON_THIS_DAY_PER_YEAR));
     }
@@ -697,6 +891,36 @@ fn date_string(ms: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn podcast_episodes() {
+        assert!(looks_episode("Episode 114: Robert Trujillo's Radio Roots"));
+        assert!(looks_episode("Ep. 12 - Live Talk"));
+        assert!(looks_episode("#45: The Interview"));
+        assert!(looks_episode("The Metallica Podcast"));
+        assert!(!looks_episode("72 Seasons"));
+        assert!(!looks_episode("Episode"));
+        assert!(!looks_episode("Epitaph"));
+        assert!(spoken("comedy/spoken") && spoken("spoken word") && spoken("podcasts"));
+        assert!(!spoken("heavy metal") && !spoken("comedy rock"));
+    }
+
+    #[test]
+    fn missed_albums_by_artist_rank() {
+        let album = |artist: &str, title: &str, released: &str| HomeAlbum { title: title.into(), artist: artist.into(), released: released.into(), ..Default::default() };
+        let rows = vec![
+            (10.0, album("Beta", "b1", "2025-01-01")),
+            (50.0, album("Alpha", "a1", "2024-06-01")),
+            (50.0, album("Alpha", "a2", "2025-03-01")),
+            (10.0, album("Beta", "b2", "2025-05-01")),
+        ];
+        let out = by_artist_rank(rows, |_, _| String::new());
+        let titles: Vec<&str> = out.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(titles, ["a2", "a1", "b2", "b1"]);
+        // (one artist fills MISSED_PER_ARTIST at most)
+        let many: Vec<(f64, HomeAlbum)> = (1..=6).map(|i| (90.0, album("Gamma", &format!("g{i}"), &format!("2025-0{i}-01")))).collect();
+        assert_eq!(by_artist_rank(many, |_, _| String::new()).len(), MISSED_PER_ARTIST);
+    }
 
     #[test]
     fn memory_keys_and_days() {

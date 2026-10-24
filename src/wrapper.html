@@ -65,47 +65,65 @@
                 <button id="rate-up" class="rate-btn up" data-vote="1" aria-label="Thumbs up"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2h2.76a2 2 0 0 0 1.79-1.11L12 2a3.13 3.13 0 0 1 3 3.88Z"/></svg></button>
               </span>
             </div>
-            <div id="title" class="title">Roon: Toasted</div>
+            <!-- The heart right after the song's name, as Roon has it -->
+            <div class="title-row">
+              <div id="title" class="title">Roon: Toasted</div>
+              <!-- Hearts & Library (Settings): "+" adds the track to the
+                   library, then it's a heart. Hidden unless the feature is
+                   on and connected. -->
+              <button id="library-btn" class="icon-btn library spacer" title="Add to library">
+                <svg class="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
+                <svg class="icon-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg>
+              </button>
+            </div>
             <div id="album" class="album"></div>
             <div id="artist" class="artist"></div>
           </div>
         </div>
-        <!-- Discover: the weekly playlists page (a dot while a new list is unseen) -->
-        <button id="discover-btn" class="icon-btn discover-btn" title="Discover: your weekly playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
 
         <div class="middle">
+          <!-- Two groups around play, so play stays centered whatever each
+               side holds: radio and previous on its left (with Discover and
+               Deep Dive in the bar), next, shuffle, repeat and the queue on
+               its right -->
           <div class="transport">
-            <!-- Hearts & Library (experimental, Settings): "+" adds the track to
-                 the library, then it's a heart. Hidden unless the feature is on
-                 and connected. Without it there are three buttons on each side
-                 of play, so they stay centered. -->
-            <button id="library-btn" class="icon-btn library spacer" title="Add to library">
-              <svg class="icon-add" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
-              <svg class="icon-heart" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 9.5a5.5 5.5 0 0 1 9.591-3.676.56.56 0 0 0 .818 0A5.49 5.49 0 0 1 22 9.5c0 2.29-1.5 4-3 5.5l-5.492 5.313a2 2 0 0 1-3 .019L5 15c-1.5-1.5-3-3.2-3-5.5"/></svg>
-            </button>
-            <button id="shuffle" class="icon-btn toggle" title="Shuffle">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>
-            </button>
-            <button id="repeat" class="icon-btn toggle" title="Repeat">
-              <svg class="icon-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
-              <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>
-            </button>
-            <button id="previous" class="icon-btn" title="Previous">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/></svg>
-            </button>
+            <div class="transport-side transport-left">
+              <!-- Discover and Deep Dive, just left of the controls (out of the
+                   way of their centering; not in Now Playing, whose Wrapped
+                   menu has them) -->
+              <div class="bar-extra">
+                <!-- Discover: the weekly playlists page (a dot while a new list is unseen) -->
+                <button id="discover-btn" class="icon-btn discover-btn" title="Discover: your weekly playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg></button>
+                <!-- Deep Dive from the playing song (wrapper.js: its icon, and
+                     hidden without tier 2) -->
+                <button id="bar-dive-btn" class="icon-btn bar-dive" title="Deep Dive from this song" hidden></button>
+              </div>
+              <button id="radio" class="icon-btn toggle" title="Roon Radio">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
+              </button>
+              <button id="previous" class="icon-btn" title="Previous">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/></svg>
+              </button>
+            </div>
             <button id="play-pause" class="play" title="Play / Pause">
               <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>
               <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="14" y="4" width="4" height="16" rx="1"/><rect x="6" y="4" width="4" height="16" rx="1"/></svg>
             </button>
-            <button id="next" class="icon-btn" title="Next">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg>
-            </button>
-            <button id="radio" class="icon-btn toggle" title="Roon Radio">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
-            </button>
-            <button id="queue-btn" class="icon-btn" title="Queue">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>
-            </button>
+            <div class="transport-side transport-right">
+              <button id="next" class="icon-btn" title="Next">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 4 15 12 5 20 5 4"/><line x1="19" x2="19" y1="5" y2="19"/></svg>
+              </button>
+              <button id="shuffle" class="icon-btn toggle" title="Shuffle">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m18 14 4 4-4 4"/><path d="m18 2 4 4-4 4"/><path d="M2 18h1.973a4 4 0 0 0 3.3-1.7l5.454-8.6a4 4 0 0 1 3.3-1.7H22"/><path d="M2 6h1.972a4 4 0 0 1 3.6 2.2"/><path d="M22 18h-6.041a4 4 0 0 1-3.3-1.8l-.359-.45"/></svg>
+              </button>
+              <button id="repeat" class="icon-btn toggle" title="Repeat">
+                <svg class="icon-repeat" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/></svg>
+                <svg class="icon-repeat-one" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m17 2 4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14"/><path d="m7 22-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/><path d="M11 10h1v4"/></svg>
+              </button>
+              <button id="queue-btn" class="icon-btn" title="Queue">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>
+              </button>
+            </div>
           </div>
           <div class="progress">
             <span id="elapsed" class="time">0:00</span>
@@ -163,7 +181,7 @@
                 <div class="wrapped-piece-title">Wrapped</div>
                 <div class="wrapped-piece-buttons">
                   <button class="wrapped-piece-btn" data-action="open" data-tip="Open Wrapped"><svg class="wrapped-mark" viewBox="0 0 32 32" aria-hidden="true"><defs><clipPath id="wrapped-mark-inner"><path d="M1.125 1.125H27.2a3.675 3.675 0 0 1 3.675 3.675v26.075H4.8a3.675 3.675 0 0 1-3.675-3.675z"/></clipPath></defs><path d="M0 0h27.2A4.8 4.8 0 0 1 32 4.8V32H4.8A4.8 4.8 0 0 1 0 27.2z"/><g clip-path="url(#wrapped-mark-inner)"><path d="M0 0h17.75l-11.125 11.125v14.125L0 31.875z" fill="#fff"/><path d="M20.875 0H32v32H8.875V12z" fill="currentColor"/><path d="M32 21.875V32H21.875z" fill="#d29922"/><path d="M14.375 14.375 28.75 0h3.125L14.375 17.5zM14.375 25.375 32 7.75v3.125L17.5 25.375zM18.75 32 32 18.75v3.125L21.875 32z"/></g></svg></button>
-                  <button class="wrapped-piece-btn discover" data-action="discover" data-tip="Discover: your weekly playlists"><i class="fresh-dot"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg></button>
+                  <button class="wrapped-piece-btn discover" data-action="discover" data-tip="Discover: your weekly playlists"><i class="fresh-dot"></i><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z"/><path d="M20 3v4"/><path d="M22 5h-4"/><path d="M4 17v2"/><path d="M5 18H3"/></svg></button>
                   <!-- (its icon is Deep Dive's own, put in by wrapper.js) -->
                   <button class="wrapped-piece-btn dive" data-action="dive" data-tip="Deep Dive from this song"></button>
                   <button class="wrapped-piece-btn" data-action="artist" data-tip="Open the artist in Wrapped">

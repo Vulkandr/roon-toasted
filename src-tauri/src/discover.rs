@@ -2077,7 +2077,7 @@ async fn pick_weekly(app: &AppHandle, client: &LibraryClient, key: &str, recentl
     // that sounds most like the seed kept: a band's sound moves over a
     // career (Klone's groove years next to Soen), and the artist's tags
     // cover all of it
-    let options = MixOptions { per_artist: 6, include_live: false, library_only: false, own_albums: true, from_top: 10, never: said.played_songs.clone() };
+    let options = MixOptions { per_artist: 6, include_live: crate::wrapped::live_albums(app), library_only: false, own_albums: true, from_top: 10, never: said.played_songs.clone() };
     // Rounds: tier 1 finds a batch, tier 2 judges it; under SONGS kept,
     // tier 1 brings ROUND_MORE more and tier 2 judges those, at most ROUNDS
     // rounds in all (then the list is as long as it got)
@@ -2634,7 +2634,7 @@ async fn pick_rediscover(app: &AppHandle, client: &LibraryClient, _key: &str, re
         }
         if !by_library.is_empty() {
             let handles: Vec<String> = by_library.iter().map(|(_, h)| h.clone()).collect();
-            let options = MixOptions { per_artist: 1, include_live: false, library_only: true, own_albums: true, from_top: 5, never: said.played_songs.clone() };
+            let options = MixOptions { per_artist: 1, include_live: crate::wrapped::live_albums(app), library_only: true, own_albums: true, from_top: 5, never: said.played_songs.clone() };
             let (found, _) = client.pick_artist_tracks(&handles, &options).await;
             for (i, list) in found.iter().enumerate() {
                 if let Some(song) = list.first() {
@@ -2693,7 +2693,7 @@ async fn pick_rediscover(app: &AppHandle, client: &LibraryClient, _key: &str, re
         }
     }
     progress("Picking songs...".into());
-    let options = MixOptions { per_artist: 1, include_live: false, library_only: true, own_albums: true, from_top: 5, never: said.played_songs.clone() };
+    let options = MixOptions { per_artist: 1, include_live: crate::wrapped::live_albums(app), library_only: true, own_albums: true, from_top: 5, never: said.played_songs.clone() };
     let (found_songs, _) = client.pick_artist_tracks(&handles, &options).await;
     let order_never: Vec<(usize, String)> = found_songs.iter().enumerate().filter_map(|(i, s)| s.first().map(|t| (i, t.handle.clone()))).collect();
     let mut never_found = 0;
@@ -2889,7 +2889,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1092;
+pub const BUILD: u32 = 1102;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).

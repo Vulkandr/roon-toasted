@@ -1,5 +1,41 @@
 [
   {
+    "version": "1.3.0",
+    "date": "2026-10-24",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["Wrapped", "The Wrapper gets pages of its own. The Wrapped button over Roon's logo, and its side menu, open Home, Discover, Deep Dive, Radio, History and Settings, plus your library: Genres, Artists, Albums, Tracks, Playlists, Listen Later and Tags. Album and artist pages bring similar artists, tags and play menus. Wrapped runs on the Hearts & Library link."],
+          ["Home", "Your Wrapped playlists, your week, artists for you, new albums from the artists you listen to and from ones you may like, newer albums you may have missed, forgotten favorites, and what you played on this day in earlier years."],
+          ["Discover", "Discover Weekly (artists you've never played, one song each) and Library Rediscover (favorites you haven't played in a year or more), made every Monday and saved in Roon. Rate a song with the thumbs in the player, and Fine Tuning takes requests in your own words."],
+          ["Deep Dive", "Playlists made to order from the songs, albums or artists you pick and what you ask for. Smart Radio needs nothing but the picks."],
+          ["Tiers", "Discovery gets smarter with each tier you set up in Settings: tier 1 reads Last.fm tags (a free key), tier 2 a language model (Anthropic, OpenAI, Gemini, or Ollama on your own PC), tier 3 listens to the songs. Lights on Discover and Deep Dive show what each tier has."],
+          ["History", "Everything you've played in Roon, plus your Last.fm scrobbles from before, with your top artists, albums and tracks for any stretch of time."],
+          ["Now Playing", "One Style list for the bars with new waveform looks (Peak caps, Pixel, Stitch, Line graph, Contour), Loudness coloring, and a Wrapped menu with Discover, Deep Dive, the artist and the album."],
+          ["Player bar", "Discover and Deep Dive sit left of the controls, radio on the left and shuffle and repeat on the right, and the heart right after the song's name."],
+          ["Onboarding", "A short walkthrough the first time you open each part of Wrapped. Replay it or switch it off in Settings."],
+          ["Settings", "Default Menu (Wrapped's side menu and Home, or Roon's own, when Wrapped opens), Live albums (off by default: left out of everything Wrapped picks), page size and colors."]
+        ]
+      },
+      {
+        "title": "Fixes",
+        "items": [
+          ["Play on a returning zone", "Play works on a zone Roon brings back stopped, even when Roon says play isn't allowed."],
+          ["Sidebar colors", "Roon's sidebar keeps Toasted's colors while you resize or drag the Wrapper."],
+          ["Folded sidebar", "A Wrapped page that's open when Roon folds its sidebar away now takes the freed space."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["Not an official API", "Wrapped uses a part of Roon that isn't open to apps, like the hearts, so a Roon update can stop it for a while."],
+          ["Optional tiers", "Tiers 2 and 3 are optional. Tier 2 with an online service uses your own key, and the names of songs and artists go to that service."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.2.1",
     "date": "2026-10-15",
     "sections": [

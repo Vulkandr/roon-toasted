@@ -196,6 +196,9 @@ pub struct WrappedSettings {
     /// Which side menu shows when Wrapped opens: "wrapped" (Wrapped's own)
     /// or "roon" (Roon's sidebar, as it is).
     pub side_menu: String,
+    /// Live albums and songs in what Wrapped picks for you (Home's rows,
+    /// Discover's lists, Deep Dive, the radio); off by default.
+    pub live_albums: bool,
 }
 
 impl Default for WrappedSettings {
@@ -220,6 +223,7 @@ impl Default for WrappedSettings {
             dive_model: String::new(),
             page_size: "100".into(),
             side_menu: "roon".into(),
+            live_albums: false,
         }
     }
 }
@@ -268,6 +272,12 @@ pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value) -> Re
     // (Toasted's Settings window shows Wrapped Discovery too)
     let _ = app.emit("wrapped-settings-changed", &next);
     Ok(next)
+}
+
+/// Whether live albums and songs may be in what Wrapped picks (Settings,
+/// Wrapped Discovery's Live albums).
+pub fn live_albums(app: &AppHandle) -> bool {
+    WrappedSettings::load(app).live_albums
 }
 
 pub fn now_ms() -> i64 {
