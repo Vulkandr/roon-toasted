@@ -24,10 +24,10 @@ your whole listening history (see [Wrapped's own pages](#wrappeds-own-pages)).
 </p>
 
 <p align="center">
-  <img src="docs/discover.png" alt="Wrapped's Discover page: this week's Discover Weekly and Library Rediscover, the last two weeks' lists, Fine Tuning and the tier lights" width="395">
+  <img src="docs/discover.png" alt="Wrapped's Discover page: this week's Discover Weekly and Library Rediscover, the last two weeks' lists, Fine Tuning and the tier lights" width="800">
   </p>
   <p align="center">
-    <img src="docs/deep_dive.png" alt="Wrapped's Deep Dive page: a song picked, a request in plain words, Songs from, Deeper Dive and Make the playlist, and the Deep Dives made so far" width="395">
+    <img src="docs/deep_dive.png" alt="Wrapped's Deep Dive page: a song picked, a request in plain words, Songs from, Deeper Dive and Make the playlist, and the Deep Dives made so far" width="800">
 </p>
 
 - **A full-window Now Playing you lay out yourself.** Click the album art in
