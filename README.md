@@ -76,17 +76,17 @@ Wrapper opens). They run on the Hearts & Library link.
   you pick and what you ask for, from new music, your library or both.
   Deeper Dive asks a few questions first, Talk it over changes one you've
   made, and Smart Radio needs nothing but the picks.
+  **Tiers:** discovery gets smarter with each tier you set up in Wrapped's
+- Settings. Tier 1 works from Last.fm listeners and tags (a free key), tier 2
+  reads up on each pick with a language model (Anthropic, OpenAI, Gemini, or
+  Ollama on your own PC), and tier 3 listens to the songs, your own files
+  first. Lights on Discover and Deep Dive show what each tier has.
 - **History:** everything you've played in Roon, plus your Last.fm scrobbles
   from before, with your top artists, albums and tracks for any stretch of
   time.
 - **Your library:** Genres (from the artists' tags), Artists, Albums, Tracks
   (with a shuffle of its own), Playlists, Listen Later and Tags, and album and
   artist pages with similar artists, tags and play menus.
-- **Tiers:** discovery gets smarter with each tier you set up in Wrapped's
-  Settings. Tier 1 works from Last.fm listeners and tags (a free key), tier 2
-  reads up on each pick with a language model (Anthropic, OpenAI, Gemini, or
-  Ollama on your own PC), and tier 3 listens to the songs, your own files
-  first. Lights on Discover and Deep Dive show what each tier has.
 - **In the player:** Discover and Deep Dive buttons left of the controls, the
   heart right after the song's name, and in Now Playing a Wrapped menu with
   Discover, Deep Dive, the artist and the album.
