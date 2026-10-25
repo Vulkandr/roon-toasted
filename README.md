@@ -15,10 +15,17 @@ It has four parts, each of which you can switch on or off.
 
 **Roon, your way.** The Wrapper puts the Roon app inside a Toasted window and
 gives it a player you design yourself. Everything Roon can do is still right
-there; what changes is how your music looks while it plays.
+there; what changes is how your music looks while it plays, and Wrapped's own
+pages add weekly discovery playlists, Deep Dive playlists made to order and
+your whole listening history (see [Wrapped's own pages](#wrappeds-own-pages)).
 
 <p align="center">
   <img src="docs/wrapped.png" alt="Roon: Wrapped showing a full-window Now Playing in the album's colors, with animated seek and volume bars" width="800">
+</p>
+
+<p align="center">
+  <img src="docs/discover.png" alt="Wrapped's Discover page: this week's Discover Weekly and Library Rediscover, the last two weeks' lists, Fine Tuning and the tier lights" width="395">
+  <img src="docs/deep_dive.png" alt="Wrapped's Deep Dive page: a song picked, a request in plain words, Songs from, Deeper Dive and Make the playlist, and the Deep Dives made so far" width="395">
 </p>
 
 - **A full-window Now Playing you lay out yourself.** Click the album art in
@@ -28,13 +35,16 @@ there; what changes is how your music looks while it plays.
   on your PC), an icon pack (Lucide, Phosphor, Tabler, Material Symbols, Remix),
   a plain or circled play button, and black outlines or glows for text and
   icons. Colors follow the app, the playing album's art, or a color you pick.
-- **Animated bars** for the seek bar and volume: Wave, Spectrum, Beam, Glow
-  line, LED meter, Ribbon, Neon tube, Mountains, Particles, Plasma and Album
-  art, plus the classic Line, Thick, Hairline and Segments. The animated ones
-  come alive around the playhead while music plays.
-- **Real waveforms:** with Hearts & Library on, the seek bar can show a local
-  file's actual waveform from Roon, in six looks, optionally bouncing near the
-  playhead and colored by loudness.
+- **Styles for the seek bar and volume**, in one list: the simple Line, Thick,
+  Hairline and Segments; Roon, Pills, Peak caps, Pixel, Stitch, LED meter,
+  Solid shape, Line graph, Contour, Neon outline, Neon tube, Wave, Spectrum,
+  Beam, Glow line, Ribbon and Album art; and the animated-only Mountains,
+  Particles and Plasma. The animated ones come alive around the playhead
+  while music plays.
+- **Real waveforms:** with Hearts & Library on, the seek bar's Waveform switch
+  shows a local file's actual waveform from Roon in most styles, optionally
+  bouncing near the playhead, colored by loudness, and as Roon has it or more
+  dynamic.
 - **Profiles:** save layouts and switch between them, or start from the
   Default, Waves and Waves Large presets. The player bar along the bottom can
   follow the same style.
@@ -46,8 +56,51 @@ so it reopens instantly. **Return Roon** gives Roon its own window back; an
 Only want the Wrapper? Switch the Toaster off in **Settings > Toaster**, and its
 hotkeys and links open the Wrapper instead.
 
-The Wrapper works with Roon's own window, so a Roon update could change how it
-behaves. It's experimental for that reason.
+### Wrapped's own pages
+
+**Your listening, put to work.** The Wrapped button over Roon's logo opens
+Wrapped's pages right next to Roon, and its arrow drops down Wrapped's side
+menu (Settings' **Default Menu** picks which side menu, and page, show when the
+Wrapper opens). They run on the Hearts & Library link.
+
+- **Home:** your Wrapped playlists, your week, artists for you, new albums
+  from the artists you listen to and from ones you may like, newer albums from
+  your favorite artists you may have missed, forgotten favorites, and what you
+  played on this day in earlier years.
+- **Discover:** every Monday, Discover Weekly (artists you've never played,
+  one song each) and Library Rediscover (favorites you haven't played in a year
+  or more, plus artists in your library you've never played), saved as Roon
+  playlists. Rate a song with the thumbs in the player and the next lists
+  follow; Fine Tuning takes requests in your own words.
+- **Deep Dive:** a playlist made to order from the songs, albums or artists
+  you pick and what you ask for, from new music, your library or both.
+  Deeper Dive asks a few questions first, Talk it over changes one you've
+  made, and Smart Radio needs nothing but the picks.
+- **History:** everything you've played in Roon, plus your Last.fm scrobbles
+  from before, with your top artists, albums and tracks for any stretch of
+  time.
+- **Your library:** Genres (from the artists' tags), Artists, Albums, Tracks
+  (with a shuffle of its own), Playlists, Listen Later and Tags, and album and
+  artist pages with similar artists, tags and play menus.
+- **Tiers:** discovery gets smarter with each tier you set up in Wrapped's
+  Settings. Tier 1 works from Last.fm listeners and tags (a free key), tier 2
+  reads up on each pick with a language model (Anthropic, OpenAI, Gemini, or
+  Ollama on your own PC), and tier 3 listens to the songs, your own files
+  first. Lights on Discover and Deep Dive show what each tier has.
+- **In the player:** Discover and Deep Dive buttons left of the controls, the
+  heart right after the song's name, and in Now Playing a Wrapped menu with
+  Discover, Deep Dive, the artist and the album.
+- **Onboarding:** a short walkthrough the first time you open each part.
+  Replay it or switch it off in Settings.
+- **Live albums:** off by default, which leaves live albums out of everything
+  Wrapped picks for you.
+
+Tier 2 with an online service uses your own key, and the names of songs and
+artists go to that service. Tiers 2 and 3 are optional.
+
+The Wrapper works with Roon's own window, and Wrapped's pages and the hearts
+use a part of Roon that isn't open to apps, so a Roon update could change how
+they behave. They're experimental for that reason.
 
 ## The Toaster
 
