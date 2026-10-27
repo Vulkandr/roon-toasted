@@ -9853,7 +9853,7 @@ function discoverColumn(which, title, blurb, built, building, failed, status) {
   for (const copy of older) row.append(discoverCard(copy, false, which));
   column.append(row);
   if (current) column.append(discoverCard(current, true, which));
-  else column.append(wrappedNote("Not built yet: the first one comes next Monday, or build it now.", "wrapped-note discover-empty"));
+  else column.append(wrappedNote("Not built yet: the first one comes the next time Toasted starts, then every Monday. Or build it now.", "wrapped-note discover-empty"));
 
   const build = document.createElement("button");
   build.className = "wrapped-button discover-build";
@@ -11019,13 +11019,13 @@ const ONBOARDING_TOURS = {
     {
       find: () => partsOrNone([...document.querySelectorAll(".discover-card.large, .discover-empty")].filter(shown)),
       apart: true,
-      text: () => (document.querySelector(".discover-card.large") ? "This week's lists. Click a card to see its songs and why each one was picked. Play starts it on your zone." : "Your first lists come next Monday, or right away with Build now, just below."),
+      text: () => (document.querySelector(".discover-card.large") ? "This week's lists. Click a card to see its songs and why each one was picked. Play starts it on your zone." : "Your first lists come the next time Toasted starts, then every Monday. Or right away with Build now, just below."),
     },
     { find: () => shown(document.getElementById("info")), text: "While a song from these lists plays, thumbs show next to it in the player, and in Now Playing's Wrapped menu with why it was picked. A thumbs up brings more like that artist; a thumbs down keeps them, and bands like them, out. Without a rating, playing a song through counts a little for it, skipping a little against, and a heart counts as a mild thumbs up." },
     {
       find: () => partsOrNone([...document.querySelectorAll(".discover-actions")].filter(shown)),
       apart: true,
-      text: () => (document.querySelector(".discover-card.large") ? "Rebuild now makes a fresh list right away, and the one there becomes a dated copy. (This is purely optional, new lists always make themselves every Monday.)" : "Build now makes the list right away, instead of waiting for Monday. It takes a few minutes, in the background."),
+      text: () => (document.querySelector(".discover-card.large") ? "Rebuild now makes a fresh list right away, and the one there becomes a dated copy. (This is purely optional, new lists always make themselves every Monday.)" : "Build now makes the list right away instead of waiting. It takes a few minutes, in the background."),
     },
     { find: () => partsOrNone([...document.querySelectorAll(".discover-ask")].filter(shown)), apart: true, text: () => "Fine Tuning: tell the next list what you'd like, in your own words, like more of a sound, less of something, or an era. A request counts for the next list, or for every one with Permanent." + (document.querySelector(".discover-ask .tier-needed") ? " Tier 2 reads them, so it needs to be set up in Settings first." : "") },
     { find: () => shown(document.querySelector(".tier-strip")), text: "Discover Weekly's tiers. Which ones you can use depends on the tiers you've set up in Settings; the higher the tier, the smarter the picks. Tier 1 always runs. Click tier 2 or 3 to switch it on or off for this list, or to set it up in Settings if it isn't yet. A green light means a tier has everything it uses; yellow means a part is missing, and hovering the light says which." },
@@ -11854,6 +11854,8 @@ listen("library-track", (event) => {
 });
 invoke("roon_queue").then(renderQueue);
 listen("roon-queue", (event) => renderQueue(event.payload));
+// (the PC's time zone, for the week Discover's lists are made in)
+invoke("wrapped_discover_offset", { utcOffsetMinutes: -new Date().getTimezoneOffset() }).catch(() => {});
 // (Wrapped's page size from the start, and what shows: Settings' Default
 // Menu)
 invoke("wrapped_settings_get")

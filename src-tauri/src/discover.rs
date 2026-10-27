@@ -10,7 +10,7 @@
 //!   listening first, one library song each.
 //!
 //! Both are real Roon playlists, rebuilt weekly (Monday, like Spotify's;
-//! the schedule comes in a later step). The last two stay, renamed with
+//! see `schedule`). The last two stay, renamed with
 //! their date ("🌟 Discover Weekly, Oct 12"); older ones are deleted.
 //! Artists from those two aren't picked again. What was built is kept in
 //! `wrapped-discover.json`, with the Roon playlist ids (the session's
@@ -18,7 +18,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use roon_library::{LibraryClient, MixOptions, PlaylistCard};
 use serde::{Deserialize, Serialize};
@@ -139,6 +140,10 @@ struct Store {
     /// What you asked the next Discover Weekly for (oldest first): used by
     /// the next one, or by every one when permanent.
     requests: Vec<Request>,
+    /// For a list never built yet ("weekly", "rediscover"): the run of
+    /// Toasted that first found none (its start, Unix ms). Its first list
+    /// comes at a later run (see `schedule`).
+    first_waits: HashMap<String, i64>,
 }
 
 /// Something you asked Discover Weekly for: an aspect of a song (from the
@@ -2889,7 +2894,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1102;
+pub const BUILD: u32 = 1103;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).
@@ -2901,6 +2906,107 @@ pub fn wrapper_build() -> Option<u32> {
 #[tauri::command]
 pub fn wrapped_discover_status(app: AppHandle) -> DiscoverStatus {
     status(&app)
+}
+
+// ----- The weekly schedule -----
+
+/// How often the schedule looks again while Toasted runs.
+const SCHEDULE_EVERY: Duration = Duration::from_secs(10 * 60);
+/// A scheduled build that failed is tried again after this long.
+const RETRY_AFTER: i64 = 6 * 3_600_000;
+/// When this run of Toasted started (Unix ms).
+static LAUNCH: OnceLock<i64> = OnceLock::new();
+/// When a scheduled build of each list was last tried (weekly, rediscover).
+static LAST_TRY: Mutex<[i64; 2]> = Mutex::new([0, 0]);
+
+/// The lists make themselves every week: a list from before this week's
+/// Monday (00:00 on the PC's clock) is made again, Discover Weekly first,
+/// at the first look after that (the PC off on Monday: when Toasted next
+/// runs). A list never made yet waits for the next run of Toasted, so
+/// whatever gets set up meanwhile (a tier, the Last.fm key) is in its
+/// first one. Not while Wrapped Discovery is off or the library link isn't
+/// up; Discover Weekly not without a Last.fm key. Looks a minute after
+/// start, then every SCHEDULE_EVERY.
+pub fn schedule(app: &AppHandle) {
+    LAUNCH.get_or_init(now_ms);
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+        loop {
+            scheduled(&app).await;
+            tokio::time::sleep(SCHEDULE_EVERY).await;
+        }
+    });
+}
+
+/// The start of the week `now` is in: Monday 00:00 at `offset_minutes`
+/// east of UTC, as Unix ms.
+fn week_start(now: i64, offset_minutes: i32) -> i64 {
+    let offset = i64::from(offset_minutes) * 60_000;
+    let days = (now + offset).div_euclid(DAY_MS);
+    // (1970-01-01 was a Thursday, three days after a Monday)
+    let since_monday = (days + 3).rem_euclid(7);
+    (days - since_monday) * DAY_MS - offset
+}
+
+async fn scheduled(app: &AppHandle) {
+    if !enabled(app) || app.state::<Library>().client().is_none() {
+        return;
+    }
+    let launch = *LAUNCH.get_or_init(now_ms);
+    for (slot, which) in [Which::Weekly, Which::Rediscover].into_iter().enumerate() {
+        if which == Which::Weekly && WrappedSettings::load(app).lastfm_key.trim().is_empty() {
+            continue;
+        }
+        let discover = app.state::<Discover>();
+        let now = now_ms();
+        let (due, changed) = discover.with_store(app, |s| {
+            let week = week_start(now, s.utc_offset_minutes);
+            match s.lists(which).first() {
+                Some(newest) => (newest.built_at < week, false),
+                None => {
+                    let key = which.name().to_string();
+                    let first = s.first_waits.get(&key).copied();
+                    match first {
+                        Some(seen) => (seen != launch, false),
+                        None => {
+                            s.first_waits.insert(key, launch);
+                            (false, true)
+                        }
+                    }
+                }
+            }
+        });
+        if changed {
+            discover.save(app);
+        }
+        if !due {
+            continue;
+        }
+        {
+            let mut tried = LAST_TRY.lock().unwrap();
+            if now - tried[slot] < RETRY_AFTER {
+                continue;
+            }
+            tried[slot] = now;
+        }
+        println!("[discover] the week's {} is due: building it", which.name());
+        match wrapped_discover_build(app.clone(), which, None).await {
+            Ok(_) => LAST_TRY.lock().unwrap()[slot] = 0,
+            Err(e) => println!("[discover] the scheduled {} didn't build: {e}", which.name()),
+        }
+    }
+}
+
+/// The PC's offset east of UTC in minutes (the page tells it at start), for
+/// the week's start and the dates in the names.
+#[tauri::command]
+pub fn wrapped_discover_offset(app: AppHandle, utc_offset_minutes: i32) {
+    let discover = app.state::<Discover>();
+    let changed = discover.with_store(&app, |s| std::mem::replace(&mut s.utc_offset_minutes, utc_offset_minutes) != utc_offset_minutes);
+    if changed {
+        discover.save(&app);
+    }
 }
 
 /// Builds one of the weekly playlists now (progress as "wrapped-discover"
@@ -3266,6 +3372,25 @@ pub fn wrapped_discover_request_keep(app: AppHandle, id: i64, permanent: bool) -
     });
     discover.save(&app);
     status(&app)
+}
+
+#[cfg(test)]
+mod schedule_tests {
+    use super::*;
+
+    #[test]
+    fn week_starts_on_monday_local() {
+        // 2026-10-26 is a Monday. 21:11 in Chicago (UTC-5) is 02:11 UTC on
+        // the 27th; its week starts Monday the 26th, 00:00 Chicago time
+        let at = 1_793_067_060_000; // 2026-10-27 02:11 UTC
+        let chicago = -300;
+        assert_eq!(week_start(at, chicago), 1_792_990_800_000); // 2026-10-26 05:00 UTC
+        // Sunday 23:00 Chicago is still the week before
+        let sunday = 1_792_987_200_000; // 2026-10-26 04:00 UTC
+        assert_eq!(week_start(sunday, chicago), 1_792_990_800_000 - 7 * DAY_MS);
+        // UTC itself
+        assert_eq!(week_start(1_792_990_800_000, 0), 1_792_972_800_000); // Monday 00:00 UTC
+    }
 }
 
 #[cfg(test)]

@@ -1,5 +1,23 @@
 [
   {
+    "version": "1.3.1",
+    "date": "2026-10-27",
+    "sections": [
+      {
+        "title": "Fixes",
+        "items": [
+          ["Weekly lists", "Discover Weekly and Library Rediscover now make themselves every Monday, as promised. They only ever built when you pressed Build now. If your PC is off on Monday, they're made the next time Toasted runs."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["Your first lists", "A list you've never had is made the next time Toasted starts, not right away, so a tier or the Last.fm key you set up in the meantime is in it from the start. Build now still makes one any time."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.3.0",
     "date": "2026-10-24",
     "sections": [

@@ -548,6 +548,8 @@ pub fn run() {
             // Wrapped's Home page kept current (see home.rs)
             home::schedule(app.handle());
             scrobbles::schedule(app.handle());
+            // Discover's weekly lists, made every Monday (see discover.rs)
+            discover::schedule(app.handle());
 
             // Just updated: the Changelog opens (see changelog.rs)
             changelog::at_start(app.handle());
@@ -691,6 +693,7 @@ pub fn run() {
             discover::wrapper_build,
             discover::wrapped_discover_status,
             discover::wrapped_discover_build,
+            discover::wrapped_discover_offset,
             discover::wrapped_discover_ratings,
             discover::wrapped_discover_vote,
             discover::wrapped_discover_reset,
