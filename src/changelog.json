@@ -1,5 +1,39 @@
 [
   {
+    "version": "1.4.0",
+    "date": "2026-10-30",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["Custom colors", "Colors has a third choice, Custom, in Toasted's Settings and in Wrapped's Settings. Pick your own accent with the color picker or paste a hex code. The background follows its hue, or pick a background color of your own. The Toaster, the widget, the toasts, Wrapped and Settings all use it."],
+          ["Custom backgrounds", "Now Playing's Background has a Custom choice: a solid color, a gradient (vertical, horizontal, diagonal, reverse diagonal or radial), or an image from your PC. Show the image as Fill, Center or Stretch, or place it yourself: drag it, resize it by its edges and corners, and hold Alt to keep its shape. Blur softens it, and your color shows wherever it doesn't reach. The images you've picked stay in a list to choose from again."],
+          ["Tint", "Gives the album art, or your image, a touch of your accent color."],
+          ["Blur edge", "The album art carries on past its edges, mirrored, then softens and fades away. You choose how far it reaches."],
+          ["Opacity", "Every piece of Now Playing has an Opacity slider, for one piece or all of them at once."],
+          ["Tertiary color", "Invert colors is now Tertiary color: Standard, Invert, or Custom, with your own two colors in place of white and the accent."],
+          ["Skip Stuck Songs", "Roon sometimes stops at the end of a song and never starts the next one. Toasted now moves on to it after a few seconds stuck there. It's on by default, under General in Toasted's Settings."],
+          ["Settings", "Every switch in Toasted's Settings is now a pair of buttons, with the On side in your accent color."],
+          ["Edit layout", "Keep shape and Fit to this window moved up next to Show, and the toolbar's groups move to lines of their own in a narrow window. A bar's custom color uses the new color picker."]
+        ]
+      },
+      {
+        "title": "Fixes",
+        "items": [
+          ["Edit layout", "The toolbar stays on top when you select a piece. Selecting the album art used to cover it."],
+          ["Color pickers", "Escape closes just the picker, not the editor behind it."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["Saved per profile", "Custom backgrounds, Tint, Blur edge, Opacity and Tertiary color are saved with each Now Playing profile."],
+          ["Roon ARC", "Skip Stuck Songs works on your Roon zones. Roon ARC's playback isn't shared with apps like Toasted, so it can't help there."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.3.1",
     "date": "2026-10-27",
     "sections": [

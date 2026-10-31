@@ -12,7 +12,9 @@
 const { convertFileSrc } = window.__TAURI__.core;
 
 // The colors a palette can change (all others stay at their defaults)
-export const ALBUM_COLOR_PROPS = ["--accent", "--bg", "--card", "--track", "--border", "--on-accent"];
+// (text and hover only for a picked background, which can be light in dark
+// mode or dark in light mode)
+export const ALBUM_COLOR_PROPS = ["--accent", "--bg", "--card", "--track", "--border", "--on-accent", "--text", "--muted", "--hover"];
 
 const albumHueCache = new Map(); // image key -> { h, s, muted } or { mono: true }
 
@@ -153,6 +155,49 @@ export function albumPalette({ h, s, muted, mono }, dark) {
     "--card": hsl(h, tint * 0.6, 0.99),
     "--track": hsl(h, tint, 0.84),
     "--border": hsl(h, tint, 0.88),
+  };
+}
+
+// Colors: Custom. The accent as picked, with dark icons on it when it's a
+// light color (so the play button stays readable). The background: one the
+// user picked, or (none picked) tinted from the accent's hue, the way album
+// colors tint it.
+const isHex = (hex) => /^#[0-9a-f]{6}$/i.test(String(hex ?? ""));
+
+function hexRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+
+function isLight(hex) {
+  const [r, g, b] = hexRgb(hex).map((c) => {
+    const x = c / 255;
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.4;
+}
+
+export function customPalette(accent, background, dark) {
+  if (!isHex(accent)) return {};
+  const own = { "--accent": accent, "--on-accent": isLight(accent) ? "hsl(240 7% 11%)" : "#fff" };
+  if (!isHex(background)) {
+    const [h, s] = rgbToHsl(...hexRgb(accent));
+    return { ...albumPalette({ h, s, muted: false }, dark), ...own };
+  }
+  // The cards, bars and lines a step off the background (lighter on a dark
+  // one, darker on a light one), and text that reads on it
+  const [h, s, l] = rgbToHsl(...hexRgb(background));
+  const light = isLight(background);
+  const step = (dl) => hsl(h, s, Math.min(1, Math.max(0, l + dl)));
+  return {
+    ...own,
+    "--bg": background,
+    "--card": light ? step(0.04) : step(0.05),
+    "--track": light ? step(-0.11) : step(0.15),
+    "--border": light ? step(-0.07) : step(0.11),
+    "--text": light ? "#1c1c1f" : "#ececf1",
+    "--muted": light ? "#6b6b76" : "#9a9aa6",
+    "--hover": light ? "rgba(0, 0, 0, 0.06)" : "rgba(255, 255, 255, 0.08)",
   };
 }
 

@@ -509,6 +509,11 @@ button:disabled {
   gap: 16px 24px;
 }
 
+/* (a fifth setting: on a line of its own, centered) */
+.general-card > .setting-row > .setting-wide {
+  grid-column: 1 / -1;
+}
+
 /* One setting: a 3-column grid, with the name centered over the switch
    (left label | switch | right label) */
 .setting {
@@ -534,6 +539,92 @@ button:disabled {
   display: flex;
   justify-content: center;
   white-space: nowrap;
+}
+
+/* A setting with pills instead of a switch (Colors): the name over them */
+.setting.setting-pills-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting-pills-cell .setting-name {
+  width: auto;
+}
+
+.seg-pills {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
+/* A switch group shown as pills (settings.js): the pills instead of the
+   labels and switch, and a setting's name over them */
+.switch-group.as-pills {
+  display: flex;
+  justify-content: center;
+}
+
+.switch-group.as-pills > .label-off,
+.switch-group.as-pills > .label-on,
+.switch-group.as-pills > .switch {
+  display: none;
+}
+
+.setting:has(> .switch-group.as-pills) {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting:has(> .switch-group.as-pills) .setting-name {
+  width: auto;
+}
+
+.seg-pill {
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.seg-pill:hover {
+  color: var(--text);
+}
+
+.seg-pill.selected {
+  color: var(--text);
+  background: var(--card);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+/* A switch's "on" side, chosen: in the accent (Default, Album art or
+   Custom's), as the switch's slider was */
+.seg-pill.on-side.selected {
+  color: var(--on-accent, #fff);
+  background: var(--accent);
+}
+
+/* Custom's accent, as a dot in its pill */
+.seg-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--dot, var(--accent));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
 }
 
 .label-off {

@@ -9,6 +9,7 @@
     <title>Roon: Toasted Settings</title>
     <link rel="stylesheet" href="fonts.css" />
     <link rel="stylesheet" href="settings.css" />
+    <link rel="stylesheet" href="color-picker.css" />
     <script type="module" src="/settings.js" defer></script>
   </head>
 
@@ -96,15 +97,14 @@
         <h2>General</h2>
 
         <div class="setting-row">
-          <div class="setting">
+          <!-- Default, Album Art, or Custom (an accent the user picks; its dot
+               shows the color, and clicking Custom again picks another) -->
+          <div class="setting setting-pills-cell">
             <span class="setting-name">Colors</span>
-            <div class="switch-group" id="colors-group">
-              <span class="switch-label label-off">Default</span>
-              <label class="switch">
-                <input type="checkbox" id="toaster-colors" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">Album Art</span>
+            <div class="seg-pills" id="colors-pills">
+              <button class="seg-pill" data-colors="default">Default</button>
+              <button class="seg-pill" data-colors="album">Album Art</button>
+              <button class="seg-pill" data-colors="custom" title="Pick your own accent"><span class="seg-dot"></span>Custom</button>
             </div>
           </div>
           <!-- Tracks with many supporting artists: just the first one -->
@@ -136,6 +136,19 @@
               <span class="switch-label label-off">Off</span>
               <label class="switch">
                 <input type="checkbox" id="start-with-windows" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <!-- Roon stopping at a song's end without starting the next one:
+               go on to it after a few seconds (unstick.rs) -->
+          <div class="setting setting-wide" title="Roon sometimes stops at the end of a song and never starts the next one. With this on, Toasted moves on to the next song after a few seconds stuck there.">
+            <span class="setting-name">Skip Stuck Songs</span>
+            <div class="switch-group" id="skip-stuck-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="skip-stuck" />
                 <span class="slider"></span>
               </label>
               <span class="switch-label label-on">On</span>

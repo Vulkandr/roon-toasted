@@ -9,6 +9,7 @@
     <title>Roon: Wrapped</title>
     <link rel="stylesheet" href="fonts.css" />
     <link rel="stylesheet" href="wrapper.css" />
+    <link rel="stylesheet" href="color-picker.css" />
     <script type="module" src="/wrapper.js" defer></script>
   </head>
 
@@ -159,8 +160,17 @@
            handles). -->
       <section id="stage" class="stage" hidden>
         <div id="stage-bg" class="stage-bg"></div>
+        <!-- Background: Custom (a color or gradient), and Tint's color over
+             the picture -->
+        <div id="stage-custom-bg" class="stage-custom-bg">
+          <!-- Image mode's picture, placed by Fit (Custom: dragged and
+               resized while the window is open) -->
+          <div id="stage-image" class="stage-image" hidden></div>
+        </div>
+        <div id="stage-tint" class="stage-tint"></div>
         <div id="stage-canvas" class="stage-canvas">
           <div class="piece piece-art" data-piece="art">
+            <div id="art-edge" class="art-edge" hidden></div>
             <div class="piece-content">
               <img id="stage-art" alt="" />
               <div id="stage-art-missing" class="art-placeholder" hidden></div>
@@ -246,7 +256,7 @@
               </div>
             </div>
             <div class="editor-row editor-global">
-              <div class="editor-group">
+              <div id="editor-show" class="editor-group">
                 <span class="editor-label">Show</span>
                 <button class="chip" data-show="art">Art</button>
                 <button class="chip" data-show="info">Track</button>
@@ -257,18 +267,36 @@
                 <button class="chip" data-show="volume">Volume</button>
                 <button class="chip" data-show="wrapped">Wrapped</button>
               </div>
+              <!-- The layout's own settings, set off from the pieces by a line
+                   (on a line of their own when the window's too narrow) -->
+              <div id="editor-shape" class="editor-group editor-split">
+                <button id="editor-keepshape" class="chip" title="On: the layout keeps the shape it was made in, as big as fits, with space added at the sides (or top and bottom) when the window is another shape. Off: the pieces spread over the whole window, whatever its shape.">Keep shape</button>
+                <!-- shown when the layout's shape isn't the window's (the
+                     dashed frame): makes it the window's shape -->
+                <button id="editor-shape-fit" class="editor-btn" title="The layout keeps the shape it was made in, with space added at the sides (or top and bottom) when the window is another shape. This gives it this window's shape instead; the pieces stretch to fill it." hidden>Fit to this window</button>
+              </div>
             </div>
             <div class="editor-row editor-global">
+              <!-- Custom opens the background window (clicked again, too);
+                   Tint recolors the album art in the accent -->
               <div class="editor-group">
                 <span class="editor-label">Background</span>
                 <button class="chip" data-bg="plain">Plain</button>
                 <button class="chip" data-bg="art">Album art</button>
+                <button class="chip" data-bg="custom" title="Your own color or gradient">Custom</button>
+                <button id="editor-tint" class="chip" title="Recolor the picture in the accent (or in Custom colors' background color, when one is picked)">Tint</button>
+              </div>
+              <div class="editor-group editor-split">
                 <label class="editor-check" title="Use these fonts, icons and bar styles in the player bar too, when Now Playing is closed"><input id="editor-barstyle" type="checkbox" /> Style player bar</label>
-                <label class="editor-check" title="What's white takes the app's or album's color, and what has that color turns white (the title, the play button, buttons that are on)"><input id="editor-invert" type="checkbox" /> Invert colors</label>
-                <!-- shown when the layout's shape isn't the window's (the
-                     dashed frame): makes it the window's shape -->
-                <label class="editor-check" title="On: the layout keeps the shape it was made in, as big as fits, with space added at the sides (or top and bottom) when the window is another shape. Off: the pieces spread over the whole window, whatever its shape."><input id="editor-keepshape" type="checkbox" checked /> Keep shape</label>
-                <button id="editor-shape-fit" class="editor-btn" title="The layout keeps the shape it was made in, with space added at the sides (or top and bottom) when the window is another shape. This gives it this window's shape instead; the pieces stretch to fill it." hidden>Fit to this window</button>
+              </div>
+              <!-- Invert colors: what's white takes the accent and the accent
+                   turns white; Custom picks those two colors (clicked again,
+                   too) -->
+              <div id="editor-invert" class="editor-group editor-split" title="What's white takes the app's or album's color, and what has that color turns white (the title, the play button, buttons that are on)">
+                <span class="editor-label">Tertiary color</span>
+                <button class="chip" data-invert="off">Standard</button>
+                <button class="chip" data-invert="on">Invert</button>
+                <button class="chip" data-invert="custom" title="Pick the two colors: the one in place of white, and the accent">Custom</button>
               </div>
             </div>
             <div class="editor-row editor-piece">
@@ -298,6 +326,13 @@
                 <label class="editor-label" for="editor-icons-select">Icons</label>
                 <select id="editor-icons-select" class="editor-select"></select>
                 <label class="editor-check" title="Use this pack for every piece with icons"><input id="editor-icons-all" type="checkbox" checked /> All</label>
+              </div>
+              <!-- The art: Blur edge (the art mirrored out and fading away)
+                   and how far it reaches -->
+              <div id="editor-art" class="editor-group" hidden title="The art mirrored out on every side, blurred, fading away from it">
+                <label class="editor-check"><input id="editor-art-edge" type="checkbox" /> Blur edge</label>
+                <input id="editor-art-edge-size" class="editor-range" type="range" min="1" max="20" step="1" title="How far it fades (double-click for 8%)" />
+                <span id="editor-art-edge-value" class="editor-value"></span>
               </div>
               <div id="editor-quality" class="editor-group" hidden>
                 <label class="editor-check" title="Show what the playing file is next to the light: format, sample rate, bit depth, channels (needs Hearts &amp; Library)"><input id="editor-quality-format" type="checkbox" /> File format</label>
@@ -368,7 +403,7 @@
                 <button class="chip" data-color="app" title="The app's colors (Wave: the rainbow; the other drawn bars: blue-purple)">App</button>
                 <button class="chip" data-color="album" title="The playing album's color">Album</button>
                 <button class="chip" data-color="custom">Custom</button>
-                <input id="editor-color" class="editor-color" type="color" value="#7b5fc7" title="Custom color" />
+                <button id="editor-color" class="editor-color" title="Custom color"></button>
                 <span id="editor-wave" class="editor-group" hidden>
                   <label class="editor-check"><input id="editor-mirror" type="checkbox" /> Mirrored</label>
                   <span id="editor-side" class="editor-group">
@@ -407,9 +442,97 @@
                 <label class="editor-check" title="Use this edge for every piece with icons"><input id="editor-icon-edge-all" type="checkbox" checked /> All</label>
               </div>
             </div>
+            <!-- With a piece selected: its opacity (All: every piece's), by
+                 Reset and Done where there's room -->
             <div class="editor-row editor-actions">
-              <button id="editor-reset" class="editor-btn" title="Undo your changes since the profile was last saved">Reset</button>
-              <button id="editor-done" class="editor-btn primary">Done</button>
+              <div id="editor-opacity" class="editor-group" hidden title="How see-through this piece is (double-click for 100%)">
+                <label class="editor-label" for="editor-opacity-range">Opacity</label>
+                <input id="editor-opacity-range" class="editor-range" type="range" min="10" max="100" step="5" />
+                <span id="editor-opacity-value" class="editor-value"></span>
+                <label class="editor-check" title="Use this opacity for every piece"><input id="editor-opacity-all" type="checkbox" checked /> All</label>
+              </div>
+              <div class="editor-group editor-split">
+                <button id="editor-reset" class="editor-btn" title="Undo your changes since the profile was last saved">Reset</button>
+                <button id="editor-done" class="editor-btn primary">Done</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Background: Custom's window, over everything else (dimmed). The
+             changes show behind it as they're made, and stay only once
+             saved. -->
+        <div id="bg-window" class="bg-window" hidden>
+          <div class="bg-window-box" role="dialog" aria-label="Custom background">
+            <div class="bg-window-head">
+              <span class="bg-window-title">Custom background</span>
+              <button id="bg-window-close" class="bg-window-x" title="Close">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </button>
+            </div>
+            <!-- Color: a color or gradient. Image: a picture over it (the
+                 color shows wherever the picture doesn't reach). -->
+            <div class="bg-kinds">
+              <button class="chip" data-kind="color">Color</button>
+              <button class="chip" data-kind="image">Image</button>
+            </div>
+            <div class="bg-sections">
+              <div id="bg-color" class="bg-section">
+                <div class="bg-window-row">
+                  <select id="bg-fill" class="editor-select" title="A solid color, or a gradient between two">
+                    <option value="solid">Solid color</option>
+                    <option value="vertical">Vertical gradient</option>
+                    <option value="horizontal">Horizontal gradient</option>
+                    <option value="diagonal">Diagonal gradient</option>
+                    <option value="reverse-diagonal">Reverse diagonal gradient</option>
+                    <option value="radial">Radial gradient</option>
+                  </select>
+                  <!-- The colors: one, or a gradient's two; the picker edits the
+                       one that's on -->
+                  <div id="bg-stops" class="bg-stops">
+                    <button class="bg-swatch" data-stop="0" title="First color"></button>
+                    <button id="bg-swap" class="bg-swap" title="Swap the two colors">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m16 3 4 4-4 4"/><path d="M20 7H4"/><path d="m8 21-4-4 4-4"/><path d="M4 17h16"/></svg>
+                    </button>
+                    <button class="bg-swatch" data-stop="1" title="Second color"></button>
+                  </div>
+                </div>
+                <div id="bg-picker" class="bg-picker"></div>
+              </div>
+              <div id="bg-image" class="bg-section">
+                <!-- The picked image, and the ones picked before (X: off
+                     the list) -->
+                <div class="bg-window-row">
+                  <div class="bg-files">
+                    <button id="bg-file" class="bg-file" title="The images you've picked before">
+                      <span id="bg-file-name" class="bg-file-name">No image</span>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+                    </button>
+                    <div id="bg-file-list" class="bg-file-list" hidden></div>
+                  </div>
+                  <button id="bg-browse" class="editor-btn" title="Pick an image file">Browse</button>
+                </div>
+                <div class="bg-window-row">
+                  <label class="editor-label" for="bg-fit">Fit</label>
+                  <select id="bg-fit" class="editor-select" title="Custom: drag the image to move it, and its handles to resize it (hold Alt to keep its shape)">
+                    <option value="fill">Fill</option>
+                    <option value="center">Center</option>
+                    <option value="stretch">Stretch</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </div>
+                <div class="bg-window-row" title="Soften the image (double-click for none)">
+                  <label class="editor-label" for="bg-blur">Blur</label>
+                  <input id="bg-blur" class="editor-range" type="range" min="0" max="40" step="1" />
+                  <span id="bg-blur-value" class="editor-value"></span>
+                </div>
+                <label class="editor-check" title="Recolor the image in the accent (or in Custom colors' background color, when one is picked)"><input id="bg-tint" type="checkbox" /> Tint in the accent</label>
+                <p id="bg-note" class="bg-note"></p>
+              </div>
+            </div>
+            <div class="bg-window-actions">
+              <button id="bg-window-cancel" class="editor-btn">Cancel</button>
+              <button id="bg-window-save" class="editor-btn primary">Save</button>
             </div>
           </div>
         </div>

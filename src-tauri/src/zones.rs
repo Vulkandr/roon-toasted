@@ -330,7 +330,7 @@ impl Zones {
         self.inner.lock().unwrap().core.clone()
     }
 
-    fn transport(&self) -> Result<Transport, String> {
+    pub(crate) fn transport(&self) -> Result<Transport, String> {
         self.inner
             .lock()
             .unwrap()

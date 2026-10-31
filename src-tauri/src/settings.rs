@@ -45,8 +45,19 @@ pub struct AppSettings {
     /// another window is clicked.
     /// When off, it gets a taskbar button instead (see `apply_taskbar`).
     pub hide_on_blur: bool,
-    /// The Toaster's colors: the default purple, or taken from the album art.
+    /// The Toaster's colors: the default purple, taken from the album art,
+    /// or the user's own accent (`toaster_accent`).
     pub toaster_colors: ToasterColors,
+    /// The accent for Colors: Custom, as "#rrggbb". Kept when Colors is
+    /// switched back, so Custom comes back with it.
+    pub toaster_accent: String,
+    /// Colors: Custom's background, as "#rrggbb"; None: tinted from the
+    /// accent, the way album colors tint it.
+    pub toaster_background: Option<String>,
+    /// Now Playing's Background: Custom images picked so far, newest first
+    /// (background.rs). Changed through `wrapper_pick_background` and
+    /// `wrapper_forget_background`, not `update_settings`.
+    pub background_images: Vec<String>,
     /// General > Artists: show only a track's first artist (Main) instead of
     /// every artist Roon lists (All), everywhere (zones.rs).
     pub main_artist_only: bool,
@@ -77,6 +88,9 @@ pub struct AppSettings {
     pub widget_lines: WidgetLines,
     /// Start in the tray when signing in to Windows (see autostart.rs).
     pub start_with_windows: bool,
+    /// General > Skip Stuck Songs: when Roon stops at a song's end and
+    /// doesn't start the next one, go on to it (unstick.rs).
+    pub skip_stuck: bool,
     /// How long a toast stays, in seconds (it waits while the mouse is on it).
     /// Allowed range: `TOAST_SECONDS`.
     pub toast_seconds: u32,
@@ -143,6 +157,9 @@ impl Default for AppSettings {
             hide_on_blur: true,
             main_artist_only: true,
             toaster_colors: ToasterColors::default(),
+            toaster_accent: DEFAULT_ACCENT.into(),
+            toaster_background: None,
+            background_images: Vec::new(),
             hotkeys_enabled: true,
             hotkey_player: Some("Ctrl+Alt+Z".into()),
             hotkey_search: Some("Ctrl+Alt+S".into()),
@@ -155,6 +172,7 @@ impl Default for AppSettings {
             widget_width: 320,
             widget_lines: WidgetLines::default(),
             start_with_windows: true,
+            skip_stuck: true,
             toast_seconds: 8,
             library_controls: true,
             library_add_mode: roon_library::AddMode::Track,
@@ -264,6 +282,16 @@ pub enum ToasterColors {
     Default,
     /// Accent and background tint from the album that's playing.
     Album,
+    /// The user's own accent (`toaster_accent`).
+    Custom,
+}
+
+/// The app's own purple, the custom accent's starting point.
+pub const DEFAULT_ACCENT: &str = "#7b5fc7";
+
+/// A color as "#rrggbb" (what the color pickers send).
+pub fn is_hex_color(text: &str) -> bool {
+    text.len() == 7 && text.starts_with('#') && text[1..].chars().all(|c| c.is_ascii_hexdigit())
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
@@ -341,6 +369,9 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
         if name == "hotkeyPlayer" || name == "hotkeySearch" || name == "hotkeyWrapper" {
             return Err("Use set_hotkey to change a hotkey.".into());
         }
+        if name == "backgroundImages" {
+            return Err("Use the background window to pick or forget an image.".into());
+        }
         if name == "lastVersion" {
             return Err("The last version is set by the app itself.".into());
         }
@@ -366,11 +397,18 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
             TOAST_SECONDS.end()
         ));
     }
+    if !is_hex_color(&updated.toaster_accent) {
+        return Err("The accent must be a color like #7b5fc7.".into());
+    }
+    if updated.toaster_background.as_deref().is_some_and(|c| !is_hex_color(c)) {
+        return Err("The background must be a color like #1b1b1f.".into());
+    }
     if !WIDGET_POSITION.contains(&updated.widget_position) || !WIDGET_WIDTH.contains(&updated.widget_width)
     {
         return Err("The widget's position or width is out of range.".into());
     }
     save(&path, &updated)?;
+    crate::unstick::set_enabled(updated.skip_stuck);
     if updated.start_with_windows != before.start_with_windows {
         crate::autostart::apply(&app);
     }
@@ -405,4 +443,19 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     crate::tray::sync(&app, &updated);
     let _ = app.emit("settings-changed", &updated);
     Ok(updated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hex_colors() {
+        assert!(is_hex_color("#7b5fc7"));
+        assert!(is_hex_color("#ABCDEF"));
+        assert!(!is_hex_color("7b5fc7"));
+        assert!(!is_hex_color("#7b5fc"));
+        assert!(!is_hex_color("#7b5fcz"));
+        assert!(!is_hex_color("#7b5fc7ff"));
+    }
 }

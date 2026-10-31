@@ -9,6 +9,7 @@ use tauri::{
 
 mod audio;
 mod autostart;
+mod background;
 mod browse;
 mod changelog;
 mod discover;
@@ -36,6 +37,7 @@ mod musicfolder;
 mod status;
 mod toast;
 mod tray;
+mod unstick;
 mod widget;
 mod tags;
 mod wrapped;
@@ -464,6 +466,11 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("roonimg", |ctx, request, responder| {
             zones::image_request(ctx.app_handle(), request, responder)
         })
+        // Now Playing's custom background images (only the ones picked)
+        .register_asynchronous_uri_scheme_protocol("bgimg", |ctx, request, responder| {
+            let _ = ctx;
+            background::image_request(request, responder)
+        })
         // The zoom setting (the Toaster's, which the toast follows) is applied
         // each time their pages load, including dev-mode reloads.
         .on_page_load(|webview, payload| {
@@ -550,6 +557,8 @@ pub fn run() {
             scrobbles::schedule(app.handle());
             // Discover's weekly lists, made every Monday (see discover.rs)
             discover::schedule(app.handle());
+            // Roon stuck at a song's end: on to the next one
+            unstick::schedule(app.handle());
 
             // Just updated: the Changelog opens (see changelog.rs)
             changelog::at_start(app.handle());
@@ -757,6 +766,8 @@ pub fn run() {
             wrapper::wrapper_attention,
             wrapper::wrapper_put_back,
             wrapper::list_fonts,
+            background::wrapper_pick_background,
+            background::wrapper_forget_background,
             wrapper::wrapper_roon_player,
             wrapper::wrapper_roon_link,
             wrapper::wrapper_roon_close,

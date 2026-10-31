@@ -9,7 +9,7 @@
 // in its corner and show it ("toast_present"). A line along the bottom counts
 // down the time; when it runs out the toast fades and hides ("toast_hide").
 
-import { albumHue, albumPalette, paintColors } from "./album-colors.js";
+import { albumHue, albumPalette, customPalette, paintColors } from "./album-colors.js";
 
 // Tauri's JavaScript API (available because withGlobalTauri is on)
 const { invoke, convertFileSrc } = window.__TAURI__.core;
@@ -80,6 +80,7 @@ async function show(track) {
       );
     }
   }
+  if (track.colors === "custom") palette = customPalette(track.accent, track.background, darkScheme.matches);
   await Promise.race([Promise.all(waits), sleep(ART_WAIT_MS)]);
   if (id !== current) return;
   paintColors(document.documentElement, palette);

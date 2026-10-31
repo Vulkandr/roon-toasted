@@ -9,7 +9,8 @@
 // the Toaster. Now Playing (the "stage") covers Roon with big art and the
 // track's text, laid out however the user likes.
 
-import { albumHue, albumPalette, paintColors } from "./album-colors.js";
+import { albumHue, albumPalette, customPalette, paintColors } from "./album-colors.js";
+import { ColorPicker, closeColorPopover, cssToHex, hexToRgb, normalizeHex, openColorPopover } from "./color-picker.js";
 import { ICON_PACKS } from "./icons.js";
 import { WaveBar } from "./bars.js";
 
@@ -54,8 +55,42 @@ const queueMore = $("#queue-more");
 const queueEmpty = $("#queue-empty");
 const stage = $("#stage");
 const stageBg = $("#stage-bg");
+const stageCustomBg = $("#stage-custom-bg");
+const stageImage = $("#stage-image");
+// (Custom placement's handles, as a piece's: corners and sides)
+for (const dir of ["nw", "n", "ne", "e", "se", "s", "sw", "w"]) {
+  const handle = document.createElement("span");
+  handle.className = `handle ${dir}`;
+  handle.dataset.dir = dir;
+  stageImage.append(handle);
+}
 const stageCanvas = $("#stage-canvas");
 const stageArt = $("#stage-art");
+// Blur edge: layers of nine copies of the art each, the middle one as it is
+// (under the art), the ones around it flipped away from it. From the back:
+// the blurriest, reaching all the way out; then sharper ones, each fading
+// out closer to the art. `blur` and `fade` are fractions of the reach.
+const artEdge = $("#art-edge");
+const EDGE_LAYERS = [
+  { blur: 0.5, fade: 1 },
+  { blur: 0.25, fade: 0.7 },
+  { blur: 0.1, fade: 0.4 },
+  { blur: 0, fade: 0.15 },
+];
+const artEdgeTiles = [];
+const artEdgeLayers = EDGE_LAYERS.map(() => {
+  const layer = document.createElement("div");
+  for (let row = 0; row < 3; row++) {
+    for (let col = 0; col < 3; col++) {
+      const tile = document.createElement("span");
+      tile.style.transform = `scale(${col === 1 ? 1 : -1}, ${row === 1 ? 1 : -1})`;
+      layer.append(tile);
+      artEdgeTiles.push({ tile, row, col });
+    }
+  }
+  artEdge.append(layer);
+  return layer;
+});
 const stageArtMissing = $("#stage-art-missing");
 const stageEditBtn = $("#stage-edit");
 const stageUnsaved = $("#stage-unsaved");
@@ -84,7 +119,9 @@ let ratingReady = false; // the Discover thumbs are set up (renderRating)
 let artKey; // the art showing (undefined at first, so the first render always draws it)
 let draggingSeek = false;
 let draggingVolume = false;
-let colorsMode = "default"; // "default" or "album", from Settings
+let colorsMode = "default"; // "default", "album" or "custom", from Settings
+let customAccent = "#7b5fc7"; // Colors: Custom's accent, from Settings
+let customBackground = null; // and its background (null: tinted from the accent)
 let addMode = "track"; // what "add to library" adds, from Settings
 let queue = { zoneId: null, items: [] };
 // Wrapped (the menu over Roon's logo and the page over Roon's content):
@@ -301,6 +338,7 @@ function showArt(imageKey) {
     else img.removeAttribute("src");
   }
   stageBg.style.backgroundImage = imageKey ? `url("${stageArt.src}")` : "";
+  artEdge.style.setProperty("--art", imageKey ? `url("${stageArt.src}")` : "none");
   applyColors();
 }
 
@@ -312,6 +350,7 @@ art.addEventListener("error", () => {
 stageArt.addEventListener("error", () => {
   stageArt.hidden = true;
   stageArtMissing.hidden = false;
+  layoutStage(); // (no Blur edge round the stand-in)
 });
 
 function updatePosition(seconds) {
@@ -365,13 +404,23 @@ async function applyColors() {
   }
   const palette = hue ? albumPalette(hue, darkScheme.matches) : null;
   albumAccent = palette?.["--accent"] ?? null;
-  paintColors(document.documentElement, colorsMode === "album" && palette ? palette : {});
+  paintColors(
+    document.documentElement,
+    colorsMode === "album" && palette ? palette : colorsMode === "custom" ? customPalette(customAccent, customBackground, darkScheme.matches) : {},
+  );
   layoutStage();
 }
 
 function applySettings(settings) {
-  const colorsChanged = settings.toasterColors !== colorsMode;
+  bgHistory = Array.isArray(settings.backgroundImages) ? settings.backgroundImages : [];
+  if (!bgFileList.hidden) fillBgFiles();
+  const colorsChanged =
+    settings.toasterColors !== colorsMode ||
+    settings.toasterAccent !== customAccent ||
+    settings.toasterBackground !== customBackground;
   colorsMode = settings.toasterColors;
+  customAccent = settings.toasterAccent;
+  customBackground = settings.toasterBackground;
   addMode = settings.libraryAddMode;
   rememberPlayer = settings.wrapperRememberPlayer !== false;
   if (colorsChanged) applyColors();
@@ -542,11 +591,17 @@ const PIECES = {
 const DEFAULT_ICONS = "lucide";
 // The app's own accent (wrapper.css), for bars set to the app's color
 const APP_ACCENT = "#7b5fc7";
+// The app's accent as the Colors setting has it: the purple, or Custom's
+function appAccent() {
+  return colorsMode === "custom" ? customAccent : APP_ACCENT;
+}
 let albumAccent = null; // the playing album's accent, whatever the app's Colors setting
 // Fonts shipped with the app (fonts.css), offered before the PC's own
 const BUNDLED_FONTS = ["Lato", "Inter", "Montserrat", "Oswald", "Bebas Neue", "Playfair Display", "Gloock", "JetBrains Mono"];
 const DEFAULT_FONT = "Lato";
 const PIECE_IDS = Object.keys(PIECES);
+const BG_FILLS = ["solid", "vertical", "horizontal", "diagonal", "reverse-diagonal", "radial"];
+const BG_FITS = ["fill", "center", "stretch", "custom"];
 const LAYOUT_VERSION = 2;
 // A black edge on a piece's text or icons: "none", "stroke" (an outline)
 // or "glow", and its thickness in px
@@ -561,10 +616,23 @@ const DEFAULT_LAYOUT = {
   aspect: 1.8921,
   keepShape: true, // off: the pieces spread over the whole window, whatever its shape
   barStyle: true, // the player bar uses these styles too (not the places)
-  background: "art", // or "plain"
+  background: "art", // or "plain", or "custom" (customBg)
+  // Background: Custom: a solid color, or a gradient between two; with kind
+  // "image", a picture over it, placed by `fit` ("fill", "center",
+  // "stretch", or "custom": `rect`, its left, top, width and height as
+  // fractions of the stage)
+  // (`blur`: the picture softened, in px)
+  customBg: { kind: "color", fill: "solid", colors: ["#1b1b1f", "#3a2a5c"], image: null, fit: "fill", rect: null, blur: 0 },
+  tint: false, // the album art or image recolored in the accent (or Custom colors' picked background)
   invertToggles: false, // "Invert colors": what's white takes the accent, and what has the accent turns white
+  // Invert colors: Custom: the color in white's place, and the accent
+  // (null: white, and the app's or album's accent, as On has them)
+  invertCustom: false,
+  invertPrimary: null,
+  invertAccent: null,
   pieces: {
-    art: { visible: true, x: 0.5, y: 0.15, size: 0.83 },
+    // (edge: Blur edge, fading over edgeSize of the art's size, in and out)
+    art: { visible: true, x: 0.5, y: 0.15, size: 0.83, edge: false, edgeSize: 0.08 },
     info: { visible: true, x: 0.02, y: 0.97, w: 0.3, size: 0.0173, align: "left", lines: 1, font: DEFAULT_FONT, ...NO_TEXT_EDGE },
     transport: { visible: true, x: 0.5, y: 0.942, size: 0.0173, icons: DEFAULT_ICONS, play: "circle", ...NO_ICON_EDGE },
     seek: { visible: true, x: 0.5, y: 0.988, w: 0.39, size: 0.0173, font: DEFAULT_FONT, bar: "line", mirror: true, side: "top", labelScale: 1, ...NO_TEXT_EDGE },
@@ -1787,15 +1855,18 @@ function layoutStage() {
   }
   const base = Math.min(W, H);
   stage.classList.toggle("art-bg", layout.background === "art");
+  paintCustomBg();
   for (const id of PIECE_IDS) {
     const p = layout.pieces[id];
     const el = pieces[id];
     const { kind } = PIECES[id];
     el.classList.toggle("off", !p.visible);
+    el.style.setProperty("--piece-opacity", String(p.opacity ?? 1));
     if (kind === "square") {
       const size = Math.round(p.size * base);
       el.style.width = `${size}px`;
       el.style.height = `${size}px`;
+      if (id === "art") paintArtEdge(p, size);
     } else {
       el.style.fontSize = `${Math.max(MIN_TEXT_SIZE, p.size * H).toFixed(1)}px`;
       if (kind === "box") {
@@ -1872,7 +1943,17 @@ function iconEdge(kind, size) {
 
 function styleControls() {
   const on = barStyled();
-  document.documentElement.classList.toggle("invert-colors", on && !!layout.invertToggles);
+  const inverted = on && !!layout.invertToggles;
+  document.documentElement.classList.toggle("invert-colors", inverted);
+  // (Custom's two colors, or the usual white and accent)
+  const custom = inverted && !!layout.invertCustom;
+  for (const [name, value] of [
+    ["--invert-primary", custom && layout.invertPrimary],
+    ["--invert-accent", custom && layout.invertAccent],
+  ]) {
+    if (value) document.documentElement.style.setProperty(name, value);
+    else document.documentElement.style.removeProperty(name);
+  }
   for (const [id, control] of Object.entries(CONTROLS)) {
     const p = layout.pieces[id];
     const spec = PIECES[id];
@@ -1975,7 +2056,7 @@ const BAR_INPUTS = { seek, volume };
 // Not picked yet: whatever the app's Colors setting is.
 function barColor(p) {
   const mode = p.color || (colorsMode === "album" ? "album" : "app");
-  const color = mode === "custom" ? p.customColor || APP_ACCENT : mode === "album" ? albumAccent || APP_ACCENT : APP_ACCENT;
+  const color = mode === "custom" ? p.customColor || appAccent() : mode === "album" ? albumAccent || appAccent() : appAccent();
   return { mode, color };
 }
 
@@ -2013,11 +2094,12 @@ function fitWaves() {
       // One-sided waves are for edges; in the player bar it's mirrored
       mirror: !open || p.mirror !== false,
       side: p.side || "top",
-      // The app's look: the rainbow for Wave, blue-purple for the rest
-      rainbow: mode === "app",
+      // The app's look: the rainbow for Wave, blue-purple for the rest (with
+      // Colors: Custom, the app's color is the custom accent)
+      rainbow: mode === "app" && colorsMode !== "custom",
       color,
       // The playhead follows what's playing (or the picked color)
-      dot: mode === "custom" ? color : albumAccent || APP_ACCENT,
+      dot: mode === "custom" ? color : albumAccent || appAccent(),
       fontSize: open ? Math.max(MIN_TEXT_SIZE, p.size * H) : parseFloat(getComputedStyle(input.parentElement).fontSize) || 13,
       // The times' and knob's scale, so the wave's ends line up with them
       labelScale: open ? p.labelScale || 1 : 1,
@@ -2047,6 +2129,192 @@ new ResizeObserver(() => {
   if (stage.hidden) fitWaves();
 }).observe($(".player"));
 
+// Blur edge: the mirror reaching `edgeSize` (of the art's size) out on
+// every side; the art itself is left as it is
+const EDGE_MAX = 0.2;
+function edgeSizeOf(p) {
+  const n = Number(p.edgeSize);
+  return Number.isFinite(n) ? Math.min(EDGE_MAX, Math.max(0.01, n)) : 0.08;
+}
+
+function paintArtEdge(p, size) {
+  const on = !!p.edge && !!artKey && !stageArt.hidden;
+  artEdge.hidden = !on;
+  pieces.art.classList.toggle("edged", on);
+  if (!on) return;
+  const reach = Math.max(2, Math.round(edgeSizeOf(p) * size));
+  Object.assign(artEdge.style, {
+    left: `${-reach}px`,
+    top: `${-reach}px`,
+    width: `${size + reach * 2}px`,
+    height: `${size + reach * 2}px`,
+  });
+  // Each layer: solid at the art's edge, gone `fade` of the reach out
+  // (across and down, so the corners fade too)
+  EDGE_LAYERS.forEach(({ blur, fade }, i) => {
+    const layer = artEdgeLayers[i];
+    const gone = Math.round(reach * (1 - fade));
+    const across = (dir) =>
+      `linear-gradient(${dir}, transparent ${gone}px, #000 ${reach}px, #000 calc(100% - ${reach}px), transparent calc(100% - ${gone}px))`;
+    const mask = `${across("to right")}, ${across("to bottom")}`;
+    layer.style.webkitMaskImage = mask;
+    layer.style.maskImage = mask;
+    layer.style.filter = blur ? `blur(${Math.max(1, Math.round(reach * blur))}px)` : "";
+  });
+  for (const { tile, row, col } of artEdgeTiles) {
+    Object.assign(tile.style, {
+      left: `${reach + (col - 1) * size}px`,
+      top: `${reach + (row - 1) * size}px`,
+      width: `${size}px`,
+      height: `${size}px`,
+    });
+  }
+}
+
+// Background: Custom's CSS background, and whether it's light (dark text)
+function customBgCss(bg) {
+  const [a, b] = bg.colors;
+  switch (bg.fill) {
+    case "vertical":
+      return `linear-gradient(to bottom, ${a}, ${b})`;
+    case "horizontal":
+      return `linear-gradient(to right, ${a}, ${b})`;
+    case "diagonal":
+      return `linear-gradient(135deg, ${a}, ${b})`; // top left to bottom right
+    case "reverse-diagonal":
+      return `linear-gradient(225deg, ${a}, ${b})`; // top right to bottom left
+    case "radial":
+      return `radial-gradient(circle at center, ${a}, ${b})`;
+    default:
+      return a;
+  }
+}
+
+function lightness(hex) {
+  const [r, g, b] = hexToRgb(hex).map((c) => {
+    const x = c / 255;
+    return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+// Image mode's pictures: their size, and whether they're light, once loaded
+// (or that they're missing: moved or deleted, so nothing shows)
+const bgImages = new Map(); // path -> { state: "loading" | "ok" | "missing", w, h, light }
+
+function bgImage(path) {
+  let info = bgImages.get(path);
+  if (info) return info;
+  info = { state: "loading" };
+  bgImages.set(path, info);
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.onload = () => {
+    info.state = "ok";
+    info.w = img.naturalWidth;
+    info.h = img.naturalHeight;
+    info.url = img.src;
+    // (light or dark overall: a little copy's average, for the text color)
+    try {
+      const c = document.createElement("canvas");
+      c.width = c.height = 16;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0, 16, 16);
+      const px = ctx.getImageData(0, 0, 16, 16).data;
+      let sum = 0;
+      for (let i = 0; i < px.length; i += 4) sum += (0.2126 * px[i] + 0.7152 * px[i + 1] + 0.0722 * px[i + 2]) / 255;
+      info.light = sum / (px.length / 4) > 0.6;
+    } catch {
+      info.light = false;
+    }
+    loadedBgImage(path);
+  };
+  img.onerror = () => {
+    info.state = "missing";
+    loadedBgImage(path);
+  };
+  img.src = convertFileSrc(path, "bgimg");
+  return info;
+}
+
+// A picture loaded (or found missing): Custom gets its starting place if it
+// was waiting for the size, the window's note catches up
+function loadedBgImage(path) {
+  const bg = layout.customBg;
+  if (bgWindowOpen() && bg.image === path) {
+    if (bg.fit === "custom" && !bg.rect) startCustomRect();
+    showBgNote();
+  }
+  layoutStage();
+}
+
+// Where the picture goes, in px on the stage: its box is always the
+// picture's own (so Tint colors just the picture)
+function bgImageBox(info, fit, rect, W, H) {
+  if (fit === "center") return { x: (W - info.w) / 2, y: (H - info.h) / 2, w: info.w, h: info.h };
+  if (fit === "custom" && rect) {
+    const w = rect.w * W;
+    // (no height: from the picture's shape)
+    return { x: rect.x * W, y: rect.y * H, w, h: rect.h ? rect.h * H : (w * info.h) / info.w };
+  }
+  return { x: 0, y: 0, w: W, h: H };
+}
+
+// Custom's starting place: the whole picture, centered, a little smaller
+// than fits (so its handles are all in reach)
+function containedRect(info, W, H) {
+  const scale = Math.min(W / info.w, H / info.h) * 0.9;
+  const w = info.w * scale;
+  const h = info.h * scale;
+  return { x: (W - w) / 2 / W, y: (H - h) / 2 / H, w: w / W, h: h / H };
+}
+
+function paintCustomBg() {
+  const bg = layout.customBg;
+  const custom = layout.background === "custom";
+  stage.classList.toggle("custom-bg", custom);
+  stageCustomBg.style.background = custom ? customBgCss(bg) : "";
+  const used = bg.fill === "solid" ? [bg.colors[0]] : bg.colors;
+  let light = custom && used.reduce((sum, c) => sum + lightness(c), 0) / used.length > 0.4;
+  // The picture, over the color
+  const info = custom && bg.kind === "image" && bg.image ? bgImage(bg.image) : null;
+  const showing = info?.state === "ok";
+  stageImage.hidden = !showing;
+  if (showing) {
+    const W = stage.clientWidth;
+    const H = stage.clientHeight;
+    const box = bgImageBox(info, bg.fit, bg.rect, W, H);
+    // (blurred: Fill and Stretch reach past the edges, so they stay sharp
+    // edged, not faded into the color)
+    const blur = bg.blur || 0;
+    if (blur && (bg.fit === "fill" || bg.fit === "stretch")) {
+      box.x -= blur * 2;
+      box.y -= blur * 2;
+      box.w += blur * 4;
+      box.h += blur * 4;
+    }
+    stageImage.style.filter = blur ? `blur(${blur}px)` : "";
+    Object.assign(stageImage.style, {
+      left: `${box.x}px`,
+      top: `${box.y}px`,
+      width: `${box.w}px`,
+      height: `${box.h}px`,
+      backgroundImage: `url("${info.url}")`,
+      backgroundSize: bg.fit === "fill" ? "cover" : "100% 100%",
+    });
+    light = info.light;
+  }
+  stageImage.classList.toggle("placing", showing && bgWindowOpen() && bg.fit === "custom");
+  // (while the window's open with a picture, the rest dims, to see it)
+  stage.classList.toggle("bg-dim", showing && bgWindowOpen());
+  stage.classList.toggle("custom-light", custom && light);
+  // Tint: the accent, or Custom colors' own background when one's picked
+  stage.classList.toggle("tinted", !!layout.tint && layout.background === "art");
+  stage.classList.toggle("tinted-image", !!layout.tint && custom && bg.kind === "image");
+  if (colorsMode === "custom" && customBackground) stage.style.setProperty("--tint", customBackground);
+  else stage.style.removeProperty("--tint");
+}
+
 // A layout from Settings or a profile: each piece's saved values over the
 // defaults, so pieces or fields added later just get theirs
 function normalizeLayout(saved) {
@@ -2054,8 +2322,32 @@ function normalizeLayout(saved) {
   if (!saved || typeof saved !== "object") return out;
   if (typeof saved.barStyle === "boolean") out.barStyle = saved.barStyle;
   if (typeof saved.invertToggles === "boolean") out.invertToggles = saved.invertToggles;
+  if (typeof saved.invertCustom === "boolean") out.invertCustom = saved.invertCustom;
+  out.invertPrimary = normalizeHex(saved.invertPrimary);
+  out.invertAccent = normalizeHex(saved.invertAccent);
   if (typeof saved.keepShape === "boolean") out.keepShape = saved.keepShape;
-  if (saved.background === "art") out.background = "art";
+  if (saved.background === "art" || saved.background === "custom") out.background = saved.background;
+  if (typeof saved.tint === "boolean") out.tint = saved.tint;
+  const bg = saved.customBg;
+  if (bg && typeof bg === "object") {
+    if (BG_FILLS.includes(bg.fill)) out.customBg.fill = bg.fill;
+    if (bg.kind === "image") out.customBg.kind = "image";
+    if (typeof bg.image === "string" && bg.image) out.customBg.image = bg.image;
+    if (BG_FITS.includes(bg.fit)) out.customBg.fit = bg.fit;
+    const r = bg.rect;
+    if (r && [r.x, r.y, r.w].every(Number.isFinite) && r.w > 0.01) {
+      out.customBg.rect = { x: r.x, y: r.y, w: r.w };
+      if (Number.isFinite(r.h) && r.h > 0.01) out.customBg.rect.h = r.h;
+    }
+    if (out.customBg.fit !== "custom") out.customBg.rect = null;
+    if (Number.isFinite(bg.blur)) out.customBg.blur = Math.min(40, Math.max(0, Math.round(bg.blur)));
+    if (Array.isArray(bg.colors)) {
+      bg.colors.slice(0, 2).forEach((c, i) => {
+        const hex = normalizeHex(c);
+        if (hex) out.customBg.colors[i] = hex;
+      });
+    }
+  }
   if (typeof saved.aspect === "number" && saved.aspect >= ASPECT_RANGE[0] && saved.aspect <= ASPECT_RANGE[1]) out.aspect = saved.aspect;
   const savedPieces = saved.pieces;
   if (savedPieces && typeof savedPieces === "object") {
@@ -2433,6 +2725,8 @@ function setEditing(on) {
     fillProfiles();
   } else {
     cancelDialog();
+    // (editing ended some other way with the window open: not saved)
+    if (bgWindowOpen()) closeBgWindow(false);
     saveLayout();
   }
 }
@@ -2556,19 +2850,40 @@ const iconEdgeSelect = $("#editor-icon-edge-select");
 const iconEdgeSize = $("#editor-icon-edge-size");
 const iconEdgeValue = $("#editor-icon-edge-value");
 const iconEdgeAll = $("#editor-icon-edge-all");
-const invertCheck = $("#editor-invert");
+const invertGroup = $("#editor-invert");
 // Keep shape: on, the layout keeps the shape it was made in (space added
 // around it); off, it spreads over the whole window. Turned on, it takes
 // the window's shape now unless it has one already.
-const keepShapeCheck = $("#editor-keepshape");
-keepShapeCheck.addEventListener("change", () => {
-  layout.keepShape = keepShapeCheck.checked;
+const keepShapeChip = $("#editor-keepshape");
+const tintChip = $("#editor-tint");
+// The toolbar's groups drop to a line of their own in a narrow window, and
+// the line before a group goes when it starts a line
+for (const row of new Set([...stageEditor.querySelectorAll(".editor-split")].map((g) => g.parentElement))) {
+  new ResizeObserver(() => {
+    for (const group of row.querySelectorAll(":scope > .editor-split")) {
+      const before = group.previousElementSibling;
+      // (on a new line: starting below the group before, which can be
+      // taller, centered on the same line)
+      group.classList.toggle("own-line", !!before && group.offsetTop >= before.offsetTop + before.offsetHeight - 2);
+    }
+  }).observe(row);
+}
+keepShapeChip.addEventListener("click", () => {
+  layout.keepShape = layout.keepShape === false;
   if (layout.keepShape && !layout.aspect) lockShape();
   changed();
 });
 const editorLabels = $("#editor-labels");
 const labelScale = $("#editor-label-scale");
 const labelScaleValue = $("#editor-label-scale-value");
+const editorArt = $("#editor-art");
+const artEdgeCheck = $("#editor-art-edge");
+const artEdgeSize = $("#editor-art-edge-size");
+const artEdgeValue = $("#editor-art-edge-value");
+const editorOpacity = $("#editor-opacity");
+const opacityRange = $("#editor-opacity-range");
+const opacityValue = $("#editor-opacity-value");
+const opacityAll = $("#editor-opacity-all");
 function refreshEditor() {
   stageEditor.classList.toggle("piece-selected", !!selected);
   showUnsaved();
@@ -2578,6 +2893,8 @@ function refreshEditor() {
   for (const chip of stageEditor.querySelectorAll(".chip[data-bg]")) {
     chip.classList.toggle("on", chip.dataset.bg === layout.background);
   }
+  tintChip.hidden = !(layout.background === "art" || (layout.background === "custom" && layout.customBg.kind === "image"));
+  tintChip.classList.toggle("on", !!layout.tint);
   barStyleCheck.checked = layout.barStyle !== false;
   const text = selected === "info" ? layout.pieces.info : null;
   editorText.hidden = !text;
@@ -2625,16 +2942,32 @@ function refreshEditor() {
     iconEdgeValue.textContent = `${iconEdgeSize.value} px`;
     iconEdgeSize.disabled = iconEdgeSelect.value === "none";
   }
-  invertCheck.checked = !!layout.invertToggles;
-  keepShapeCheck.checked = layout.keepShape !== false;
+  const invertNow = !layout.invertToggles ? "off" : layout.invertCustom ? "custom" : "on";
+  for (const chip of invertGroup.querySelectorAll(".chip")) chip.classList.toggle("on", chip.dataset.invert === invertNow);
+  keepShapeChip.classList.toggle("on", layout.keepShape !== false);
   const withLabels = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
   editorLabels.hidden = !withLabels;
   if (withLabels) {
     labelScale.value = Math.round((withLabels.labelScale || 1) * 100);
     labelScaleValue.textContent = `${labelScale.value}%`;
   }
+  editorArt.hidden = selected !== "art";
+  if (selected === "art") {
+    const a = layout.pieces.art;
+    artEdgeCheck.checked = !!a.edge;
+    artEdgeSize.value = Math.round(edgeSizeOf(a) * 100);
+    artEdgeValue.textContent = `${artEdgeSize.value}%`;
+    // (greyed out, still in place, while Blur edge is off)
+    artEdgeSize.disabled = !a.edge;
+    artEdgeValue.classList.toggle("off", !a.edge);
+  }
+  editorOpacity.hidden = !selected;
+  if (selected) {
+    opacityRange.value = Math.round((layout.pieces[selected].opacity ?? 1) * 100);
+    opacityValue.textContent = `${opacityRange.value}%`;
+  }
   // (the accent fill up to the value, as the player's sliders have)
-  for (const range of [textEdgeSize, iconEdgeSize, labelScale]) setFill(range);
+  for (const range of [textEdgeSize, iconEdgeSize, labelScale, opacityRange, artEdgeSize]) setFill(range);
   const withBar = selected && PIECES[selected].bar ? layout.pieces[selected] : null;
   editorBar.hidden = !withBar;
   editorWaveform.hidden = selected !== "seek";
@@ -2645,7 +2978,7 @@ function refreshEditor() {
     // The picker and Top / Bottom stay in place, greyed out while they don't
     // apply, so nothing on the line moves when they come into play
     colorInput.disabled = mode !== "custom";
-    colorInput.value = toHex(color);
+    colorInput.style.setProperty("--swatch", toHex(color));
     // (Waveform: the seek bar's real waveform, for the styles that have
     // one; greyed out for the rest, which draw as ever)
     const spec = BAR_STYLES[barStyleOf(withBar)];
@@ -2698,10 +3031,342 @@ for (const chip of stageEditor.querySelectorAll(".chip[data-show]")) {
 }
 for (const chip of stageEditor.querySelectorAll(".chip[data-bg]")) {
   chip.addEventListener("click", () => {
+    // (Custom opens its window, chosen or not)
+    if (chip.dataset.bg === "custom") return openBgWindow();
     layout.background = chip.dataset.bg;
     changed();
   });
 }
+tintChip.addEventListener("click", () => {
+  layout.tint = !layout.tint;
+  changed();
+});
+
+// ----- Background: Custom's window -----
+//
+// Opened by the Custom chip: everything else is out of reach (and dims while
+// an image is chosen, in image mode), the background shows the
+// changes as they're made, and Save keeps them (as a change to the layout,
+// like any other, until the profile is saved). Cancel undoes them (and goes
+// back to the background before); the X or Escape with changes asks whether
+// to save them or undo them.
+
+const bgWindow = $("#bg-window");
+const bgFill = $("#bg-fill");
+const bgStops = $("#bg-stops");
+const bgSwatches = [...bgWindow.querySelectorAll(".bg-swatch")];
+let bgPicker = null;
+let bgStop = 0; // the color the picker edits
+let bgBefore = null; // { background, customBg } when the window opened
+
+// (by id: the stage is laid out before this part of the page has run)
+function bgWindowOpen() {
+  return document.getElementById("bg-window")?.hidden === false;
+}
+
+function openBgWindow() {
+  if (bgWindowOpen()) return;
+  select(null);
+  bgBefore = { background: layout.background, customBg: structuredClone(layout.customBg), tint: layout.tint };
+  layout.background = "custom";
+  bgStop = 0;
+  bgPicker ??= new ColorPicker($("#bg-picker"), {
+    onInput: (hex) => setBgColor(hex),
+    onChange: (hex) => setBgColor(hex),
+  });
+  showBgWindow();
+  bgWindow.hidden = false;
+  stage.classList.add("bg-editing");
+  layoutStage();
+  refreshEditor();
+}
+
+function showBgWindow() {
+  const bg = layout.customBg;
+  for (const chip of bgWindow.querySelectorAll(".chip[data-kind]")) chip.classList.toggle("on", chip.dataset.kind === bg.kind);
+  $("#bg-color").classList.toggle("off", bg.kind !== "color");
+  $("#bg-image").classList.toggle("off", bg.kind !== "image");
+  bgFileName.textContent = bg.image ? fileName(bg.image) : "No image";
+  bgFile.title = bg.image || "The images you've picked before";
+  bgFit.value = bg.fit;
+  bgTint.checked = !!layout.tint;
+  bgBlur.value = bg.blur || 0;
+  bgBlurValue.textContent = `${bgBlur.value} px`;
+  setFill(bgBlur);
+  showBgNote();
+  bgFill.value = bg.fill;
+  // (a solid color has just the picker: the swatches are for picking which
+  // of a gradient's two colors it edits)
+  bgStops.hidden = bg.fill === "solid";
+  if (bg.fill === "solid") bgStop = 0;
+  bgSwatches.forEach((swatch, i) => {
+    swatch.style.setProperty("--swatch", bg.colors[i]);
+    swatch.classList.toggle("on", i === bgStop && bg.fill !== "solid");
+  });
+  bgPicker.set(bg.colors[bgStop]);
+}
+
+// ----- Image mode -----
+
+const bgFile = $("#bg-file");
+const bgFileName = $("#bg-file-name");
+const bgFileList = $("#bg-file-list");
+const bgFit = $("#bg-fit");
+const bgTint = $("#bg-tint");
+const bgNote = $("#bg-note");
+let bgHistory = []; // the images picked before, newest first (from Settings)
+
+// Under the image's settings: what shows where, or that the file's gone
+function showBgNote() {
+  const bg = layout.customBg;
+  const info = bg.image ? bgImage(bg.image) : null;
+  bgNote.textContent =
+    info?.state === "missing"
+      ? "This image can't be found (moved or deleted). Pick it again, or another."
+      : bg.fit === "custom"
+        ? "Drag the image to move it, and its handles to resize it (hold Alt to keep its shape). The Color tab's color shows wherever it doesn't reach."
+        : "The Color tab's color shows wherever the image doesn't reach.";
+}
+
+function fileName(path) {
+  return String(path).split(/[\\/]/).pop() || path;
+}
+
+for (const chip of bgWindow.querySelectorAll(".chip[data-kind]")) {
+  chip.addEventListener("click", () => {
+    layout.customBg.kind = chip.dataset.kind;
+    closeBgFiles();
+    showBgWindow();
+    layoutStage();
+    refreshEditor();
+  });
+}
+
+function setBgImage(path) {
+  const bg = layout.customBg;
+  if (bg.image !== path) bg.rect = null;
+  bg.image = path;
+  if (bg.fit === "custom" && !bg.rect) startCustomRect();
+  showBgWindow();
+  layoutStage();
+}
+
+// The list of images picked before: each picks it, its X takes it off the
+// list (the file itself is left alone)
+function fillBgFiles() {
+  const X = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>';
+  bgFileList.replaceChildren();
+  if (!bgHistory.length) {
+    const empty = document.createElement("div");
+    empty.className = "bg-file-empty";
+    empty.textContent = "No images yet: Browse to pick one.";
+    bgFileList.append(empty);
+    return;
+  }
+  for (const path of bgHistory) {
+    const item = document.createElement("div");
+    item.className = "bg-file-item";
+    item.classList.toggle("on", path === layout.customBg.image);
+    const pick = document.createElement("button");
+    pick.className = "bg-file-pick";
+    pick.textContent = fileName(path);
+    pick.title = path;
+    pick.addEventListener("click", () => {
+      closeBgFiles();
+      setBgImage(path);
+    });
+    const forget = document.createElement("button");
+    forget.className = "bg-file-forget";
+    forget.title = "Take it off this list";
+    forget.innerHTML = X;
+    forget.addEventListener("click", async () => {
+      try {
+        await invoke("wrapper_forget_background", { path });
+      } catch (err) {
+        console.warn("forget background", err);
+      }
+    });
+    item.append(pick, forget);
+    bgFileList.append(item);
+  }
+}
+
+function closeBgFiles() {
+  bgFileList.hidden = true;
+}
+
+bgFile.addEventListener("click", () => {
+  if (!bgFileList.hidden) return closeBgFiles();
+  fillBgFiles();
+  bgFileList.hidden = false;
+});
+// (a click anywhere else closes the list)
+document.addEventListener("pointerdown", (event) => {
+  if (!bgFileList.hidden && !event.target.closest(".bg-files")) closeBgFiles();
+});
+
+$("#bg-browse").addEventListener("click", async () => {
+  closeBgFiles();
+  try {
+    const path = await invoke("wrapper_pick_background");
+    if (path) {
+      bgImages.delete(path); // (picked again: look at the file afresh)
+      setBgImage(path);
+    }
+  } catch (err) {
+    console.warn("pick background", err);
+  }
+});
+
+// Fit: Custom starts from the whole picture, centered; the others drop
+// Custom's place
+bgFit.addEventListener("change", () => {
+  const bg = layout.customBg;
+  bg.fit = bgFit.value;
+  bg.rect = null;
+  if (bg.fit === "custom") startCustomRect();
+  showBgWindow();
+  layoutStage();
+});
+
+function startCustomRect() {
+  const bg = layout.customBg;
+  const info = bg.image ? bgImage(bg.image) : null;
+  if (info?.state === "ok") bg.rect = containedRect(info, stage.clientWidth, stage.clientHeight);
+}
+
+const bgBlur = $("#bg-blur");
+const bgBlurValue = $("#bg-blur-value");
+function setBgBlur(px) {
+  layout.customBg.blur = px;
+  bgBlur.value = px;
+  bgBlurValue.textContent = `${px} px`;
+  setFill(bgBlur);
+  layoutStage();
+}
+bgBlur.addEventListener("input", () => setBgBlur(Number(bgBlur.value)));
+bgBlur.addEventListener("dblclick", () => setBgBlur(0));
+
+bgTint.addEventListener("change", () => {
+  layout.tint = bgTint.checked;
+  layoutStage();
+});
+
+// Custom: the picture dragged to move it, its handles to resize it like a
+// piece (the side or corner opposite stays put; Alt keeps the picture's own
+// shape), in fractions of the stage
+const MIN_IMAGE = 20; // px
+stageImage.addEventListener("pointerdown", (event) => {
+  const bg = layout.customBg;
+  if (!stageImage.classList.contains("placing") || event.button !== 0) return;
+  const info = bgImage(bg.image);
+  if (info.state !== "ok") return;
+  event.preventDefault();
+  stageImage.setPointerCapture(event.pointerId);
+  const W = stage.clientWidth;
+  const H = stage.clientHeight;
+  const box = bgImageBox(info, "custom", bg.rect ?? containedRect(info, W, H), W, H);
+  const dir = event.target.closest(".handle")?.dataset.dir ?? "move";
+  const sx = dir.includes("e") ? 1 : dir.includes("w") ? -1 : 0;
+  const sy = dir.includes("s") ? 1 : dir.includes("n") ? -1 : 0;
+  const aspect = info.w / info.h;
+  const x0 = event.clientX;
+  const y0 = event.clientY;
+  const onMove = (e) => {
+    const dx = e.clientX - x0;
+    const dy = e.clientY - y0;
+    let { x, y, w, h } = box;
+    if (dir === "move") {
+      x += dx;
+      y += dy;
+    } else {
+      if (sx) w = Math.max(MIN_IMAGE, box.w + sx * dx);
+      if (sy) h = Math.max(MIN_IMAGE, box.h + sy * dy);
+      if (e.altKey) {
+        // The picture's own shape: a corner by whichever way it went more,
+        // a side brings the other side along
+        if (sx && sy) {
+          if (Math.abs(w - box.w) / box.w >= Math.abs(h - box.h) / box.h) h = w / aspect;
+          else w = h * aspect;
+        } else if (sx) h = w / aspect;
+        else w = h * aspect;
+      }
+      // (the side or corner opposite the handle stays put; a side's other
+      // way grows evenly)
+      x = sx < 0 ? box.x + box.w - w : sx > 0 ? box.x : box.x + (box.w - w) / 2;
+      y = sy < 0 ? box.y + box.h - h : sy > 0 ? box.y : box.y + (box.h - h) / 2;
+    }
+    bg.rect = { x: x / W, y: y / H, w: w / W, h: h / H };
+    paintCustomBg();
+  };
+  const onUp = () => {
+    stageImage.removeEventListener("pointermove", onMove);
+    stageImage.removeEventListener("pointerup", onUp);
+    stageImage.removeEventListener("pointercancel", onUp);
+  };
+  stageImage.addEventListener("pointermove", onMove);
+  stageImage.addEventListener("pointerup", onUp);
+  stageImage.addEventListener("pointercancel", onUp);
+});
+
+function setBgColor(hex) {
+  layout.customBg.colors[bgStop] = hex;
+  bgSwatches[bgStop].style.setProperty("--swatch", hex);
+  paintCustomBg();
+}
+
+bgFill.addEventListener("change", () => {
+  layout.customBg.fill = bgFill.value;
+  showBgWindow();
+  paintCustomBg();
+});
+// Swap: the two colors change places (the picker stays on the same side)
+$("#bg-swap").addEventListener("click", () => {
+  layout.customBg.colors.reverse();
+  showBgWindow();
+  paintCustomBg();
+});
+bgSwatches.forEach((swatch, i) =>
+  swatch.addEventListener("click", () => {
+    bgStop = i;
+    showBgWindow();
+  }),
+);
+
+function bgUnsaved() {
+  return !!bgBefore && (stable(layout.customBg) !== stable(bgBefore.customBg) || layout.tint !== bgBefore.tint);
+}
+
+// keep: true saves, false undoes (back to the background before it opened)
+function closeBgWindow(keep) {
+  if (!keep && bgBefore) {
+    layout.background = bgBefore.background;
+    layout.customBg = bgBefore.customBg;
+    layout.tint = bgBefore.tint;
+  }
+  bgBefore = null;
+  closeBgFiles();
+  bgWindow.hidden = true;
+  stage.classList.remove("bg-editing");
+  changed();
+}
+
+// Cancel, the X, Escape: straight out without changes, or ask
+async function leaveBgWindow() {
+  if (!bgUnsaved()) return closeBgWindow(true);
+  const { value } = await ask({
+    text: "Save your background changes?",
+    buttons: [
+      { label: "Undo", value: "undo" },
+      { label: "Save", value: "save", primary: true },
+    ],
+  });
+  if (value) closeBgWindow(value === "save");
+}
+
+$("#bg-window-save").addEventListener("click", () => closeBgWindow(true));
+$("#bg-window-cancel").addEventListener("click", () => closeBgWindow(false));
+$("#bg-window-close").addEventListener("click", leaveBgWindow);
 for (const button of editorText.querySelectorAll(".align-btn")) {
   button.addEventListener("click", () => {
     layout.pieces.info.align = button.dataset.align;
@@ -2751,16 +3416,86 @@ labelScale.addEventListener("input", () => {
   layout.pieces[selected].labelScale = Number(labelScale.value) / 100;
   changed();
 });
+// The art's Blur edge, and how far it fades (double-click: 8%)
+artEdgeCheck.addEventListener("change", () => {
+  layout.pieces.art.edge = artEdgeCheck.checked;
+  changed();
+});
+artEdgeSize.addEventListener("input", () => {
+  setFill(artEdgeSize);
+  layout.pieces.art.edgeSize = Number(artEdgeSize.value) / 100;
+  changed();
+});
+artEdgeSize.addEventListener("dblclick", () => {
+  layout.pieces.art.edgeSize = 0.08;
+  changed();
+});
+
+// Opacity: this piece's, or (All) every piece's; double-click: back to 100%
+function setOpacity(value) {
+  if (!selected) return;
+  for (const id of opacityAll.checked ? PIECE_IDS : [selected]) layout.pieces[id].opacity = value;
+  changed();
+}
+opacityRange.addEventListener("input", () => {
+  setFill(opacityRange);
+  setOpacity(Number(opacityRange.value) / 100);
+});
+opacityRange.addEventListener("dblclick", () => setOpacity(1));
 // Double-click: back to 100%
 labelScale.addEventListener("dblclick", () => {
   if (!selected || !PIECES[selected].bar) return;
   layout.pieces[selected].labelScale = 1;
   changed();
 });
-invertCheck.addEventListener("change", () => {
-  layout.invertToggles = invertCheck.checked;
-  changed();
-});
+// Invert colors: Off, On, or Custom (its colors picked in a box under the
+// chip: Primary in white's place, Accent the accent; each can go back to
+// the usual)
+for (const chip of invertGroup.querySelectorAll(".chip")) {
+  chip.addEventListener("click", () => {
+    const mode = chip.dataset.invert;
+    layout.invertToggles = mode !== "off";
+    layout.invertCustom = mode === "custom";
+    changed();
+    if (mode === "custom") pickInvertColors(chip);
+    else closeColorPopover();
+  });
+}
+
+function pickInvertColors(chip) {
+  const appAccentNow = () => cssToHex(getComputedStyle(document.documentElement).getPropertyValue("--accent"));
+  openColorPopover(chip, layout.invertPrimary || "#ffffff", {
+    tabs: [
+      {
+        key: "primary",
+        label: "Primary",
+        value: layout.invertPrimary || "#ffffff",
+        follows: !layout.invertPrimary,
+        followValue: () => "#ffffff",
+        followNote: "White, as usual",
+        followLabel: "Back to white",
+      },
+      {
+        key: "accent",
+        label: "Accent",
+        value: layout.invertAccent || appAccentNow(),
+        follows: !layout.invertAccent,
+        followValue: appAccentNow,
+        followNote: "The app's accent, as usual",
+        followLabel: "Use the app's accent",
+      },
+    ],
+    // (shown as it's dragged; a change to the layout once let go)
+    onInput: (hex, key) => {
+      layout[key === "primary" ? "invertPrimary" : "invertAccent"] = hex;
+      styleControls();
+    },
+    onChange: (hex, key) => {
+      layout[key === "primary" ? "invertPrimary" : "invertAccent"] = hex;
+      changed();
+    },
+  });
+}
 iconsSelect.addEventListener("change", () => {
   if (!selected || !PIECES[selected].icons) return;
   for (const id of iconsAll.checked ? PIECE_IDS.filter((id) => PIECES[id].icons) : [selected]) {
@@ -2779,15 +3514,22 @@ for (const chip of editorBar.querySelectorAll(".chip[data-color]")) {
     if (!selected || !PIECES[selected].bar) return;
     const p = layout.pieces[selected];
     p.color = chip.dataset.color;
-    if (p.color === "custom" && !p.customColor) p.customColor = toHex(albumAccent || APP_ACCENT);
+    if (p.color === "custom" && !p.customColor) p.customColor = toHex(albumAccent || appAccent());
     changed();
   });
 }
-colorInput.addEventListener("input", () => {
+// A bar's Custom color: the picker under its swatch, the bar following the
+// drag
+colorInput.addEventListener("click", () => {
   if (!selected || !PIECES[selected].bar) return;
-  layout.pieces[selected].customColor = colorInput.value;
-  layoutStage();
-  scheduleSave();
+  const p = layout.pieces[selected];
+  const set = (hex) => {
+    p.customColor = hex;
+    colorInput.style.setProperty("--swatch", hex);
+    layoutStage();
+    scheduleSave();
+  };
+  openColorPopover(colorInput, toHex(barColor(p).color), { onInput: set, onChange: set });
 });
 for (const chip of formatSide.querySelectorAll(".chip")) {
   chip.addEventListener("click", () => {
@@ -3900,6 +4642,7 @@ window.addEventListener("blur", closeZoneMenu);
 document.addEventListener("keydown", (event) => {
   if (event.key !== "Escape") return;
   if (dialogOpen()) cancelDialog();
+  else if (bgWindowOpen()) leaveBgWindow();
   else if (!zoneMenu.hidden) closeZoneMenu();
   else if (!wrappedSide.hidden) setWrappedSide(false);
   else if (!queueSaveForm.hidden) hideQueueSave();
@@ -9583,7 +10326,7 @@ WRAPPED_PAGES.settings = async function () {
   // shared with the Toaster)
   const toastedNow = await invoke("get_settings").catch(() => ({}));
   if (ticket !== wrappedTicket) return;
-  const toastedPills = (options, current, change) => {
+  const toastedPills = (options, current, change, after) => {
     const row = document.createElement("div");
     row.className = "wrapped-tabs small";
     for (const [value, label] of options) {
@@ -9596,6 +10339,7 @@ WRAPPED_PAGES.settings = async function () {
           await invoke("update_settings", { changes: change(value) });
           for (const other of row.children) other.classList.toggle("selected", other === pill);
           wrappedToast("Saved");
+          after?.(value);
         } catch (err) {
           wrappedToast(String(err));
         }
@@ -9604,17 +10348,80 @@ WRAPPED_PAGES.settings = async function () {
     }
     return row;
   };
-  const colorsCard = card("Colors", "Default keeps Wrapped's own colors; Album art takes them from the album that's playing.");
-  colorsCard.head.append(
+  const colorsCard = card(
+    "Colors",
+    "Default keeps Wrapped's own colors; Album art takes them from the album that's playing; Custom uses an accent you pick. The Toaster, the widget and the toasts follow it too.",
+  );
+  const colorsNow = ["album", "custom"].includes(toastedNow.toasterColors) ? toastedNow.toasterColors : "default";
+  // Custom's accent: a swatch with its hex, beside the pills; clicked, the
+  // color picker. The page shows the color while it's dragged, and it's
+  // saved when let go.
+  // The swatch is split: the accent, and the background (its own, or the
+  // one tinted from the accent).
+  let accentNow = toastedNow.toasterAccent || APP_ACCENT;
+  let backgroundNow = toastedNow.toasterBackground ?? null;
+  const tintedBackground = () => cssToHex(customPalette(accentNow, null, darkScheme.matches)["--bg"]);
+  const accentBtn = document.createElement("button");
+  accentBtn.className = "settings-accent";
+  accentBtn.title = "Pick the accent and background colors";
+  const showAccent = () => {
+    accentBtn.style.setProperty("--swatch", accentNow);
+    accentBtn.style.setProperty("--swatch-bg", backgroundNow || tintedBackground());
+    accentBtn.textContent = accentNow.toUpperCase();
+  };
+  showAccent();
+  accentBtn.hidden = colorsNow !== "custom";
+  const pickAccent = () =>
+    openColorPopover(accentBtn, accentNow, {
+      tabs: [
+        { key: "accent", label: "Accent", value: accentNow },
+        {
+          key: "background",
+          label: "Background color",
+          value: backgroundNow || tintedBackground(),
+          follows: !backgroundNow,
+          followValue: tintedBackground,
+          followNote: "Following the accent",
+          followLabel: "Follow the accent",
+        },
+      ],
+      onInput: (hex, key) => {
+        if (key === "accent") accentNow = hex;
+        else backgroundNow = hex;
+        showAccent();
+        paintColors(document.documentElement, customPalette(accentNow, backgroundNow, darkScheme.matches));
+      },
+      onChange: async (hex, key) => {
+        if (key === "background") backgroundNow = hex;
+        showAccent();
+        try {
+          await invoke("update_settings", { changes: key === "accent" ? { toasterAccent: hex } : { toasterBackground: hex } });
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      },
+    });
+  accentBtn.addEventListener("click", pickAccent);
+  const colorsControls = document.createElement("div");
+  colorsControls.className = "settings-colors-controls";
+  colorsControls.append(
     toastedPills(
       [
         ["default", "Default"],
         ["album", "Album art"],
+        ["custom", "Custom"],
       ],
-      toastedNow.toasterColors === "album" ? "album" : "default",
+      colorsNow,
       (value) => ({ toasterColors: value }),
+      (value) => {
+        accentBtn.hidden = value !== "custom";
+        if (value === "custom") pickAccent();
+        else closeColorPopover();
+      },
     ),
+    accentBtn,
   );
+  colorsCard.head.append(colorsControls);
 
   // Default Menu: what shows when Wrapped opens (see applyDefaultMenu),
   // and which side menu comes with a Wrapped page

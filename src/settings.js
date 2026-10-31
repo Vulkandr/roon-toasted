@@ -3,8 +3,63 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Tauri's JavaScript API (available because withGlobalTauri is on in tauri.conf.json)
+import { customPalette, paintColors } from "./album-colors.js";
+import { closeColorPopover, cssToHex, openColorPopover } from "./color-picker.js";
+
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+
+// ===== Switches as pills ===================================================
+//
+// Every on/off switch shows as two pills, like Colors. The checkbox stays
+// (hidden) and is still what each setting's code reads and sets: a pill sets
+// it and fires its change event, and setting it from code moves the pills.
+
+const CHECKED = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "checked");
+
+function pillSwitch(group) {
+  const input = group.querySelector('input[type="checkbox"]');
+  if (!input) return;
+  const pills = document.createElement("div");
+  pills.className = "seg-pills";
+  const pill = (label, value) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "seg-pill";
+    button.textContent = label.textContent;
+    button.addEventListener("click", () => {
+      if (input.checked === value || input.disabled) return;
+      input.checked = value;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    pills.append(button);
+    return button;
+  };
+  const off = pill(group.querySelector(".label-off"), false);
+  const on = pill(group.querySelector(".label-on"), true);
+  // (the "on" side, in the accent when it's chosen, as the switch was)
+  on.classList.add("on-side");
+  const show = () => {
+    off.classList.toggle("selected", !input.checked);
+    on.classList.toggle("selected", input.checked);
+  };
+  Object.defineProperty(input, "checked", {
+    configurable: true,
+    get() {
+      return CHECKED.get.call(this);
+    },
+    set(value) {
+      CHECKED.set.call(this, value);
+      show();
+    },
+  });
+  input.addEventListener("change", show);
+  group.classList.add("as-pills");
+  group.append(pills);
+  show();
+}
+
+document.querySelectorAll(".switch-group").forEach(pillSwitch);
 
 // The page elements, found by their ids in settings.html
 const dot = document.querySelector("#status-dot");
@@ -527,27 +582,75 @@ listen("settings-changed", (event) => showMainArtistOnly(event.payload));
 
 // ===== Toaster colors =====================================================
 
-const toasterColors = document.querySelector("#toaster-colors");
-const colorsGroup = document.querySelector("#colors-group");
+const colorsPills = document.querySelector("#colors-pills");
+const customPill = colorsPills.querySelector('[data-colors="custom"]');
+const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+let colorsNow = "default";
+let accentNow = "#7b5fc7";
+let backgroundNow = null; // Custom's background (null: tinted from the accent)
 
-// Switch on = "album" (Album Art), off = "default"
+// Settings takes Custom's colors too (Album art stays on the app's own: it
+// has no album playing in it)
+function paintSettings() {
+  paintColors(document.documentElement, colorsNow === "custom" ? customPalette(accentNow, backgroundNow, darkScheme.matches) : {});
+}
+darkScheme.addEventListener("change", paintSettings);
+
 function showColors(settings) {
-  toasterColors.checked = settings.toasterColors === "album";
+  for (const pill of colorsPills.children) pill.classList.toggle("selected", pill.dataset.colors === settings.toasterColors);
+  colorsNow = settings.toasterColors;
+  accentNow = settings.toasterAccent || accentNow;
+  backgroundNow = settings.toasterBackground ?? null;
+  customPill.style.setProperty("--dot", accentNow);
+  paintSettings();
 }
 
-async function setColors(album) {
-  toasterColors.checked = album;
+async function saveColors(changes) {
   try {
-    await invoke("update_settings", { changes: { toasterColors: album ? "album" : "default" } });
+    showColors(await invoke("update_settings", { changes }));
   } catch (err) {
     console.error(err);
     showColors(await invoke("get_settings"));
   }
 }
 
-toasterColors.addEventListener("change", () => setColors(toasterColors.checked));
-colorsGroup.querySelector(".label-off").addEventListener("click", () => setColors(false));
-colorsGroup.querySelector(".label-on").addEventListener("click", () => setColors(true));
+// Custom's color picker, under the Custom pill: Accent or Background color.
+// The window shows the colors while they're dragged, and they're saved when
+// let go. The background follows the accent until it's picked.
+function pickAccent() {
+  const tinted = () => cssToHex(customPalette(accentNow, null, darkScheme.matches)["--bg"]);
+  openColorPopover(customPill, accentNow, {
+    tabs: [
+      { key: "accent", label: "Accent", value: accentNow },
+      {
+        key: "background",
+        label: "Background color",
+        value: backgroundNow || tinted(),
+        follows: !backgroundNow,
+        followValue: tinted,
+        followNote: "Following the accent",
+        followLabel: "Follow the accent",
+      },
+    ],
+    onInput: (hex, key) => {
+      if (key === "accent") {
+        accentNow = hex;
+        customPill.style.setProperty("--dot", hex);
+      } else backgroundNow = hex;
+      paintSettings();
+    },
+    onChange: (hex, key) => saveColors(key === "accent" ? { toasterAccent: hex } : { toasterBackground: hex }),
+  });
+}
+
+for (const pill of colorsPills.children) {
+  pill.addEventListener("click", async () => {
+    const value = pill.dataset.colors;
+    if (value === "custom") pickAccent();
+    else closeColorPopover();
+    if (!pill.classList.contains("selected")) await saveColors({ toasterColors: value });
+  });
+}
 
 invoke("get_settings").then(showColors);
 listen("settings-changed", (event) => showColors(event.payload));
@@ -1170,6 +1273,26 @@ document.querySelectorAll(".reset-value").forEach((button) => {
     }
   });
 });
+
+// ===== Skip Stuck Songs ====================================================
+
+const skipStuck = document.querySelector("#skip-stuck");
+
+function showSkipStuck(settings) {
+  skipStuck.checked = settings.skipStuck !== false;
+}
+
+skipStuck.addEventListener("change", async () => {
+  try {
+    await invoke("update_settings", { changes: { skipStuck: skipStuck.checked } });
+  } catch (err) {
+    console.error(err);
+    showSkipStuck(await invoke("get_settings"));
+  }
+});
+
+invoke("get_settings").then(showSkipStuck);
+listen("settings-changed", (event) => showSkipStuck(event.payload));
 
 // ===== Start with Windows =================================================
 

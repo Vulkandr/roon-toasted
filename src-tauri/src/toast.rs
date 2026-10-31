@@ -66,6 +66,9 @@ struct ToastPayload {
     seconds: u32,
     /// The Toaster's color setting, so the toast matches it.
     colors: ToasterColors,
+    /// The custom accent and background, for Colors: Custom.
+    accent: String,
+    background: Option<String>,
 }
 
 /// Called by zones.rs after every zone update. Shows a toast when the
@@ -125,6 +128,8 @@ pub fn zones_updated(app: &AppHandle, payload: &ZonesPayload) {
             image_key: np.image_key.clone(),
             seconds: saved.toast_seconds,
             colors: saved.toaster_colors,
+            accent: saved.toaster_accent.clone(),
+            background: saved.toaster_background.clone(),
         },
     );
 }
@@ -174,6 +179,8 @@ pub fn toast_test(app: AppHandle) {
             image_key: np.image_key.clone(),
             seconds: saved.toast_seconds,
             colors: saved.toaster_colors,
+            accent: saved.toaster_accent.clone(),
+            background: saved.toaster_background.clone(),
         },
         None => ToastPayload {
             zone_name: zone.map(|z| z.name.clone()).unwrap_or_default(),
@@ -183,6 +190,8 @@ pub fn toast_test(app: AppHandle) {
             image_key: None,
             seconds: saved.toast_seconds,
             colors: saved.toaster_colors,
+            accent: saved.toaster_accent.clone(),
+            background: saved.toaster_background.clone(),
         },
     };
     send(&app, payload);

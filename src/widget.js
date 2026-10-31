@@ -6,7 +6,7 @@
 // Shows what's playing in the Toaster's zone; the buttons control it, and
 // clicking the art or text opens the Toaster.
 
-import { albumHue, albumPalette, paintColors } from "./album-colors.js";
+import { albumHue, albumPalette, customPalette, paintColors } from "./album-colors.js";
 
 // Tauri's JavaScript API (available because withGlobalTauri is on)
 const { invoke, convertFileSrc } = window.__TAURI__.core;
@@ -28,7 +28,9 @@ const darkScheme = matchMedia("(prefers-color-scheme: dark)");
 let zone = null; // the Toaster's zone, from Rust
 let artKey = null;
 let lines = "two"; // "one" or "two", from Settings
-let colorsMode = "default"; // "default" or "album", from Settings
+let colorsMode = "default"; // "default", "album" or "custom", from Settings
+let customAccent = "#7b5fc7"; // Colors: Custom's accent, from Settings
+let customBackground = null; // and its background (null: tinted from the accent)
 
 function send(command, args) {
   return invoke(command, args).catch((err) => console.error(command, err));
@@ -99,12 +101,17 @@ async function applyColors() {
     }
     if (key !== artKey) return; // the art changed meanwhile
   }
-  paintColors(document.documentElement, hue ? albumPalette(hue, darkScheme.matches) : {});
+  paintColors(document.documentElement, hue ? albumPalette(hue, darkScheme.matches) : colorsMode === "custom" ? customPalette(customAccent, customBackground, darkScheme.matches) : {});
 }
 
 function applySettings(settings) {
-  const colorsChanged = settings.toasterColors !== colorsMode;
+  const colorsChanged =
+    settings.toasterColors !== colorsMode ||
+    settings.toasterAccent !== customAccent ||
+    settings.toasterBackground !== customBackground;
   colorsMode = settings.toasterColors;
+  customAccent = settings.toasterAccent;
+  customBackground = settings.toasterBackground;
   lines = settings.widgetLines;
   layoutText();
   if (colorsChanged) applyColors();

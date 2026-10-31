@@ -4,7 +4,7 @@
 
 // ===== 1. Setup ===========================================================
 
-import { albumHue, albumPalette, paintColors } from "./album-colors.js";
+import { albumHue, albumPalette, customPalette, paintColors } from "./album-colors.js";
 
 // Tauri's JavaScript API (available because withGlobalTauri is on)
 const { invoke, convertFileSrc } = window.__TAURI__.core;
@@ -1810,7 +1810,9 @@ document.addEventListener(
 // Finding the color is in album-colors.js, shared with the toast.
 
 const darkScheme = matchMedia("(prefers-color-scheme: dark)");
-let colorsMode = "default"; // "default" or "album", from Settings
+let colorsMode = "default"; // "default", "album" or "custom", from Settings
+let customAccent = "#7b5fc7"; // Colors: Custom's accent, from Settings
+let customBackground = null; // and its background (null: tinted from the accent)
 
 // Sets the colors for the current album (or back to default)
 async function applyAlbumColors() {
@@ -1828,17 +1830,22 @@ async function applyAlbumColors() {
     if (key !== artKey) return; // the art changed meanwhile; that call wins
   }
 
-  paintColors(root, hue ? albumPalette(hue, darkScheme.matches) : {});
+  paintColors(root, hue ? albumPalette(hue, darkScheme.matches) : colorsMode === "custom" ? customPalette(customAccent, customBackground, darkScheme.matches) : {});
 }
 
 // Follow the Colors setting, and Windows switching between light and dark
 invoke("get_settings").then((settings) => {
   colorsMode = settings.toasterColors;
+  customAccent = settings.toasterAccent;
+  customBackground = settings.toasterBackground;
   applyAlbumColors();
 });
 listen("settings-changed", (event) => {
-  if (event.payload.toasterColors !== colorsMode) {
-    colorsMode = event.payload.toasterColors;
+  const { toasterColors, toasterAccent, toasterBackground } = event.payload;
+  if (toasterColors !== colorsMode || toasterAccent !== customAccent || toasterBackground !== customBackground) {
+    colorsMode = toasterColors;
+    customAccent = toasterAccent;
+    customBackground = toasterBackground;
     applyAlbumColors();
   }
 });
