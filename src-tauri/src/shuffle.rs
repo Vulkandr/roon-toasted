@@ -8,10 +8,15 @@
 //! local day; or the last N days; or off), never one this shuffle queued
 //! already, and no artist of the last ARTIST_GAP songs. Songs you add to the
 //! queue yourself count toward the AHEAD, so the shuffle waits until the
-//! queue is under it again. It ends when Stop is pressed, Toasted closes,
-//! or the zone plays something with none of the shuffle's songs coming.
+//! queue is under it again. It ends when Stop is pressed or the zone plays
+//! something with none of the shuffle's songs coming.
+//!
+//! It's saved as it goes (`wrapped-shuffle.json`: the options, the songs it
+//! queued, the last artists), so after Toasted restarts (`resume`) it carries
+//! on, if that zone's queue still has its songs coming.
 
 use std::collections::{HashSet, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -39,7 +44,7 @@ const HISTORY_EVERY: Duration = Duration::from_secs(10 * 60);
 const AT_ONCE: usize = 8;
 
 /// How the Tracks page starts a shuffle.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ShuffleOptions {
     pub zone_id: String,
@@ -88,6 +93,111 @@ struct Run {
     rng: u64,
 }
 
+/// What's saved of a run, to carry on after a restart.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Saved {
+    options: ShuffleOptions,
+    used: Vec<u64>,
+    artists: Vec<String>,
+    ours: Vec<u64>,
+    added: usize,
+}
+
+fn saved_path(app: &AppHandle) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("wrapped-shuffle.json"))
+}
+
+/// Saves the running shuffle (or, with none running, removes the file).
+fn save(app: &AppHandle) {
+    let Some(path) = saved_path(app) else { return };
+    let saved = RUN.lock().unwrap().as_ref().map(|r| Saved {
+        options: r.options.clone(),
+        used: r.used.iter().copied().collect(),
+        artists: r.artists.iter().cloned().collect(),
+        ours: r.ours.iter().copied().collect(),
+        added: r.added,
+    });
+    match saved {
+        Some(saved) => {
+            if let Ok(json) = serde_json::to_string(&saved) {
+                let _ = std::fs::write(&path, json);
+            }
+        }
+        None => {
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
+/// At start (lib.rs setup): a shuffle that was running when Toasted closed
+/// carries on, once the library link is up, if its zone's queue still has
+/// its songs coming; otherwise it's dropped.
+pub fn resume(app: &AppHandle) {
+    let Some(path) = saved_path(app) else { return };
+    let Ok(text) = std::fs::read_to_string(&path) else { return };
+    let Ok(saved) = serde_json::from_str::<Saved>(&text) else {
+        let _ = std::fs::remove_file(&path);
+        return;
+    };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // The library link and the zone's queue (up to about 3 minutes)
+        let mut queue = None;
+        for _ in 0..90 {
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            if RUN.lock().unwrap().is_some() {
+                return; // a new shuffle was started meanwhile
+            }
+            let Some(client) = app.state::<Library>().client() else { continue };
+            if !client.zone_ids().contains(&saved.options.zone_id) {
+                continue;
+            }
+            if let Ok(q) = client.queue_tracks(&saved.options.zone_id).await {
+                queue = Some(q);
+                break;
+            }
+        }
+        let Some(queue) = queue else {
+            println!("[shuffle] couldn't look at the saved shuffle's zone; left for next time");
+            return;
+        };
+        let ours: HashSet<u64> = saved.ours.iter().copied().collect();
+        if !queue.ahead_ids.iter().any(|id| ours.contains(id)) {
+            println!("[shuffle] the saved shuffle's zone moved on; dropped");
+            let _ = std::fs::remove_file(&path);
+            return;
+        }
+        let mut run = Run {
+            options: saved.options,
+            used: saved.used.into_iter().collect(),
+            artists: saved.artists.into_iter().collect(),
+            ours,
+            added: saved.added,
+            playing: None,
+            looked: Instant::now(),
+            history_read: Instant::now(),
+            recent_ids: HashSet::new(),
+            recent_names: HashSet::new(),
+            rng: (now_ms() as u64) ^ 0x9E37_79B9_7F4A_7C15 | 1,
+        };
+        let _ = crate::wrapped::history_catch_up(&app).await;
+        read_recent(&app, &mut run);
+        let generation = {
+            let mut guard = RUN.lock().unwrap();
+            if guard.is_some() {
+                return;
+            }
+            println!("[shuffle] carried on after a restart on {}: {} songs so far", run.options.zone_id, run.added);
+            *guard = Some(run);
+            GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+        };
+        ENDED.lock().unwrap().clear();
+        emit(&app);
+        watch(app, generation).await;
+    });
+}
+
 static RUN: Mutex<Option<Run>> = Mutex::new(None);
 static ENDED: Mutex<String> = Mutex::new(String::new());
 /// Bumped on every start and stop; a watcher whose number is old ends.
@@ -118,6 +228,7 @@ fn end(app: &AppHandle, why: &str) {
     if let Some(r) = was {
         println!("[shuffle] ended ({why}) after {} songs", r.added);
     }
+    save(app); // (none running: the saved one goes)
     *ENDED.lock().unwrap() = why.to_string();
     emit(app);
 }
@@ -177,6 +288,7 @@ pub async fn wrapped_shuffle_start(app: AppHandle, options: ShuffleOptions) -> R
         return Ok(status());
     }
     *RUN.lock().unwrap() = Some(run);
+    save(&app);
     emit(&app);
     // The queue's start, for the queue panel's played part
     {
@@ -260,6 +372,7 @@ async fn watch(app: AppHandle, generation: u64) {
             run.added += handles.len();
             run.ours.extend(ids);
         }
+        save(&app);
         emit(&app);
     }
 }
@@ -368,4 +481,26 @@ async fn handles_of(client: &LibraryClient, picks: &[LibraryTrack]) -> (Vec<Stri
         }
     }
     (handles, ours)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn saved_round_trip() {
+        let saved = Saved {
+            options: ShuffleOptions { zone_id: "z1".into(), hearts_only: true, recent: "today".into(), tz_offset_min: 300 },
+            used: vec![1, 2, 3],
+            artists: vec!["bolzer".into()],
+            ours: vec![1, 2, 3, 99],
+            added: 3,
+        };
+        let json = serde_json::to_string(&saved).unwrap();
+        assert!(json.contains("\"zoneId\":\"z1\"") && json.contains("\"heartsOnly\":true"));
+        let back: Saved = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.options.zone_id, "z1");
+        assert_eq!(back.ours, vec![1, 2, 3, 99]);
+        assert_eq!(back.added, 3);
+    }
 }

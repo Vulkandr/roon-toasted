@@ -559,6 +559,8 @@ pub fn run() {
             discover::schedule(app.handle());
             // Roon stuck at a song's end: on to the next one
             unstick::schedule(app.handle());
+            // A library shuffle that was running when Toasted closed
+            shuffle::resume(app.handle());
 
             // Just updated: the Changelog opens (see changelog.rs)
             changelog::at_start(app.handle());
