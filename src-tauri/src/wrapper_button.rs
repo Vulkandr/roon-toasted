@@ -4,8 +4,8 @@
 
 //! "Enable Wrapper" in Roon's own title bar: while the Wrapper is switched
 //! on but Roon has its own window (after "Return Roon", or Roon started by
-//! itself), a small button sits in the middle of Roon's title bar. Clicking
-//! it opens the Wrapper around Roon again.
+//! itself), a small button sits in Roon's title bar, just left of its
+//! minimize button. Clicking it opens the Wrapper around Roon again.
 //!
 //! The button is our "wrapper-button" window (page wrapper-button.html):
 //! no frame, transparent, never takes focus. It isn't attached to Roon's
@@ -42,6 +42,11 @@ use super::BUTTON_WINDOW;
 /// The button's size in logical pixels (the page fills it).
 const WIDTH: f64 = 140.0;
 const HEIGHT: f64 = 22.0;
+/// Gap between the button and Roon's minimize button, in logical pixels.
+const GAP: f64 = 10.0;
+/// Width of Roon's minimize/maximize/close buttons together, in logical
+/// pixels, for when Windows doesn't say where they are.
+const CAPTION_BUTTONS: f64 = 138.0;
 
 /// Roon's window while the button sits on it (0 = none).
 static ROON: AtomicIsize = AtomicIsize::new(0);
@@ -193,8 +198,8 @@ unsafe extern "system" fn on_roon_event(
     }
 }
 
-/// Puts the button in the middle of Roon's title bar, right above Roon in
-/// the stacking order, or hides it when Roon's title bar isn't showing.
+/// Puts the button in Roon's title bar next to its minimize button, right
+/// above Roon in the stacking order, or hides it when Roon's title bar isn't showing.
 fn place(app: &AppHandle) {
     let Some(button) = button(app) else { return };
     let Some(roon) = hwnd(ROON.load(Ordering::Relaxed)) else {
@@ -219,31 +224,37 @@ fn spot(app: &AppHandle, roon: HWND) -> Option<(i32, i32, i32, i32)> {
     if style & WS_CAPTION.0 != WS_CAPTION.0 {
         return None;
     }
-    let (_, wy, _, _) = wrapper::window_rect(roon)?;
+    let (wx, wy, _, _) = wrapper::window_rect(roon)?;
     // What's drawn of the window (without the invisible resize borders)
     let frame = dwm_rect(roon, windows::Win32::Graphics::Dwm::DWMWA_EXTENDED_FRAME_BOUNDS)?;
-    // The title bar's height, from the minimize/maximize/close buttons
-    // (relative to the window's corner)
-    let (top, height) = match dwm_rect(roon, windows::Win32::Graphics::Dwm::DWMWA_CAPTION_BUTTON_BOUNDS) {
-        Some(caption) if caption.bottom > caption.top => (wy + caption.top, caption.bottom - caption.top),
-        _ => (frame.top, 0),
+    // The title bar's height and where the minimize/maximize/close buttons
+    // start, from those buttons (relative to the window's corner)
+    let caption = dwm_rect(roon, windows::Win32::Graphics::Dwm::DWMWA_CAPTION_BUTTON_BOUNDS)
+        .filter(|caption| caption.bottom > caption.top && caption.right > caption.left);
+    let (top, height) = match caption {
+        Some(caption) => (wy + caption.top, caption.bottom - caption.top),
+        None => (frame.top, 0),
     };
-    let center_x = (frame.left + frame.right) / 2;
     let scale = app
-        .monitor_from_point(center_x as f64, (top + height / 2) as f64)
+        .monitor_from_point(((frame.left + frame.right) / 2) as f64, (top + height / 2) as f64)
         .ok()
         .flatten()
         .map(|monitor| monitor.scale_factor())
         .unwrap_or(1.0);
     let width = (WIDTH * scale).round() as i32;
     let button_height = (HEIGHT * scale).round() as i32;
+    let gap = (GAP * scale).round() as i32;
     let height = if height > 0 { height } else { (31.0 * scale).round() as i32 };
+    let buttons_left = match caption {
+        Some(caption) => wx + caption.left,
+        None => frame.right - (CAPTION_BUTTONS * scale).round() as i32,
+    };
     // Too narrow: it would sit on Roon's title text
     if frame.right - frame.left < width * 4 {
         return None;
     }
     Some((
-        center_x - width / 2,
+        buttons_left - gap - width,
         top + (height - button_height) / 2,
         width,
         button_height,

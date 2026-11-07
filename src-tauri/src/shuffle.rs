@@ -42,6 +42,11 @@ const LOOK_EVERY: Duration = Duration::from_secs(20);
 const HISTORY_EVERY: Duration = Duration::from_secs(10 * 60);
 /// Roon lookups at once (track handles by id).
 const AT_ONCE: usize = 8;
+/// Reads of the queue in a row with none of the shuffle's songs coming
+/// before it counts as the zone having moved on. (A read can come back
+/// before Roon has sent the queue's songs, most of all just after the
+/// library link comes up; a read with no songs at all isn't counted.)
+const MISSES_TO_END: usize = 3;
 
 /// How the Tracks page starts a shuffle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,30 +147,51 @@ pub fn resume(app: &AppHandle) {
     };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
-        // The library link and the zone's queue (up to about 3 minutes)
-        let mut queue = None;
+        // The library link and the zone (up to about 3 minutes)
+        let mut client = None;
         for _ in 0..90 {
             tokio::time::sleep(Duration::from_secs(2)).await;
             if RUN.lock().unwrap().is_some() {
                 return; // a new shuffle was started meanwhile
             }
-            let Some(client) = app.state::<Library>().client() else { continue };
-            if !client.zone_ids().contains(&saved.options.zone_id) {
-                continue;
-            }
-            if let Ok(q) = client.queue_tracks(&saved.options.zone_id).await {
-                queue = Some(q);
+            if let Some(c) = app.state::<Library>().client().filter(|c| c.zone_ids().contains(&saved.options.zone_id)) {
+                client = Some(c);
                 break;
             }
         }
-        let Some(queue) = queue else {
-            println!("[shuffle] couldn't look at the saved shuffle's zone; left for next time");
+        let Some(client) = client else {
+            println!("[shuffle] the saved shuffle's zone isn't there yet; left for next time");
             return;
         };
+        // Its songs still coming? Read the queue until it's clear (a read
+        // with no songs means Roon hasn't sent them yet: asked again)
         let ours: HashSet<u64> = saved.ours.iter().copied().collect();
-        if !queue.ahead_ids.iter().any(|id| ours.contains(id)) {
-            println!("[shuffle] the saved shuffle's zone moved on; dropped");
-            let _ = std::fs::remove_file(&path);
+        let (mut found, mut misses) = (false, 0);
+        for _ in 0..12 {
+            if RUN.lock().unwrap().is_some() {
+                return;
+            }
+            if let Ok(queue) = client.queue_tracks(&saved.options.zone_id).await {
+                if queue.ahead_ids.iter().any(|id| ours.contains(id)) {
+                    found = true;
+                    break;
+                }
+                if !queue.ahead_ids.is_empty() {
+                    misses += 1;
+                    if misses >= MISSES_TO_END {
+                        break;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
+        if !found {
+            if misses >= MISSES_TO_END {
+                println!("[shuffle] the saved shuffle's zone moved on; dropped");
+                let _ = std::fs::remove_file(&path);
+            } else {
+                println!("[shuffle] couldn't tell whether the saved shuffle's songs are still coming; left for next time");
+            }
             return;
         }
         let mut run = Run {
@@ -309,6 +335,8 @@ pub async fn wrapped_shuffle_start(app: AppHandle, options: ShuffleOptions) -> R
 
 /// Keeps the queue topped up while this shuffle runs.
 async fn watch(app: AppHandle, generation: u64) {
+    // Reads in a row with none of the shuffle's songs coming
+    let mut misses = 0;
     loop {
         tokio::time::sleep(TICK).await;
         if GENERATION.load(Ordering::SeqCst) != generation {
@@ -341,12 +369,23 @@ async fn watch(app: AppHandle, generation: u64) {
             if refresh_history {
                 read_recent(&app, run);
             }
-            // Something else took over the zone: none of ours playing or to come
-            if !queue.ahead_ids.iter().any(|id| run.ours.contains(id)) {
-                drop(guard);
-                end(&app, "The zone moved on to something else.");
-                return;
+            // No songs in the read: Roon hasn't sent them yet (not counted)
+            if queue.ahead_ids.is_empty() {
+                continue;
             }
+            // Something else took over the zone: none of ours playing or to
+            // come, MISSES_TO_END reads in a row
+            if !queue.ahead_ids.iter().any(|id| run.ours.contains(id)) {
+                misses += 1;
+                println!("[shuffle] none of its songs coming ({misses} of {MISSES_TO_END})");
+                if misses >= MISSES_TO_END {
+                    drop(guard);
+                    end(&app, "The zone moved on to something else.");
+                    return;
+                }
+                continue;
+            }
+            misses = 0;
             AHEAD.saturating_sub(queue.upcoming)
         };
         if want == 0 {

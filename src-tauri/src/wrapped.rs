@@ -656,6 +656,10 @@ pub struct LibraryArtist {
     pub performer_id: Option<u64>,
     pub image_key: Option<String>,
     pub album_count: Option<i32>,
+    /// When the artist was born or the band formed, as Roon has it (copies
+    /// read before 1.4.1 don't have it).
+    #[serde(default)]
+    pub begin_year: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -669,6 +673,9 @@ pub struct LibraryAlbum {
     pub year: Option<u32>,
     /// "local", "qobuz", "tidal", "streaming" or "other".
     pub source: String,
+    /// Its record labels (copies read before 1.4.1 don't have them).
+    #[serde(default)]
+    pub labels: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -761,8 +768,77 @@ pub fn wrapped_library_status(app: AppHandle) -> LibraryStatus {
 
 /// The library's artists, as last read (the Artists page).
 #[tauri::command]
-pub fn wrapped_library_artists(app: AppHandle) -> Vec<LibraryArtist> {
-    app.state::<LibraryCopy>().artists(&app)
+pub fn wrapped_library_artists(app: AppHandle) -> Vec<ArtistRow> {
+    let copy = app.state::<LibraryCopy>();
+    let artists = copy.artists(&app);
+    let labels = main_labels(&copy.albums(&app));
+    let tags = app.state::<crate::tags::Tags>();
+    artists
+        .into_iter()
+        .map(|artist| {
+            let label = artist
+                .performer_id
+                .and_then(|id| labels.get(&LabelKey::Performer(id)))
+                .or_else(|| labels.get(&LabelKey::Name(artist.name.to_lowercase())))
+                .cloned();
+            let (began, began_from) = match artist.begin_year {
+                Some(year) => (Some(year), "roon"),
+                None => match tags.cached(&app, &artist.name).and_then(|t| t.begin_year) {
+                    Some(year) => (Some(year), "musicbrainz"),
+                    None => (None, ""),
+                },
+            };
+            ArtistRow { artist, label, began, began_from: began_from.to_string() }
+        })
+        .collect()
+}
+
+/// An Artists page row: the artist, its record label (from its newest
+/// library album) and when it started.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtistRow {
+    #[serde(flatten)]
+    pub artist: LibraryArtist,
+    pub label: Option<String>,
+    /// Roon's birth or formed year, else MusicBrainz's (from the tagging).
+    pub began: Option<u32>,
+    /// Where `began` comes from: "roon", "musicbrainz" or "" (not known).
+    pub began_from: String,
+}
+
+/// Whose albums a label count is for: the main performer when the Core
+/// named it, else the album artist's name (lower-cased).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum LabelKey {
+    Performer(u64),
+    Name(String),
+}
+
+/// Each artist's record label: the first one on its newest library album
+/// that has a label (albums without a year count as oldest; between two
+/// albums of the same year, the label first in A to Z order, so the pick
+/// doesn't change from one read to the next).
+fn main_labels(albums: &[LibraryAlbum]) -> HashMap<LabelKey, String> {
+    let mut best: HashMap<LabelKey, (u32, String)> = HashMap::new();
+    for album in albums {
+        let Some(label) = album.labels.iter().map(|l| l.trim()).find(|l| !l.is_empty()) else {
+            continue;
+        };
+        let key = match album.performer_id {
+            Some(id) => LabelKey::Performer(id),
+            None => LabelKey::Name(album.artist.to_lowercase()),
+        };
+        let year = album.year.unwrap_or(0);
+        let newer = match best.get(&key) {
+            None => true,
+            Some((y, l)) => year > *y || (year == *y && label.to_lowercase() < l.to_lowercase()),
+        };
+        if newer {
+            best.insert(key, (year, label.to_string()));
+        }
+    }
+    best.into_iter().map(|(key, (_, label))| (key, label)).collect()
 }
 
 /// The library's albums, as last read (the Albums page).
@@ -781,6 +857,9 @@ pub struct TrackRow {
     pub track: LibraryTrack,
     /// Where `added_at` comes from: "roon", "lastfm" or "" (no date known).
     pub added_from: String,
+    /// How often it was scrobbled to Last.fm, and when last (Unix ms).
+    pub plays: u32,
+    pub last_played: Option<i64>,
 }
 
 /// The library's tracks, as last read (the Tracks page).
@@ -790,11 +869,16 @@ pub fn wrapped_library_tracks(app: AppHandle) -> Vec<TrackRow> {
     // The first scrobble of each song (artist and title, lower-cased)
     let wanted: std::collections::HashSet<(String, String)> = tracks.iter().map(|t| (t.artist.to_lowercase(), t.title.to_lowercase())).collect();
     let mut first: HashMap<(String, String), i64> = HashMap::new();
+    // (and how many scrobbles each has, and the latest)
+    let mut played: HashMap<(String, String), (u32, i64)> = HashMap::new();
     crate::scrobbles::with(&app, |s| {
         // (newest first: the last one seen is the first scrobble)
         for p in &s.plays {
             let key = (p.artist.to_lowercase(), p.title.to_lowercase());
             if wanted.contains(&key) {
+                let seen = played.entry(key.clone()).or_insert((0, p.at));
+                seen.0 += 1;
+                seen.1 = seen.1.max(p.at);
                 first.insert(key, p.at);
             }
         }
@@ -802,7 +886,9 @@ pub fn wrapped_library_tracks(app: AppHandle) -> Vec<TrackRow> {
     tracks
         .into_iter()
         .map(|mut track| {
-            let scrobbled = first.get(&(track.artist.to_lowercase(), track.title.to_lowercase())).copied();
+            let key = (track.artist.to_lowercase(), track.title.to_lowercase());
+            let scrobbled = first.get(&key).copied();
+            let (plays, last_played) = played.get(&key).map(|(n, at)| (*n, Some(*at))).unwrap_or((0, None));
             let added_from = match (track.added_at, scrobbled) {
                 (Some(roon), Some(lastfm)) if lastfm < roon => {
                     track.added_at = Some(lastfm);
@@ -815,7 +901,7 @@ pub fn wrapped_library_tracks(app: AppHandle) -> Vec<TrackRow> {
                 }
                 (None, None) => "",
             };
-            TrackRow { track, added_from: added_from.into() }
+            TrackRow { track, added_from: added_from.into(), plays, last_played }
         })
         .collect()
 }
@@ -846,7 +932,13 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
             Ok(cards) => {
                 let artists: Vec<LibraryArtist> = cards
                     .into_iter()
-                    .map(|c| LibraryArtist { name: c.name, performer_id: c.performer_id, image_key: c.image_key, album_count: c.album_count })
+                    .map(|c| LibraryArtist {
+                        name: c.name,
+                        performer_id: c.performer_id,
+                        image_key: c.image_key,
+                        album_count: c.album_count,
+                        begin_year: c.begin_year,
+                    })
                     .collect();
                 let n = artists.len();
                 // The albums too (a failure keeps the ones read before)
@@ -862,6 +954,7 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
                                 image_key: c.image_key,
                                 year: c.year,
                                 source: c.source,
+                                labels: c.labels,
                             })
                             .collect(),
                     ),
@@ -899,6 +992,24 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
                     "[wrapped] library copy: {n} artists, {} albums, {} tracks",
                     albums_n.map(|n| n.to_string()).unwrap_or_else(|| "no".into()),
                     tracks_n.map(|n| n.to_string()).unwrap_or_else(|| "no".into())
+                );
+                // (how much of the labels and start years the Core sent)
+                let (labelled, dated) = copy.with_store(&app2, |s| {
+                    (s.albums.iter().filter(|a| !a.labels.is_empty()).count(), s.artists.iter().filter(|a| a.begin_year.is_some()).count())
+                });
+                println!("[wrapped] library copy: {labelled} albums with a label, {dated} artists with a start year");
+                let (numbered, composed, formatted, ranged, pathed) = copy.with_store(&app2, |s| {
+                    let count = |f: &dyn Fn(&LibraryTrack) -> bool| s.tracks.iter().filter(|t| f(t)).count();
+                    (
+                        count(&|t| t.track_number.is_some()),
+                        count(&|t| !t.composer.is_empty()),
+                        count(&|t| !t.format.is_empty()),
+                        count(&|t| t.dynamic_range.is_some()),
+                        count(&|t| !t.path.is_empty()),
+                    )
+                });
+                println!(
+                    "[wrapped] library copy: tracks with a number {numbered}, composer {composed}, format {formatted}, dynamic range {ranged}, path {pathed}"
                 );
                 copy.syncing.store(false, Ordering::SeqCst);
                 let _ = app2.emit("wrapped-library", serde_json::json!({ "read": n, "total": n, "what": "artists", "done": true }));
@@ -971,5 +1082,55 @@ pub fn counts(p: &Play) -> bool {
     match (p.seconds_played, p.length_seconds) {
         (Some(heard), Some(len)) if len > 0 => heard as f64 / len as f64 >= 0.5,
         _ => true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn album(artist: &str, performer_id: Option<u64>, year: Option<u32>, labels: &[&str]) -> LibraryAlbum {
+        LibraryAlbum {
+            title: String::new(),
+            artist: artist.into(),
+            album_id: None,
+            performer_id,
+            image_key: None,
+            year,
+            source: "local".into(),
+            labels: labels.iter().map(|l| l.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn label_comes_from_the_newest_album() {
+        let albums = vec![
+            album("Amon Amarth", Some(1), Some(2001), &["Metal Blade"]),
+            album("Amon Amarth", Some(1), Some(2022), &["Metal Blade", "Sony"]),
+            album("Amon Amarth", Some(1), Some(2013), &["Sony"]),
+            // (the newest album has no label: the next newest one decides)
+            album("Amon Amarth", Some(1), Some(2025), &[]),
+            album("Burial", None, Some(2007), &[" ", "Hyperdub"]),
+            album("Burial", None, None, &["Undated"]),
+            album("Nobody", Some(3), Some(2020), &[]),
+        ];
+        let labels = main_labels(&albums);
+        assert_eq!(labels.get(&LabelKey::Performer(1)).map(String::as_str), Some("Metal Blade"));
+        assert_eq!(labels.get(&LabelKey::Name("burial".into())).map(String::as_str), Some("Hyperdub"));
+        assert_eq!(labels.get(&LabelKey::Performer(3)), None);
+    }
+
+    #[test]
+    fn same_year_labels_go_a_to_z() {
+        let albums = vec![album("X", Some(7), Some(2010), &["Warp"]), album("X", Some(7), Some(2010), &["Ninja Tune"])];
+        assert_eq!(main_labels(&albums).get(&LabelKey::Performer(7)).map(String::as_str), Some("Ninja Tune"));
+    }
+
+    #[test]
+    fn old_library_copies_still_load() {
+        let artist: LibraryArtist = serde_json::from_str(r#"{"name":"Air","performerId":5,"imageKey":null,"albumCount":3}"#).unwrap();
+        assert_eq!(artist.begin_year, None);
+        let album: LibraryAlbum = serde_json::from_str(r#"{"title":"Moon Safari","artist":"Air","albumId":1,"performerId":5,"imageKey":null,"year":1998,"source":"local"}"#).unwrap();
+        assert!(album.labels.is_empty());
     }
 }

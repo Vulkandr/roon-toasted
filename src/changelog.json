@@ -1,5 +1,36 @@
 [
   {
+    "version": "1.5.0",
+    "date": "2026-11-06",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["List view", "Albums, Artists and Genres can show as a list as well as a grid: the grid and list switch sits at the top right of each page. The grid's cards come in three sizes, S, M and L. Each page remembers its own choice."],
+          ["Sort by column", "In the list, click a column's heading to sort by it, and click it again to reverse it, like on Tracks. In the grid, the By tabs sort the same way. Each page remembers its sort."],
+          ["Record labels and start years", "Albums show their record label, and Artists show the label of their newest album and the year they started (from Roon, or from MusicBrainz through Wrapped's tagging). The filters find labels too."],
+          ["Tracks columns", "Tracks has a Columns button with a switch for every column. New columns: Track number, Album artist, Composer, Format, Dynamic range, Plays, Last played and File name. Every column sorts from its heading."],
+          ["Rearrange columns", "Turn on the wrench, then drag a heading onto another to move its column there. Reset order puts them back. It works on Tracks, and on Albums, Artists and Genres in list view."]
+        ]
+      },
+      {
+        "title": "Fixes",
+        "items": [
+          ["Taskbar and Alt+Tab", "The taskbar widget, the toasts and the Enable Wrapper button no longer show up in the taskbar or in Alt+Tab."],
+          ["Enable Wrapper", "The button sits next to the minimize button in Roon's title bar, out of the way of the title."],
+          ["Library shuffle", "A library shuffle on the Tracks page carries on after Toasted restarts, as long as its songs are still in the zone's queue."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["Read the library once", "Labels, start years and the new Tracks columns fill in after one more Read the library, in Wrapped's Settings."],
+          ["Plays", "Plays and Last played come from your Last.fm history."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.4.0",
     "date": "2026-10-30",
     "sections": [

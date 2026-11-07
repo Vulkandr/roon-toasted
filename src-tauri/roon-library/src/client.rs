@@ -296,6 +296,8 @@ pub struct AlbumCard {
     pub performer_handle: Option<String>,
     pub performer_id: Option<u64>,
     pub year: Option<u32>,
+    /// The record labels Roon has for it (often one, sometimes none).
+    pub labels: Vec<String>,
     pub image_key: Option<String>,
     pub in_library: bool,
     pub favorite: bool,
@@ -315,6 +317,9 @@ pub struct ArtistCard {
     pub favorite: bool,
     /// How many albums the artist is the main performer of, as Roon counts them.
     pub album_count: Option<i32>,
+    /// The year Roon gives for the artist's birth, which for a band is when
+    /// it was formed.
+    pub begin_year: Option<u32>,
 }
 
 /// What Roon's artist page shows besides the discography: similar artists
@@ -508,6 +513,27 @@ pub struct LibraryTrack {
     /// When it came into the library (Roon's import date), Unix ms.
     #[serde(default)]
     pub added_at: Option<i64>,
+    /// Its place on the album, and the disc (copies read before 1.4.1 have
+    /// neither, nor the fields after them).
+    #[serde(default)]
+    pub track_number: Option<i32>,
+    #[serde(default)]
+    pub media_number: Option<i32>,
+    /// The album's artist (credits markup stripped).
+    #[serde(default)]
+    pub album_artist: String,
+    /// The track's composers, from its credits.
+    #[serde(default)]
+    pub composer: String,
+    /// Codec, sample rate and bit depth, e.g. "FLAC 96/24".
+    #[serde(default)]
+    pub format: String,
+    /// Roon's loudness range for the track (its Dynamic range column).
+    #[serde(default)]
+    pub dynamic_range: Option<f64>,
+    /// The file's path (local files only).
+    #[serde(default)]
+    pub path: String,
 }
 
 /// A song in a list (a playlist, a tag, Listen Later): its handle for this
@@ -1685,6 +1711,17 @@ impl LibraryClient {
             let mut names: Vec<&str> = first.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k)).collect();
             names.sort_unstable();
             println!("[library] TrackLite fields: {}", names.join(", "));
+        }
+        // (once, how the Tracks page's extra columns arrive: the first value
+        // of each among the tracks read, cut short)
+        for name in ["TrackNumber", "Credits", "FileFormat", "Format", "SampleRate", "BitDepth", "LoudnessRange", "PathName", "ContentLocation", "PlayInfo"] {
+            let sample = oids.iter().filter_map(|oid| g.get(*oid)).find_map(|t| t.field(name).cloned());
+            let shown = match &sample {
+                Some(Value::Ref(oid)) => format!("ref -> {:?}", g.get(*oid).map(|o| (o.type_name.clone(), o.structs.as_ref().and_then(|s| s.first().cloned()), o.items.as_ref().map(|i| i.len())))),
+                other => format!("{other:?}"),
+            };
+            let shown: String = shown.chars().take(240).collect();
+            println!("[library] sample {name}: {shown}");
         }
         let mut seen = HashSet::new();
         Ok(oids
@@ -4591,6 +4628,7 @@ fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) 
         performer_handle: performer.map(|oid| oid.to_string()),
         performer_id: performer.and_then(|oid| g.get(oid)).and_then(|p| p.long_field("PerformerId")),
         year: year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate"))),
+        labels: strings_of(g, a.field("Labels")),
         image_key: image_key(g, a, "Image"),
         in_library: album_in_library(a),
         favorite: read_state(a.field("IsFavorite"), profile),
@@ -4621,7 +4659,77 @@ fn describe_library_track(g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]
         added_at: ["ImportDate", "DateAdded", "AddedDate", "ImportTime"]
             .iter()
             .find_map(|name| t.field(name).or_else(|| album.and_then(|a| a.field(name))).and_then(ticks_to_ms)),
+        track_number: t.field("TrackNumber").and_then(Value::as_int).filter(|n| *n > 0),
+        media_number: t.field("MediaNumber").and_then(Value::as_int).filter(|n| *n > 0),
+        album_artist: album.and_then(|a| a.str_field("PerformedBy")).map(strip_credit_markup).unwrap_or_default(),
+        composer: credited(g, t.field("Credits"), "composer"),
+        format: format_text(
+            ["FileFormat", "Format"].iter().find_map(|name| t.str_field(name)).unwrap_or(""),
+            t.field("SampleRate").and_then(Value::as_int),
+            t.field("BitDepth").and_then(Value::as_int),
+        ),
+        dynamic_range: number_of(t.field("LoudnessRange")).filter(|d| d.is_finite()),
+        path: t
+            .str_field("PathName")
+            .map(str::to_string)
+            .or_else(|| match t.field("ContentLocation") {
+                Some(Value::Inline(l)) => l.field("RelativePath").and_then(Value::as_str).map(str::to_string),
+                _ => None,
+            })
+            .unwrap_or_default(),
     }
+}
+
+/// The names credited with a role (matched by part of its name, ignoring
+/// case) in a Credits list: by reference with its credits by value, or by
+/// value itself. Each name once, in credit order.
+fn credited(g: &ObjectGraph, list: Option<&Value>, role: &str) -> String {
+    let structs: Vec<InlineStruct> = match list {
+        Some(Value::Ref(oid)) => g.get(*oid).and_then(|l| l.structs.clone()).unwrap_or_default(),
+        Some(Value::Inline(l)) => l
+            .items
+            .iter()
+            .filter_map(|v| match v {
+                Value::Inline(s) => Some(s.clone()),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for credit in &structs {
+        let wanted = credit.field("Role").and_then(Value::as_str).is_some_and(|r| r.to_lowercase().contains(role));
+        if !wanted {
+            continue;
+        }
+        let name = match credit.field("Performer") {
+            Some(Value::Ref(p)) => g.get(*p).and_then(|p| p.str_field("Name")).map(str::to_string),
+            Some(Value::Inline(p)) => p.field("Name").and_then(Value::as_str).map(str::to_string),
+            _ => None,
+        };
+        if let Some(name) = name.map(|n| strip_credit_markup(&n)).filter(|n| !n.is_empty()) {
+            if !names.contains(&name) {
+                names.push(name);
+            }
+        }
+    }
+    names.join(", ")
+}
+
+/// "FLAC 96/24", "44.1/16", "DSD64": the codec (when the Core names it),
+/// then the sample rate in kHz and the bit depth.
+fn format_text(codec: &str, rate: Option<i32>, bits: Option<i32>) -> String {
+    let khz = |r: i32| if r % 1000 == 0 { (r / 1000).to_string() } else { format!("{:.1}", r as f64 / 1000.0) };
+    let rate = rate.filter(|r| *r > 0);
+    let bits = bits.filter(|b| *b > 0);
+    let quality = match (rate, bits) {
+        (Some(r), _) if r >= 2_822_400 => format!("DSD{}", r / 44_100),
+        (Some(r), Some(b)) => format!("{}/{b}", khz(r)),
+        (Some(r), None) => format!("{} kHz", khz(r)),
+        (None, Some(b)) => format!("{b}-bit"),
+        (None, None) => String::new(),
+    };
+    [codec.trim(), quality.as_str()].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>().join(" ")
 }
 
 /// A .NET DateTime (ticks since year 1, the top two bits its kind) as
@@ -4676,6 +4784,7 @@ fn describe_artist_card(g: &ObjectGraph, p: &RoonObject, profile: Option<&[u8]>)
         image_key: image_key(g, p, "Photo").or_else(|| image_key(g, p, "Avatar")),
         favorite: read_state(p.field("IsFavorite"), profile),
         album_count: p.field("MainPerformerAlbumCount").and_then(Value::as_int),
+        begin_year: year_of(p.field("BirthDate")),
     }
 }
 
@@ -5042,6 +5151,16 @@ pub fn read_state(raw: Option<&Value>, profile: Option<&[u8]>) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn format_text_reads_like_roon() {
+        assert_eq!(super::format_text("FLAC", Some(96_000), Some(24)), "FLAC 96/24");
+        assert_eq!(super::format_text("", Some(44_100), Some(16)), "44.1/16");
+        assert_eq!(super::format_text("DSF", Some(2_822_400), Some(1)), "DSF DSD64");
+        assert_eq!(super::format_text("MP3", None, None), "MP3");
+        assert_eq!(super::format_text(" ", Some(0), Some(0)), "");
+    }
+
     use super::*;
 
     fn hexbytes(s: &str) -> Vec<u8> {

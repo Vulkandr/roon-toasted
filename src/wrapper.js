@@ -7919,6 +7919,324 @@ function wrappedFilter(placeholder, onChange) {
   return input;
 }
 
+// The wrench and the grip of a list's headings: with the wrench on, a
+// heading is dragged onto another to take its place (the rest shift over),
+// and a click on one no longer sorts
+const WRENCH_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>';
+const COLUMNS_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="M15 3v18"/></svg>';
+const GRIP_ICON =
+  '<svg viewBox="0 0 24 24" fill="currentColor" stroke="none"><circle cx="9" cy="5" r="1.6"/><circle cx="9" cy="12" r="1.6"/><circle cx="9" cy="19" r="1.6"/><circle cx="15" cy="5" r="1.6"/><circle cx="15" cy="12" r="1.6"/><circle cx="15" cy="19" r="1.6"/></svg>';
+
+// A saved column order made whole: the saved one's known ids, then any it
+// lacks (new columns) where the default order has them
+function columnOrder(saved, defaults) {
+  const order = (Array.isArray(saved) ? saved : []).filter((id, i, all) => defaults.includes(id) && all.indexOf(id) === i);
+  defaults.forEach((id, i) => {
+    if (order.includes(id)) return;
+    const before = defaults.slice(0, i).reverse().find((d) => order.includes(d));
+    order.splice(before ? order.indexOf(before) + 1 : 0, 0, id);
+  });
+  return order;
+}
+
+// `order` with `id` moved into `target`'s place
+function columnMoved(order, id, target) {
+  const next = order.slice();
+  const from = next.indexOf(id);
+  const to = next.indexOf(target);
+  if (from < 0 || to < 0 || from === to) return next;
+  next.splice(from, 1);
+  next.splice(to, 0, id);
+  return next;
+}
+
+// Makes a heading draggable onto the others (the wrench is on): `onMove(id,
+// target)` when it's dropped on one
+function columnDraggable(cell, id, onMove) {
+  cell.draggable = true;
+  cell.classList.add("wrapped-column-grab");
+  const grip = document.createElement("span");
+  grip.className = "wrapped-column-grip";
+  grip.innerHTML = GRIP_ICON;
+  cell.prepend(grip);
+  cell.addEventListener("dragstart", (event) => {
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", id);
+    cell.classList.add("dragging");
+  });
+  cell.addEventListener("dragend", () => cell.classList.remove("dragging"));
+  cell.addEventListener("dragover", (event) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    cell.classList.add("drop");
+  });
+  cell.addEventListener("dragleave", () => cell.classList.remove("drop"));
+  cell.addEventListener("drop", (event) => {
+    event.preventDefault();
+    cell.classList.remove("drop");
+    const from = event.dataTransfer.getData("text/plain");
+    if (from && from !== id) onMove(from, id);
+  });
+}
+
+// The wrench button and, while it's on, "Reset order"
+function wrappedWrench(on, onToggle, onReset) {
+  const box = document.createElement("div");
+  box.className = "wrapped-wrench";
+  if (on) {
+    const reset = document.createElement("button");
+    reset.className = "wrapped-wrench-reset";
+    reset.textContent = "Reset order";
+    reset.addEventListener("click", onReset);
+    box.append(reset);
+  }
+  const btn = document.createElement("button");
+  btn.className = `wrapped-tool-btn${on ? " on" : ""}`;
+  btn.innerHTML = WRENCH_ICON;
+  btn.title = on ? "Done rearranging (drag a heading to move its column)" : "Rearrange columns";
+  btn.setAttribute("aria-pressed", String(on));
+  btn.addEventListener("click", onToggle);
+  box.append(btn);
+  return box;
+}
+
+// Albums and Artists as a grid of cards or a list of rows, and the grid's
+// card size, each page remembering its own (a convenience, so storage may
+// fail)
+const SHELF_KEY = "wrapped-shelf-view";
+const SHELF_SIZES = [
+  ["s", "S", "Small cards"],
+  ["m", "M", "Medium cards"],
+  ["l", "L", "Large cards"],
+];
+const SHELF_GRID_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>';
+const SHELF_LIST_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5h.01"/><path d="M3 12h.01"/><path d="M3 19h.01"/><path d="M8 5h13"/><path d="M8 12h13"/><path d="M8 19h13"/></svg>';
+let shelfViews = {};
+try {
+  shelfViews = JSON.parse(localStorage.getItem(SHELF_KEY) || "{}") || {};
+} catch {}
+function shelfView(page) {
+  const saved = shelfViews[page] || {};
+  return {
+    view: saved.view === "list" ? "list" : "grid",
+    size: SHELF_SIZES.some(([key]) => key === saved.size) ? saved.size : "m",
+  };
+}
+function saveShelfView(page, view) {
+  shelfViews[page] = { ...shelfViews[page], ...view };
+  try {
+    localStorage.setItem(SHELF_KEY, JSON.stringify(shelfViews));
+  } catch {}
+}
+
+// The pages whose list has the wrench on (this session only)
+const shelfEditing = new Set();
+
+// The size and grid/list switches for a page (and, in the list, the
+// wrench); `onChange` redraws it
+function wrappedShelfControls(page, onChange) {
+  const box = document.createElement("div");
+  box.className = "wrapped-shelf-controls";
+  const wrench = document.createElement("div");
+  wrench.className = "wrapped-shelf-wrench";
+  const sizes = document.createElement("div");
+  sizes.className = "wrapped-tabs small wrapped-shelf-sizes";
+  const views = document.createElement("div");
+  views.className = "wrapped-tabs small wrapped-shelf-views";
+  const paint = () => {
+    const current = shelfView(page);
+    for (const tab of sizes.children) tab.classList.toggle("selected", tab.dataset.size === current.size);
+    for (const tab of views.children) tab.classList.toggle("selected", tab.dataset.view === current.view);
+    // (the sizes are for the grid only, the wrench for the list)
+    sizes.classList.toggle("wrapped-shelf-idle", current.view === "list");
+    wrench.replaceChildren();
+    if (current.view === "list") {
+      wrench.append(
+        wrappedWrench(
+          shelfEditing.has(page),
+          () => {
+            if (!shelfEditing.delete(page)) shelfEditing.add(page);
+            paint();
+            onChange();
+          },
+          () => {
+            saveShelfView(page, { order: null });
+            onChange();
+          },
+        ),
+      );
+    }
+  };
+  for (const [size, label, title] of SHELF_SIZES) {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.size = size;
+    tab.textContent = label;
+    tab.title = title;
+    tab.addEventListener("click", () => {
+      // (picking a size shows the grid it's for)
+      saveShelfView(page, { view: "grid", size });
+      paint();
+      onChange();
+    });
+    sizes.append(tab);
+  }
+  for (const [view, icon, title] of [
+    ["grid", SHELF_GRID_ICON, "Show as a grid"],
+    ["list", SHELF_LIST_ICON, "Show as a list"],
+  ]) {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab wrapped-shelf-view";
+    tab.dataset.view = view;
+    tab.innerHTML = icon;
+    tab.title = title;
+    tab.setAttribute("aria-label", title);
+    tab.addEventListener("click", () => {
+      saveShelfView(page, { ...shelfView(page), view });
+      paint();
+      onChange();
+    });
+    views.append(tab);
+  }
+  paint();
+  box.append(wrench, sizes, views);
+  return box;
+}
+
+// A page's sort: a column and a way, remembered with its view. `first` says
+// which way each column starts (names A to Z, years and counts biggest
+// first); clicking the same column again reverses it.
+function shelfSortStart(page, entry, sorts, first, fallback) {
+  const saved = shelfViews[page] || {};
+  entry.sort ||= sorts[saved.sort] ? saved.sort : fallback;
+  entry.dir ||= entry.sort === saved.sort && (saved.dir === "up" || saved.dir === "down") ? saved.dir : first[entry.sort];
+}
+function shelfSortPick(page, entry, key, first) {
+  if (entry.sort === key) entry.dir = entry.dir === "up" ? "down" : "up";
+  else {
+    entry.sort = key;
+    entry.dir = first[key];
+  }
+  saveShelfView(page, { sort: entry.sort, dir: entry.dir });
+}
+// Sorts `list` in place; `missing` keeps rows without the value (no year, no
+// label) at the end whichever way the column runs
+function shelfSorted(list, entry, sorts, missing = {}) {
+  const by = sorts[entry.sort];
+  const flip = entry.dir === "down" ? -1 : 1;
+  const end = missing[entry.sort];
+  return list.sort((a, b) => (end && end(a, b)) || flip * by(a, b));
+}
+const shelfLast = (value) => (a, b) => !value(a) - !value(b);
+function shelfArrow(entry, key) {
+  return entry.sort === key ? (entry.dir === "up" ? "▴" : "▾") : "";
+}
+
+// The grid's sort tabs (the list sorts by its column headings instead);
+// `paint` shows the choice, `onPick(key)` makes one
+function wrappedShelfTabs(entry, options, onPick) {
+  const tabs = document.createElement("div");
+  tabs.className = "wrapped-tabs small";
+  for (const [key, label] of options) {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.sort = key;
+    const text = document.createElement("span");
+    text.textContent = label;
+    const dir = document.createElement("span");
+    dir.className = "wrapped-sort-dir";
+    tab.append(text, dir);
+    tab.addEventListener("click", () => onPick(key));
+    tabs.append(tab);
+  }
+  tabs.paint = (view) => {
+    tabs.hidden = view === "list";
+    for (const tab of tabs.children) {
+      tab.classList.toggle("selected", tab.dataset.sort === entry.sort);
+      tab.querySelector(".wrapped-sort-dir").textContent = shelfArrow(entry, tab.dataset.sort);
+    }
+  };
+  return tabs;
+}
+
+// A page's items in its chosen view. `columns` are the list's columns
+// ({ id, head, width, center, sort, title }): the `title` one shows the
+// item's title, the others its `cells[id]`. Their order is the page's saved
+// one (the wrench rearranges it). With `sorting` ({ entry, onSort }) a
+// column with a `sort` key sorts the list when its heading is clicked.
+function wrappedShelf(page, items, onClick, columns, sorting) {
+  const { view, size } = shelfView(page);
+  if (view === "grid") {
+    const holder = wrappedLazyGrid(items, onClick);
+    holder.firstElementChild.classList.add(`wrapped-shelf-${size}`);
+    return holder;
+  }
+  const byId = new Map(columns.map((c) => [c.id, c]));
+  const order = columnOrder((shelfViews[page] || {}).order, columns.map((c) => c.id)).map((id) => byId.get(id));
+  const editing = shelfEditing.has(page);
+  const template = ["40px", ...order.map((c) => c.width)].join(" ");
+  const box = document.createElement("div");
+  box.className = `wrapped-shelf-list${editing ? " editing" : ""}`;
+  box.style.setProperty("--shelf-columns", template);
+  const head = document.createElement("div");
+  head.className = "wrapped-shelf-row wrapped-shelf-head";
+  head.append(document.createElement("span"));
+  for (const column of order) {
+    const sorts = column.sort && sorting && !editing;
+    const cell = document.createElement(sorts || editing ? "button" : "span");
+    cell.className = `wrapped-shelf-heading${column.center ? " wrapped-shelf-center" : ""}`;
+    const text = document.createElement("span");
+    text.className = "wrapped-shelf-heading-text";
+    text.textContent = column.head;
+    cell.append(text);
+    if (sorts) {
+      const on = sorting.entry.sort === column.sort;
+      cell.classList.add("wrapped-sort-head");
+      cell.classList.toggle("selected", on);
+      const dir = document.createElement("span");
+      dir.className = "wrapped-sort-dir";
+      dir.textContent = shelfArrow(sorting.entry, column.sort);
+      text.append(dir);
+      cell.title = on ? "Click again to reverse" : `Sort by ${column.head.toLowerCase()}`;
+      cell.addEventListener("click", () => sorting.onSort(column.sort));
+    }
+    if (editing) {
+      cell.title = "Drag onto another heading to move this column";
+      columnDraggable(cell, column.id, (from, to) => {
+        saveShelfView(page, { order: columnMoved(order.map((c) => c.id), from, to) });
+        box.replaceWith(wrappedShelf(page, items, onClick, columns, sorting));
+      });
+    }
+    head.append(cell);
+  }
+  const make = (item) => {
+    const row = document.createElement("button");
+    row.className = "wrapped-shelf-row";
+    row.append(wrappedArt(item.imageKey, 80, item.title, item.round));
+    for (const column of order) {
+      const cell = document.createElement("span");
+      if (column.title) {
+        cell.className = "wrapped-shelf-title";
+        cell.textContent = item.title;
+      } else {
+        const text = (item.cells || {})[column.id] ?? "";
+        cell.className = `wrapped-shelf-cell${column.center ? " wrapped-shelf-center" : ""}`;
+        cell.textContent = text;
+        if (text) cell.title = text;
+      }
+      row.append(cell);
+    }
+    row.addEventListener("click", () => onClick(item));
+    return row;
+  };
+  box.append(head, wrappedLazyList(items, make, "wrapped-shelf-rows", 400));
+  return box;
+}
+
 WRAPPED_PAGES.artists = async function (entry) {
   wrappedHeading("Artists", "Every artist in your library");
   if (wrappedNeedsLibrary()) return;
@@ -7932,33 +8250,74 @@ WRAPPED_PAGES.artists = async function (entry) {
   }
   if (ticket !== wrappedTicket) return;
   if (!artists.length) return wrappedLibraryRead(ticket, renderWrapped);
-  artists.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true }));
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const sorts = {
+    artist: (a, b) => byName(a.name, b.name),
+    label: (a, b) => byName(a.label || "", b.label || "") || byName(a.name, b.name),
+    year: (a, b) => (a.began || 0) - (b.began || 0) || byName(a.name, b.name),
+    albums: (a, b) => (a.albumCount || 0) - (b.albumCount || 0) || byName(a.name, b.name),
+  };
+  // (artists without a label or a start year go last)
+  const missing = { label: shelfLast((a) => a.label), year: shelfLast((a) => a.began) };
+  const first = { artist: "up", label: "up", year: "down", albums: "down" };
+  shelfSortStart("artists", entry, sorts, first, "artist");
+  entry.filter ||= "";
   wrappedHeading("Artists", `${artists.length.toLocaleString()} artists in your library`);
   const holder = document.createElement("div");
-  const show = (filter) => {
-    const list = filter ? artists.filter((a) => a.name.toLowerCase().includes(filter)) : artists;
+  const pick = (key) => {
+    shelfSortPick("artists", entry, key, first);
+    show();
+  };
+  const tabs = wrappedShelfTabs(
+    entry,
+    [
+      ["artist", "By artist"],
+      ["label", "By label"],
+      ["year", "By year"],
+      ["albums", "By albums"],
+    ],
+    pick,
+  );
+  const show = () => {
+    tabs.paint(shelfView("artists").view);
+    const f = entry.filter;
+    const list = shelfSorted(f ? artists.filter((a) => a.name.toLowerCase().includes(f) || (a.label || "").toLowerCase().includes(f)) : artists.slice(), entry, sorts, missing);
     holder.replaceChildren(
-      wrappedLazyGrid(
-        list.map((a) => ({
-          title: a.name,
-          sub: a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "",
-          imageKey: a.imageKey,
-          round: true,
-          performerId: a.performerId,
-        })),
+      wrappedShelf(
+        "artists",
+        list.map((a) => {
+          const albums = a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "";
+          return {
+            title: a.name,
+            sub: albums,
+            cells: { label: a.label || "", year: a.began ? String(a.began) : "", albums },
+            imageKey: a.imageKey,
+            round: true,
+            performerId: a.performerId,
+          };
+        }),
         (a) => openWrappedPage({ page: "artist", performerId: a.performerId, name: a.title }),
+        [
+          { id: "artist", head: "Artist", width: "minmax(0, 2fr)", sort: "artist", title: true },
+          { id: "label", head: "Label", width: "minmax(0, 1.4fr)", sort: "label" },
+          { id: "year", head: "Started", width: "76px", center: true, sort: "year" },
+          { id: "albums", head: "Albums", width: "92px", center: true, sort: "albums" },
+        ],
+        { entry, onSort: pick },
       ),
     );
-    if (!list.length) holder.replaceChildren(wrappedNote("No artist by that name."));
+    if (!list.length) holder.replaceChildren(wrappedNote("No artist or label by that name."));
   };
-  entry.filter ||= "";
-  const filter = wrappedFilter("Filter artists", (text) => {
+  const filter = wrappedFilter("Filter artists or labels", (text) => {
     entry.filter = text;
-    show(text);
+    show();
   });
   filter.value = entry.filter;
-  wrappedBody.append(filter, holder);
-  show(entry.filter);
+  const row = document.createElement("div");
+  row.className = "wrapped-tabs-row";
+  row.append(tabs, filter, wrappedShelfControls("artists", show));
+  wrappedBody.append(row, holder);
+  show();
 };
 
 WRAPPED_PAGES.albums = async function (entry) {
@@ -7975,57 +8334,69 @@ WRAPPED_PAGES.albums = async function (entry) {
   if (ticket !== wrappedTicket) return;
   if (!albums.length) return wrappedLibraryRead(ticket, renderWrapped);
   const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const labelOf = (a) => (a.labels || [])[0] || "";
   const sorts = {
-    artist: (a, b) => byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0) || byName(a.title, b.title),
     title: (a, b) => byName(a.title, b.title) || byName(a.artist, b.artist),
-    year: (a, b) => (b.year || 0) - (a.year || 0) || byName(a.artist, b.artist) || byName(a.title, b.title),
+    artist: (a, b) => byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0) || byName(a.title, b.title),
+    label: (a, b) => byName(labelOf(a), labelOf(b)) || byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0),
+    year: (a, b) => (a.year || 0) - (b.year || 0) || byName(a.artist, b.artist) || byName(a.title, b.title),
   };
-  entry.sort ||= "artist";
+  // (albums without a label or a year go last)
+  const missing = { label: shelfLast(labelOf), year: shelfLast((a) => a.year) };
+  const first = { title: "up", artist: "up", label: "up", year: "down" };
+  shelfSortStart("albums", entry, sorts, first, "artist");
   entry.filter ||= "";
   wrappedHeading("Albums", `${albums.length.toLocaleString()} albums in your library`);
-  const tabs = document.createElement("div");
-  tabs.className = "wrapped-tabs small";
   const holder = document.createElement("div");
+  const pick = (key) => {
+    shelfSortPick("albums", entry, key, first);
+    show();
+  };
+  const tabs = wrappedShelfTabs(
+    entry,
+    [
+      ["artist", "By artist"],
+      ["title", "By title"],
+      ["label", "By label"],
+      ["year", "By year"],
+    ],
+    pick,
+  );
   const show = () => {
-    for (const tab of tabs.querySelectorAll(".wrapped-tab")) tab.classList.toggle("selected", tab.dataset.sort === entry.sort);
+    tabs.paint(shelfView("albums").view);
     const f = entry.filter;
-    const list = (f ? albums.filter((a) => a.title.toLowerCase().includes(f) || a.artist.toLowerCase().includes(f)) : albums.slice()).sort(sorts[entry.sort]);
+    const matches = (a) => a.title.toLowerCase().includes(f) || a.artist.toLowerCase().includes(f) || (a.labels || []).some((l) => l.toLowerCase().includes(f));
+    const list = shelfSorted(f ? albums.filter(matches) : albums.slice(), entry, sorts, missing);
     holder.replaceChildren(
-      wrappedLazyGrid(
+      wrappedShelf(
+        "albums",
         list.map((a) => ({
           title: a.title,
-          sub: [a.artist, a.year].filter(Boolean).join(" \u00b7 "),
+          sub: [a.artist, a.year].filter(Boolean).join(" · "),
+          cells: { artist: a.artist, label: labelOf(a), year: a.year ? String(a.year) : "" },
           imageKey: a.imageKey,
           albumId: a.albumId,
         })),
         (a) => openWrappedPage({ page: "album", albumId: a.albumId }),
+        [
+          { id: "title", head: "Album", width: "minmax(0, 2fr)", sort: "title", title: true },
+          { id: "artist", head: "Artist", width: "minmax(0, 1.4fr)", sort: "artist" },
+          { id: "label", head: "Label", width: "minmax(0, 1.1fr)", sort: "label" },
+          { id: "year", head: "Year", width: "64px", center: true, sort: "year" },
+        ],
+        { entry, onSort: pick },
       ),
     );
     if (!list.length) holder.replaceChildren(wrappedNote("No album by that name."));
   };
-  for (const [sort, label] of [
-    ["artist", "By artist"],
-    ["title", "By title"],
-    ["year", "By year"],
-  ]) {
-    const tab = document.createElement("button");
-    tab.className = "wrapped-tab";
-    tab.dataset.sort = sort;
-    tab.textContent = label;
-    tab.addEventListener("click", () => {
-      entry.sort = sort;
-      show();
-    });
-    tabs.append(tab);
-  }
-  const filter = wrappedFilter("Filter albums", (text) => {
+  const filter = wrappedFilter("Filter albums, artists or labels", (text) => {
     entry.filter = text;
     show();
   });
   filter.value = entry.filter;
   const row = document.createElement("div");
   row.className = "wrapped-tabs-row";
-  row.append(tabs, filter);
+  row.append(tabs, filter, wrappedShelfControls("albums", show));
   wrappedBody.append(row, holder);
   show();
 };
@@ -8112,7 +8483,45 @@ function libraryTrackRow(t, opts) {
   const year = document.createElement("span");
   year.className = "wrapped-track-year";
   year.textContent = t.year || "";
-  row.append(title, artist, album, year, added, heart, length);
+  if (opts.columns) {
+    // The Tracks page: its chosen columns in its order, the heart last
+    const text = (className, value, tip) => {
+      const cell = document.createElement("span");
+      cell.className = className;
+      cell.textContent = value ?? "";
+      if (tip && value) cell.title = value;
+      return cell;
+    };
+    const day = (ms) => (ms ? new Date(ms).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "");
+    const service = { qobuz: "Qobuz", tidal: "TIDAL", streaming: "Streaming" }[t.source] || "";
+    const albumArtist = text(`wrapped-track-by${t.performerId != null ? " link" : ""}`, t.albumArtist, true);
+    if (t.performerId != null) albumArtist.addEventListener("click", () => openWrappedPage({ page: "artist", performerId: t.performerId, name: t.albumArtist }));
+    const cells = {
+      number: () => text("wrapped-track-num", t.trackNumber ? (t.mediaNumber > 1 ? `${t.mediaNumber}-${t.trackNumber}` : String(t.trackNumber)) : ""),
+      title: () => title,
+      artist: () => artist,
+      albumartist: () => albumArtist,
+      composer: () => text("wrapped-track-by", t.composer, true),
+      album: () => album,
+      year: () => year,
+      added: () => added,
+      format: () => text("wrapped-track-small", t.format, true),
+      dr: () => text("wrapped-track-small wrapped-track-center", t.dynamicRange != null ? String(Math.round(t.dynamicRange)) : ""),
+      plays: () => text("wrapped-track-small wrapped-track-center", t.plays ? String(t.plays) : ""),
+      lastplayed: () => text("wrapped-track-small", day(t.lastPlayed)),
+      path: () => text("wrapped-track-by", t.path || service, true),
+      length: () => length,
+    };
+    row.classList.add("wrapped-track-grid");
+    for (const column of opts.columns) {
+      const cell = cells[column.key]();
+      cell.classList.add("wrapped-track-cell");
+      row.append(cell);
+    }
+    row.append(heart);
+  } else {
+    row.append(title, artist, album, year, added, heart, length);
+  }
   if (opts.extra) opts.extra(row);
   wholeRowOpens(row, title);
   return row;
@@ -8222,8 +8631,86 @@ function loadTracksView() {
 }
 function saveTracksView(entry) {
   try {
-    localStorage.setItem(TRACKS_VIEW_KEY, JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts, recent: entry.recent }));
+    localStorage.setItem(
+      TRACKS_VIEW_KEY,
+      JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts, recent: entry.recent, order: entry.order, shown: entry.shown }),
+    );
   } catch {}
+}
+
+// The Tracks page's columns, in their default order: heading, name in the
+// Columns list, grid width, sort (and which way it starts), and whether it
+// shows to start with. Track name always shows.
+const TRACK_COLUMNS = [
+  { key: "number", head: "#", name: "Track number", width: "44px", first: "up", center: true },
+  { key: "title", head: "Track", name: "Track name", width: "minmax(0, 2fr)", first: "up", on: true, locked: true },
+  { key: "artist", head: "Artist", name: "Artist", width: "minmax(0, 1.2fr)", first: "up", on: true },
+  { key: "albumartist", head: "Album artist", name: "Album artist", width: "minmax(0, 1.2fr)", first: "up" },
+  { key: "composer", head: "Composer", name: "Composer", width: "minmax(0, 1.2fr)", first: "up" },
+  { key: "album", head: "Album", name: "Album", width: "minmax(0, 1.2fr)", first: "up", on: true },
+  { key: "year", head: "Year", name: "Year", width: "56px", first: "down", on: true },
+  { key: "added", head: "Date added", name: "Date added", width: "132px", first: "down", on: true },
+  { key: "format", head: "Format", name: "Format", width: "100px", first: "down" },
+  { key: "dr", head: "DR", name: "Dynamic range", width: "48px", first: "down", center: true },
+  { key: "plays", head: "Plays", name: "Plays", width: "56px", first: "down", center: true },
+  { key: "lastplayed", head: "Last played", name: "Last played", width: "116px", first: "down" },
+  { key: "path", head: "File name", name: "File name", width: "minmax(0, 1.4fr)", first: "up" },
+  { key: "length", head: "Length", name: "Length", width: "64px", first: "down", on: true },
+];
+
+// The Columns list: a switch per column; `onChange` redraws the page
+function wrappedColumnsMenu(entry, onChange) {
+  const box = document.createElement("div");
+  box.className = "wrapped-columns";
+  const btn = document.createElement("button");
+  btn.className = "wrapped-tool-btn";
+  btn.innerHTML = `${COLUMNS_ICON}<span>Columns</span>`;
+  btn.title = "Choose the columns";
+  const menu = document.createElement("div");
+  menu.className = "wrapped-columns-menu";
+  menu.hidden = true;
+  const paint = () => {
+    menu.replaceChildren();
+    for (const column of TRACK_COLUMNS) {
+      const on = column.locked || entry.shown.includes(column.key);
+      const item = document.createElement("button");
+      item.className = `wrapped-columns-item${column.locked ? " locked" : ""}`;
+      item.setAttribute("role", "switch");
+      item.setAttribute("aria-checked", String(on));
+      const name = document.createElement("span");
+      name.textContent = column.name;
+      const knob = document.createElement("span");
+      knob.className = `wrapped-switch${on ? " on" : ""}`;
+      item.append(name, knob);
+      if (column.locked) item.title = "Always shown";
+      else {
+        item.addEventListener("click", () => {
+          entry.shown = on ? entry.shown.filter((k) => k !== column.key) : [...entry.shown, column.key];
+          saveTracksView(entry);
+          paint();
+          onChange();
+        });
+      }
+      menu.append(item);
+    }
+  };
+  // (closes on a click anywhere else, or Escape)
+  const close = (event) => {
+    if (!box.isConnected) return document.removeEventListener("pointerdown", close, true);
+    if (event.type === "keydown" ? event.key === "Escape" : !box.contains(event.target)) {
+      menu.hidden = true;
+      btn.classList.remove("on");
+    }
+  };
+  btn.addEventListener("click", () => {
+    menu.hidden = !menu.hidden;
+    btn.classList.toggle("on", !menu.hidden);
+    if (!menu.hidden) paint();
+  });
+  document.addEventListener("pointerdown", close, true);
+  menu.addEventListener("keydown", close);
+  box.append(btn, menu);
+  return box;
 }
 
 WRAPPED_PAGES.tracks = async function (entry) {
@@ -8250,11 +8737,34 @@ WRAPPED_PAGES.tracks = async function (entry) {
     year: (a, b) => (a.year || 0) - (b.year || 0) || byName(a.artist, b.artist) || byName(a.album, b.album),
     added: (a, b) => (a.addedAt || 0) - (b.addedAt || 0) || byName(a.artist, b.artist) || byName(a.album, b.album),
     length: (a, b) => (a.lengthSeconds || 0) - (b.lengthSeconds || 0) || byName(a.title, b.title),
+    number: (a, b) => byName(a.album, b.album) || (a.mediaNumber || 0) - (b.mediaNumber || 0) || (a.trackNumber || 0) - (b.trackNumber || 0),
+    albumartist: (a, b) => byName(a.albumArtist || "", b.albumArtist || "") || (a.year || 0) - (b.year || 0) || byName(a.album, b.album) || (a.trackNumber || 0) - (b.trackNumber || 0),
+    composer: (a, b) => byName(a.composer || "", b.composer || "") || byName(a.title, b.title),
+    format: (a, b) => byName(a.format || "", b.format || "") || byName(a.artist, b.artist),
+    dr: (a, b) => (a.dynamicRange ?? 0) - (b.dynamicRange ?? 0) || byName(a.artist, b.artist),
+    plays: (a, b) => (a.plays || 0) - (b.plays || 0) || byName(a.artist, b.artist),
+    lastplayed: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0) || byName(a.artist, b.artist),
+    path: (a, b) => byName(a.path || "", b.path || ""),
   };
-  const missing = { year: last("year"), added: last("addedAt") };
+  // (a column's empty rows stay at the end either way)
+  const missing = {
+    year: last("year"),
+    added: last("addedAt"),
+    number: last("trackNumber"),
+    albumartist: last("albumArtist"),
+    composer: last("composer"),
+    format: last("format"),
+    dr: (a, b) => (a.dynamicRange == null) - (b.dynamicRange == null),
+    lastplayed: last("lastPlayed"),
+    path: last("path"),
+  };
   // How each sort starts: names A to Z, years and dates newest first
-  const firstDir = { artist: "up", title: "up", album: "up", year: "down", added: "down", length: "down" };
+  const firstDir = Object.fromEntries(TRACK_COLUMNS.map((c) => [c.key, c.first]));
   const saved = loadTracksView();
+  // The columns: the saved order and choice, new columns where they belong
+  entry.order ||= columnOrder(saved.order, TRACK_COLUMNS.map((c) => c.key));
+  entry.shown ||= Array.isArray(saved.shown) ? saved.shown.filter((k) => firstDir[k]) : TRACK_COLUMNS.filter((c) => c.on).map((c) => c.key);
+  if (!entry.shown.includes("title")) entry.shown.push("title");
   entry.sort ||= sorts[saved.sort] ? saved.sort : "artist";
   entry.dir ||= saved.dir === "up" || saved.dir === "down" ? saved.dir : firstDir[entry.sort];
   entry.hearts ??= !!saved.hearts;
@@ -8264,49 +8774,80 @@ WRAPPED_PAGES.tracks = async function (entry) {
   const total = tracks.length.toLocaleString();
   wrappedHeading("Tracks", hearted ? `${hearted.toLocaleString()} hearted tracks, of ${total} tracks in your library` : `${total} tracks in your library`);
   // Column headers, like Roon's: a click sorts by the column, again
-  // reverses it (the arrow says which way)
+  // reverses it (the arrow says which way); with the wrench on, a heading
+  // is dragged onto another to move its column
   const header = document.createElement("div");
-  header.className = "wrapped-track wrapped-library-track wrapped-track-header";
+  const tracksBox = document.createElement("div");
+  tracksBox.className = "wrapped-tracks-box";
   const spacer = (el) => {
     el.classList.add("wrapped-header-spacer");
     el.setAttribute("aria-hidden", "true");
     el.tabIndex = -1;
     return el;
   };
-  header.append(spacer(wrappedIconButton(WRAPPED_PLAY_ICON, "", () => {}, "wrapped-track-play")), spacer(wrappedArt(null, 80, "")));
-  const columns = [
-    ["title", "Track", "wrapped-track-title"],
-    ["artist", "Artist", "wrapped-track-by"],
-    ["album", "Album", "wrapped-track-on"],
-    ["year", "Year", "wrapped-track-year"],
-    ["added", "Date added", "wrapped-track-added"],
-    [null, "", "heart"],
-    ["length", "Length", "wrapped-track-length"],
-  ];
-  for (const [sort, label, className] of columns) {
-    if (!sort) {
-      header.append(spacer(wrappedHeart({ inLibrary: true, favorite: false }, async () => ({}))));
-      continue;
-    }
-    const cell = document.createElement("button");
-    cell.className = `${className} wrapped-sort-head`;
-    cell.dataset.sort = sort;
-    const text = document.createElement("span");
-    text.textContent = label;
-    const dir = document.createElement("span");
-    dir.className = "wrapped-sort-dir";
-    cell.append(text, dir);
-    cell.addEventListener("click", () => {
-      if (entry.sort === sort) entry.dir = entry.dir === "up" ? "down" : "up";
-      else {
-        entry.sort = sort;
-        entry.dir = firstDir[sort];
+  const byKey = new Map(TRACK_COLUMNS.map((c) => [c.key, c]));
+  const visible = () => entry.order.filter((k) => entry.shown.includes(k)).map((k) => byKey.get(k));
+  const tools = document.createElement("div");
+  tools.className = "wrapped-track-tools";
+  // (the Columns list is made once, so it stays open while switches flip)
+  const wrenchSlot = document.createElement("div");
+  wrenchSlot.className = "wrapped-wrench-slot";
+  tools.append(wrenchSlot, wrappedColumnsMenu(entry, () => show()));
+  const paintTools = () => {
+    wrenchSlot.replaceChildren(
+      wrappedWrench(
+        !!entry.editing,
+        () => {
+          entry.editing = !entry.editing;
+          show();
+        },
+        () => {
+          entry.order = TRACK_COLUMNS.map((c) => c.key);
+          saveTracksView(entry);
+          show();
+        },
+      ),
+    );
+  };
+  const buildHeader = (columns) => {
+    header.className = `wrapped-track wrapped-library-track wrapped-track-header wrapped-track-grid${entry.editing ? " editing" : ""}`;
+    header.replaceChildren(spacer(wrappedIconButton(WRAPPED_PLAY_ICON, "", () => {}, "wrapped-track-play")), spacer(wrappedArt(null, 80, "")));
+    for (const column of columns) {
+      const cell = document.createElement("button");
+      cell.className = `wrapped-track-cell wrapped-sort-head wrapped-track-head-${column.key}${column.center ? " wrapped-track-center" : ""}${column.key === "length" ? " wrapped-track-length" : ""}`;
+      cell.dataset.sort = column.key;
+      const text = document.createElement("span");
+      text.textContent = column.head;
+      if (column.head !== column.name) cell.setAttribute("aria-label", column.name);
+      const dir = document.createElement("span");
+      dir.className = "wrapped-sort-dir";
+      cell.append(text, dir);
+      const on = column.key === entry.sort;
+      cell.classList.toggle("selected", on && !entry.editing);
+      dir.textContent = on && !entry.editing ? (entry.dir === "up" ? "▴" : "▾") : "";
+      if (entry.editing) {
+        cell.title = "Drag onto another heading to move this column";
+        columnDraggable(cell, column.key, (from, to) => {
+          entry.order = columnMoved(entry.order, from, to);
+          saveTracksView(entry);
+          show();
+        });
+      } else {
+        cell.title = on ? "Click again to reverse" : `Sort by ${column.name.toLowerCase()}`;
+        cell.addEventListener("click", () => {
+          if (entry.sort === column.key) entry.dir = entry.dir === "up" ? "down" : "up";
+          else {
+            entry.sort = column.key;
+            entry.dir = firstDir[column.key];
+          }
+          saveTracksView(entry);
+          show();
+        });
       }
-      saveTracksView(entry);
-      show();
-    });
-    header.append(cell);
-  }
+      header.append(cell);
+    }
+    header.append(spacer(wrappedHeart({ inLibrary: true, favorite: false }, async () => ({}))));
+  };
   const holder = document.createElement("div");
   // Only the hearted ones (as the copy last saw them)
   const hearts = document.createElement("button");
@@ -8314,21 +8855,23 @@ WRAPPED_PAGES.tracks = async function (entry) {
   hearts.innerHTML = HEART_ICONS;
   hearts.title = "Only hearted tracks";
   const show = () => {
-    for (const cell of header.querySelectorAll(".wrapped-sort-head")) {
-      const on = cell.dataset.sort === entry.sort;
-      cell.classList.toggle("selected", on);
-      cell.querySelector(".wrapped-sort-dir").textContent = on ? (entry.dir === "up" ? "\u25B4" : "\u25BE") : "";
-      cell.title = on ? "Click again to reverse" : `Sort by ${cell.textContent.toLowerCase()}`;
-    }
+    const columns = visible();
+    tracksBox.style.setProperty("--track-columns", ["auto", "36px", ...columns.map((c) => c.width), "auto"].join(" "));
+    tracksBox.classList.toggle("editing", !!entry.editing);
+    buildHeader(columns);
+    paintTools();
     hearts.classList.toggle("on", entry.hearts);
     const f = entry.filter;
     let list = entry.hearts ? tracks.filter((t) => t.favorite) : tracks.slice();
-    if (f) list = list.filter((t) => t.title.toLowerCase().includes(f) || t.artist.toLowerCase().includes(f) || t.album.toLowerCase().includes(f));
+    if (f) {
+      const has = (v) => (v || "").toLowerCase().includes(f);
+      list = list.filter((t) => has(t.title) || has(t.artist) || has(t.album) || has(t.albumArtist) || has(t.composer));
+    }
     const by = sorts[entry.sort];
     const flip = entry.dir === "down" ? -1 : 1;
     const end = missing[entry.sort];
     list.sort((a, b) => (end && end(a, b)) || flip * by(a, b));
-    holder.replaceChildren(wrappedLazyList(list, libraryTrackRow, "wrapped-tracks", 150));
+    holder.replaceChildren(wrappedLazyList(list, (t) => libraryTrackRow(t, { columns }), "wrapped-tracks", 150));
     if (!list.length) holder.replaceChildren(wrappedNote(entry.hearts ? "No hearted track matches." : "No track by that name."));
   };
   hearts.addEventListener("click", () => {
@@ -8343,8 +8886,9 @@ WRAPPED_PAGES.tracks = async function (entry) {
   filter.value = entry.filter;
   const row = document.createElement("div");
   row.className = "wrapped-tabs-row";
-  row.append(shuffleControls(entry, ticket), hearts, filter);
-  wrappedBody.append(row, header, holder);
+  row.append(shuffleControls(entry, ticket), hearts, filter, tools);
+  tracksBox.append(header, holder);
+  wrappedBody.append(row, tracksBox);
   show();
 };
 
@@ -8610,6 +9154,17 @@ WRAPPED_PAGES.genres = async function (entry) {
   }
   entry.kind ||= "genre";
   entry.filter ||= "";
+  // (the tabs pick genres, styles or scenes; the list's headings sort it,
+  // biggest first to start with)
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const genreSorts = {
+    name: (a, b) => byName(a.name, b.name),
+    artists: (a, b) => a.artists - b.artists || byName(b.name, a.name),
+  };
+  const genreFirst = { name: "up", artists: "down" };
+  entry.sorting ||= {};
+  const sortEntry = entry.sorting;
+  shelfSortStart("genres", sortEntry, genreSorts, genreFirst, "artists");
   const tabs = document.createElement("div");
   tabs.className = "wrapped-tabs small";
   const holder = document.createElement("div");
@@ -8619,10 +9174,27 @@ WRAPPED_PAGES.genres = async function (entry) {
     const list = rows.filter((r) => r.kind === entry.kind && (!f || r.name.includes(f)));
     const kind = GENRE_KINDS.find(([k]) => k === entry.kind)[1].toLowerCase();
     wrappedHeading("Genres", `${list.length.toLocaleString()} ${f ? "matching " : ""}${kind} across your library, by Wrapped's own tags`);
+    shelfSorted(list, sortEntry, genreSorts);
     holder.replaceChildren(
-      wrappedLazyGrid(
-        list.map((r) => ({ title: r.name, sub: `${r.artists} artist${r.artists === 1 ? "" : "s"}`, imageKey: r.imageKey, why: r.examples.join(", "), name: r.name })),
+      wrappedShelf(
+        "genres",
+        list.map((r) => {
+          const artists = `${r.artists} artist${r.artists === 1 ? "" : "s"}`;
+          return { title: r.name, sub: artists, cells: { examples: r.examples.join(", "), artists }, imageKey: r.imageKey, why: r.examples.join(", "), name: r.name };
+        }),
         (r) => openWrappedPage({ page: "ourgenre", name: r.name }),
+        [
+          { id: "name", head: GENRE_KINDS.find(([k]) => k === entry.kind)[1].replace(/s$/, ""), width: "minmax(0, 2fr)", sort: "name", title: true },
+          { id: "examples", head: "Artists like", width: "minmax(0, 1.6fr)" },
+          { id: "artists", head: "Artists", width: "92px", center: true, sort: "artists" },
+        ],
+        {
+          entry: sortEntry,
+          onSort: (key) => {
+            shelfSortPick("genres", sortEntry, key, genreFirst);
+            show();
+          },
+        },
       ),
     );
     if (!list.length) holder.replaceChildren(wrappedNote("Nothing by that name."));
@@ -8645,7 +9217,7 @@ WRAPPED_PAGES.genres = async function (entry) {
   filter.value = entry.filter;
   const row = document.createElement("div");
   row.className = "wrapped-tabs-row";
-  row.append(tabs, filter);
+  row.append(tabs, filter, wrappedShelfControls("genres", show));
   wrappedBody.append(row, holder);
   show();
 };

@@ -95,6 +95,35 @@ fn save_window_state_soon(app: &AppHandle) {
     });
 }
 
+/// Gives one of our windows the tool-window style: no taskbar button and
+/// no Alt+Tab entry, however it's shown. Called in setup, while the window
+/// is still hidden, so Windows never gives it a taskbar button at all.
+fn make_tool_window(app: &AppHandle, label: &str) {
+    #[cfg(windows)]
+    {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+        };
+        let Some(window) = app.get_webview_window(label) else {
+            return;
+        };
+        let Ok(hwnd) = window.hwnd() else {
+            return;
+        };
+        let hwnd = windows::Win32::Foundation::HWND(hwnd.0);
+        // SAFETY: style query and change on a valid window handle.
+        unsafe {
+            let exstyle = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+            let tool = (exstyle | WS_EX_TOOLWINDOW.0 as isize) & !(WS_EX_APPWINDOW.0 as isize);
+            if tool != exstyle {
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, tool);
+            }
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = (app, label);
+}
+
 /// Brings a window to the front, un-hiding and un-minimizing it if needed.
 pub(crate) fn show(app: &AppHandle, label: &str) {
     if label == SETTINGS_WINDOW {
@@ -528,6 +557,14 @@ pub fn run() {
             // The status check other apps (the Stream Deck plugin) use to see
             // that Roon: Toasted is running (see status.rs)
             status::start(app.handle());
+
+            // The toast, the taskbar widget and the "Enable Wrapper" button
+            // are shown straight through Windows, which skips Tauri's
+            // skipTaskbar; as tool windows they stay off the taskbar and
+            // out of Alt+Tab
+            for label in [toast::TOAST_WINDOW, widget::WIDGET_WINDOW, wrapper::BUTTON_WINDOW] {
+                make_tool_window(app.handle(), label);
+            }
 
             // The taskbar widget, if it's switched on (see widget.rs)
             widget::start(app.handle());
