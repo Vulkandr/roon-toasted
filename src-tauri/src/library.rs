@@ -49,7 +49,7 @@
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
-use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, PlaylistCard, QueueSong, RadioSeeds, SearchHits, TrackInfo};
+use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenreInfo, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, PlaylistCard, QueueSong, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -258,6 +258,7 @@ async fn run(app: AppHandle, generation: u64, host: String, core_id: String) {
                 println!("[library {}] connected to the Core at {host} ({} objects)", clock(), client.object_count());
                 library.set_status(LibraryState::Ready, None);
                 attempt = 0;
+                crate::wrapped::refresh_artists(app.clone(), client.clone());
 
                 let reason = forward_events(&app, &client, generation).await;
                 if library.inner.lock().unwrap().generation != generation {
@@ -568,6 +569,47 @@ pub async fn library_genre_page(app: AppHandle, name: String) -> Result<GenrePag
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.genre_page(&name).await.map_err(describe)
+}
+
+/// What Roon knows about these genres (by name), for Roon's Genres page in
+/// Wrapped: picture, artist and album counts, sub-genres. Logs each one.
+#[tauri::command]
+pub async fn library_genre_info(app: AppHandle, names: Vec<String>) -> Result<Vec<GenreInfo>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let found = client.genre_info(&names).await.map_err(describe)?;
+    for g in &found {
+        println!(
+            "[genres {}] {}: {} artists, {} albums, {} sub-genres, {}",
+            clock(),
+            g.name,
+            g.artists.map_or("?".into(), |n| n.to_string()),
+            g.albums.map_or("?".into(), |n| n.to_string()),
+            g.subgenres.len(),
+            if g.image_key.is_some() { "picture" } else { "no picture" },
+        );
+    }
+    Ok(found)
+}
+
+/// The library's main artists in a genre (by name), its sub-genres' included.
+#[tauri::command]
+pub async fn library_genre_artists(app: AppHandle, name: String) -> Result<Vec<ArtistCard>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let found = client.genre_artists(&name).await.map_err(describe)?;
+    println!("[genres {}] {name}: {} artists in the library", clock(), found.len());
+    Ok(found)
+}
+
+/// The library's albums in a genre (by name), its sub-genres' included.
+#[tauri::command]
+pub async fn library_genre_albums(app: AppHandle, name: String) -> Result<Vec<AlbumCard>, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let found = client.genre_albums(&name).await.map_err(describe)?;
+    println!("[genres {}] {name}: {} albums in the library", clock(), found.len());
+    Ok(found)
 }
 
 /// Roon's play history, newest first, up to `limit` plays.

@@ -199,6 +199,9 @@ pub struct WrappedSettings {
     /// Live albums and songs in what Wrapped picks for you (Home's rows,
     /// Discover's lists, Deep Dive, the radio); off by default.
     pub live_albums: bool,
+    /// Whose genres the Genres page shows: "wrapped" (Wrapped's own tags)
+    /// or "roon" (Roon's genres).
+    pub genres: String,
 }
 
 impl Default for WrappedSettings {
@@ -224,6 +227,7 @@ impl Default for WrappedSettings {
             page_size: "100".into(),
             side_menu: "roon".into(),
             live_albums: false,
+            genres: "wrapped".into(),
         }
     }
 }
@@ -655,6 +659,13 @@ pub struct LibraryArtist {
     pub name: String,
     pub performer_id: Option<u64>,
     pub image_key: Option<String>,
+    /// Roon's pictures of the artist to try in turn (avatar, photo); copies
+    /// read before 1.5.0 have just `image_key`.
+    #[serde(default)]
+    pub image_keys: Vec<String>,
+    /// The name as Roon sorts it ("Beatles, The"); not in older copies.
+    #[serde(default)]
+    pub sort_key: Option<String>,
     pub album_count: Option<i32>,
     /// When the artist was born or the band formed, as Roon has it (copies
     /// read before 1.4.1 don't have it).
@@ -906,6 +917,48 @@ pub fn wrapped_library_tracks(app: AppHandle) -> Vec<TrackRow> {
         .collect()
 }
 
+fn library_artist(c: roon_library::ArtistCard) -> LibraryArtist {
+    LibraryArtist {
+        name: c.name,
+        performer_id: c.performer_id,
+        image_key: c.image_key,
+        image_keys: c.image_keys,
+        sort_key: c.sort_key,
+        album_count: c.album_count,
+        begin_year: c.begin_year,
+    }
+}
+
+/// Fresh artists from the Core each time the Library link connects: not
+/// all of Roon's picture keys last from one session to the next, and copies
+/// from before 1.5.0 lack the second picture and the sort names. Just the
+/// artists (a few seconds); albums and tracks wait for a full read. Not
+/// while a full read runs, nor before there's a copy at all.
+pub fn refresh_artists(app: AppHandle, client: roon_library::LibraryClient) {
+    tauri::async_runtime::spawn(async move {
+        let copy = app.state::<LibraryCopy>();
+        if copy.syncing.load(Ordering::SeqCst) || copy.artists(&app).is_empty() {
+            return;
+        }
+        match client.library_artists(&|_, _| {}).await {
+            Ok(cards) if !cards.is_empty() => {
+                let artists: Vec<LibraryArtist> = cards.into_iter().map(library_artist).collect();
+                let n = artists.len();
+                let pictured = artists.iter().filter(|a| a.image_keys.len() > 1).count();
+                let sorted = artists.iter().filter(|a| a.sort_key.is_some()).count();
+                copy.with_store(&app, |s| s.artists = artists);
+                if let Some(path) = LibraryCopy::path(&app) {
+                    copy.with_store(&app, |s| write_json(&path, s));
+                }
+                println!("[wrapped] library copy: artists refreshed ({n}; {pictured} with two pictures, {sorted} with a sort name)");
+                let _ = app.emit("wrapped-artists-refreshed", n);
+            }
+            Ok(_) => {}
+            Err(e) => println!("[wrapped] library copy: artists not refreshed ({e})"),
+        }
+    });
+}
+
 /// Reads the library's artists from the Core in the background (progress
 /// as "wrapped-library" events) and keeps them beside the history copy.
 #[tauri::command]
@@ -930,16 +983,7 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
         };
         match client.library_artists(&progress).await {
             Ok(cards) => {
-                let artists: Vec<LibraryArtist> = cards
-                    .into_iter()
-                    .map(|c| LibraryArtist {
-                        name: c.name,
-                        performer_id: c.performer_id,
-                        image_key: c.image_key,
-                        album_count: c.album_count,
-                        begin_year: c.begin_year,
-                    })
-                    .collect();
+                let artists: Vec<LibraryArtist> = cards.into_iter().map(library_artist).collect();
                 let n = artists.len();
                 // The albums too (a failure keeps the ones read before)
                 let albums: Option<Vec<LibraryAlbum>> = match client.library_albums(&albums_progress).await {

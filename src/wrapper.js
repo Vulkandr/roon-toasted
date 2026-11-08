@@ -4704,6 +4704,13 @@ window.addEventListener("resize", () => {
 // instead of switching, and a frame either side of the filter's change
 // is hardly off)
 let filterFadeTimer = null;
+// The artists read fresh when the Library link connects (wrapped.rs
+// refresh_artists): pages of artists showing draw again with the new
+// pictures and order
+listen("wrapped-artists-refreshed", () => {
+  if (!wrapped.hidden && ["artists", "genres", "ourgenre"].includes(wrappedStack.at(-1)?.page)) renderWrapped();
+});
+
 listen("wrapper-filter", (event) => {
   const shown = event.payload !== false;
   if (shown === filterShown) return;
@@ -5243,21 +5250,53 @@ const RADIO_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 
 // Art from the Core's image service (the roonimg scheme, see zones.rs),
 // or initials in a colored square while there's none
+// (`imageKey` can be a list, tried in turn: some pictures don't load)
 function wrappedArt(imageKey, size, name, round) {
   const box = document.createElement("div");
   box.className = `wrapped-art${round ? " round" : ""}`;
-  if (imageKey) {
+  const keys = [imageKey].flat().filter(Boolean);
+  if (keys.length) {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
     // (A broker key: the Library link's, not the official API's; zones.rs)
-    img.src = `${convertFileSrc(imageKey, "roonimg")}?width=${size}&height=${size}&src=broker`;
-    img.addEventListener("error", () => img.replaceWith(wrappedInitials(name)));
+    // (round is an artist: Roon's pictures of those come square)
+    const load = (i) => (img.src = `${convertFileSrc(keys[i], "roonimg")}?width=${size}&height=${size}&src=broker${round ? "&square=1" : ""}&v=2`);
+    let at = 0;
+    let outside = false;
+    img.addEventListener("error", () => {
+      if (++at < keys.length) return load(at);
+      // (an artist Roon has no picture of: Deezer's, else the initials)
+      if (round && name && !outside) {
+        outside = true;
+        return outsidePicture(name).then((url) => (url ? (img.src = url) : img.replaceWith(wrappedInitials(name))));
+      }
+      img.replaceWith(wrappedInitials(name));
+    });
+    load(0);
     box.append(img);
   } else {
-    box.append(wrappedInitials(name));
+    const initials = wrappedInitials(name);
+    box.append(initials);
+    if (round && name) {
+      outsidePicture(name).then((url) => {
+        if (!url) return;
+        const img = document.createElement("img");
+        img.alt = "";
+        img.addEventListener("load", () => initials.replaceWith(img), { once: true });
+        img.src = url;
+      });
+    }
   }
   return box;
+}
+
+// An artist's picture from outside Roon (pictures.rs: Deezer's, matched by
+// an album of theirs), asked for once a session per name; null for none
+const outsidePictures = new Map();
+function outsidePicture(name) {
+  if (!outsidePictures.has(name)) outsidePictures.set(name, invoke("wrapped_artist_picture", { name }).catch(() => null));
+  return outsidePictures.get(name);
 }
 
 function wrappedInitials(name) {
@@ -6027,7 +6066,14 @@ const albumItem = (a) => ({
   sub: [a.artist, a.year, a.inLibrary ? "In library" : null].filter(Boolean).join(" · "),
   imageKey: a.imageKey,
 });
-const artistItem = (p) => ({ handle: p.handle, title: p.name, sub: "", imageKey: p.imageKey, round: true });
+// An artist's pictures to try in turn (Roon's avatar, then its photo), or
+// the one picture older lists have
+const artistPictures = (a) => (a.imageKeys?.length ? a.imageKeys : a.imageKey);
+// Artists in Roon's order: by the name as Roon sorts it ("Beatles, The"),
+// as plain text (so "10 Years" comes before "2Pac", as in Roon)
+const artistSortName = (a) => a.sortKey || a.name || "";
+const byArtistSort = (a, b) => artistSortName(a).localeCompare(artistSortName(b), undefined, { sensitivity: "base" });
+const artistItem = (p) => ({ handle: p.handle, title: p.name, sub: "", imageKey: artistPictures(p), round: true });
 const openAlbum = (item) => openWrappedPage({ page: "album", handle: item.handle });
 const openArtist = (item) => openWrappedPage({ page: "artist", handle: item.handle });
 
@@ -7955,29 +8001,63 @@ function columnMoved(order, id, target) {
 // Makes a heading draggable onto the others (the wrench is on): `onMove(id,
 // target)` when it's dropped on one
 function columnDraggable(cell, id, onMove) {
-  cell.draggable = true;
+  // (with the pointer, not the browser's drag and drop: the window hands
+  // drags to Tauri for dropped files, so the page never sees a drop)
   cell.classList.add("wrapped-column-grab");
+  cell.dataset.columnId = id;
   const grip = document.createElement("span");
   grip.className = "wrapped-column-grip";
   grip.innerHTML = GRIP_ICON;
   cell.prepend(grip);
-  cell.addEventListener("dragstart", (event) => {
-    event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", id);
-    cell.classList.add("dragging");
-  });
-  cell.addEventListener("dragend", () => cell.classList.remove("dragging"));
-  cell.addEventListener("dragover", (event) => {
+  cell.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
     event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    cell.classList.add("drop");
-  });
-  cell.addEventListener("dragleave", () => cell.classList.remove("drop"));
-  cell.addEventListener("drop", (event) => {
-    event.preventDefault();
-    cell.classList.remove("drop");
-    const from = event.dataTransfer.getData("text/plain");
-    if (from && from !== id) onMove(from, id);
+    const row = cell.parentElement;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let moving = false;
+    let over = null;
+    // (the heading under the pointer, else the nearest one across)
+    const headingAt = (x) => {
+      let best = null;
+      let gap = Infinity;
+      for (const other of row.querySelectorAll(":scope > .wrapped-column-grab")) {
+        const box = other.getBoundingClientRect();
+        const off = x < box.left ? box.left - x : x > box.right ? x - box.right : 0;
+        if (off < gap) {
+          gap = off;
+          best = other;
+        }
+      }
+      return best;
+    };
+    const move = (e) => {
+      if (!moving && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
+      if (!moving) {
+        moving = true;
+        cell.classList.add("dragging");
+        document.body.classList.add("wrapped-column-moving");
+      }
+      const target = headingAt(e.clientX);
+      const next = target && target !== cell ? target : null;
+      if (next !== over) {
+        over?.classList.remove("drop");
+        over = next;
+        over?.classList.add("drop");
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      cell.classList.remove("dragging");
+      over?.classList.remove("drop");
+      document.body.classList.remove("wrapped-column-moving");
+      if (moving && over) onMove(id, over.dataset.columnId);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   });
 }
 
@@ -8168,7 +8248,11 @@ function wrappedShelfTabs(entry, options, onPick) {
 // item's title, the others its `cells[id]`. Their order is the page's saved
 // one (the wrench rearranges it). With `sorting` ({ entry, onSort }) a
 // column with a `sort` key sorts the list when its heading is clicked.
-function wrappedShelf(page, items, onClick, columns, sorting) {
+// (`split`, for a row that is two buttons: `side(columnId or "art", item)`
+// says "left" or "right" for each cell; a click on the left calls
+// `onLeft(item, row, make)`, the right `onClick`; `decorate(item, cell,
+// column)` adds to a cell. The rows keep their item and `make` for it.)
+function wrappedShelf(page, items, onClick, columns, sorting, split) {
   const { view, size } = shelfView(page);
   if (view === "grid") {
     const holder = wrappedLazyGrid(items, onClick);
@@ -8208,7 +8292,7 @@ function wrappedShelf(page, items, onClick, columns, sorting) {
       cell.title = "Drag onto another heading to move this column";
       columnDraggable(cell, column.id, (from, to) => {
         saveShelfView(page, { order: columnMoved(order.map((c) => c.id), from, to) });
-        box.replaceWith(wrappedShelf(page, items, onClick, columns, sorting));
+        box.replaceWith(wrappedShelf(page, items, onClick, columns, sorting, split));
       });
     }
     head.append(cell);
@@ -8216,7 +8300,14 @@ function wrappedShelf(page, items, onClick, columns, sorting) {
   const make = (item) => {
     const row = document.createElement("button");
     row.className = "wrapped-shelf-row";
-    row.append(wrappedArt(item.imageKey, 80, item.title, item.round));
+    const art = wrappedArt(item.imageKey, 80, item.title, item.round);
+    row.append(art);
+    if (split) {
+      row.classList.add("split");
+      art.dataset.side = split.side("art", item);
+      row.shelfItem = item;
+      row.shelfMake = make;
+    }
     for (const column of order) {
       const cell = document.createElement("span");
       if (column.title) {
@@ -8228,9 +8319,38 @@ function wrappedShelf(page, items, onClick, columns, sorting) {
         cell.textContent = text;
         if (text) cell.title = text;
       }
+      if (split) {
+        cell.dataset.side = split.side(column.id, item);
+        split.decorate?.(item, cell, column);
+      }
       row.append(cell);
     }
-    row.addEventListener("click", () => onClick(item));
+    if (split) {
+      // (the side under the pointer anywhere in the row, gaps and padding
+      // included: the cell it's over, else the nearest one across)
+      const sideAt = (x) => {
+        let best = null;
+        let gap = Infinity;
+        for (const cell of row.querySelectorAll(":scope > [data-side]")) {
+          const box = cell.getBoundingClientRect();
+          const off = x < box.left ? box.left - x : x > box.right ? x - box.right : 0;
+          if (off < gap) {
+            gap = off;
+            best = cell.dataset.side;
+          }
+        }
+        return best;
+      };
+      row.addEventListener("pointermove", (event) => {
+        const side = sideAt(event.clientX);
+        if (row.dataset.hot !== side) row.dataset.hot = side;
+      });
+      row.addEventListener("pointerleave", () => delete row.dataset.hot);
+      row.addEventListener("click", (event) => {
+        if (sideAt(event.clientX) === "left") split.onLeft(item, row, make);
+        else onClick(item);
+      });
+    } else row.addEventListener("click", () => onClick(item));
     return row;
   };
   box.append(head, wrappedLazyList(items, make, "wrapped-shelf-rows", 400));
@@ -8252,7 +8372,7 @@ WRAPPED_PAGES.artists = async function (entry) {
   if (!artists.length) return wrappedLibraryRead(ticket, renderWrapped);
   const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
   const sorts = {
-    artist: (a, b) => byName(a.name, b.name),
+    artist: byArtistSort,
     label: (a, b) => byName(a.label || "", b.label || "") || byName(a.name, b.name),
     year: (a, b) => (a.began || 0) - (b.began || 0) || byName(a.name, b.name),
     albums: (a, b) => (a.albumCount || 0) - (b.albumCount || 0) || byName(a.name, b.name),
@@ -8291,7 +8411,7 @@ WRAPPED_PAGES.artists = async function (entry) {
             title: a.name,
             sub: albums,
             cells: { label: a.label || "", year: a.began ? String(a.began) : "", albums },
-            imageKey: a.imageKey,
+            imageKey: artistPictures(a),
             round: true,
             performerId: a.performerId,
           };
@@ -8511,14 +8631,14 @@ function libraryTrackRow(t, opts) {
       lastplayed: () => text("wrapped-track-small", day(t.lastPlayed)),
       path: () => text("wrapped-track-by", t.path || service, true),
       length: () => length,
+      heart: () => heart,
     };
     row.classList.add("wrapped-track-grid");
     for (const column of opts.columns) {
       const cell = cells[column.key]();
-      cell.classList.add("wrapped-track-cell");
+      if (column.key !== "heart") cell.classList.add("wrapped-track-cell");
       row.append(cell);
     }
-    row.append(heart);
   } else {
     row.append(title, artist, album, year, added, heart, length);
   }
@@ -8633,7 +8753,7 @@ function saveTracksView(entry) {
   try {
     localStorage.setItem(
       TRACKS_VIEW_KEY,
-      JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts, recent: entry.recent, order: entry.order, shown: entry.shown }),
+      JSON.stringify({ sort: entry.sort, dir: entry.dir, hearts: entry.hearts, recent: entry.recent, order: entry.order, shown: entry.shown, heartColumn: true }),
     );
   } catch {}
 }
@@ -8656,6 +8776,7 @@ const TRACK_COLUMNS = [
   { key: "lastplayed", head: "Last played", name: "Last played", width: "116px", first: "down" },
   { key: "path", head: "File name", name: "File name", width: "minmax(0, 1.4fr)", first: "up" },
   { key: "length", head: "Length", name: "Length", width: "64px", first: "down", on: true },
+  { key: "heart", head: "\u2665", name: "Heart", width: "auto", first: "down", on: true, center: true },
 ];
 
 // The Columns list: a switch per column; `onChange` redraws the page
@@ -8745,6 +8866,7 @@ WRAPPED_PAGES.tracks = async function (entry) {
     plays: (a, b) => (a.plays || 0) - (b.plays || 0) || byName(a.artist, b.artist),
     lastplayed: (a, b) => (a.lastPlayed || 0) - (b.lastPlayed || 0) || byName(a.artist, b.artist),
     path: (a, b) => byName(a.path || "", b.path || ""),
+    heart: (a, b) => (a.favorite ? 1 : 0) - (b.favorite ? 1 : 0) || byName(b.artist, a.artist) || byName(b.title, a.title),
   };
   // (a column's empty rows stay at the end either way)
   const missing = {
@@ -8765,6 +8887,8 @@ WRAPPED_PAGES.tracks = async function (entry) {
   entry.order ||= columnOrder(saved.order, TRACK_COLUMNS.map((c) => c.key));
   entry.shown ||= Array.isArray(saved.shown) ? saved.shown.filter((k) => firstDir[k]) : TRACK_COLUMNS.filter((c) => c.on).map((c) => c.key);
   if (!entry.shown.includes("title")) entry.shown.push("title");
+  // (the heart became a column in 1.5.0: shown for views saved before)
+  if (Array.isArray(saved.shown) && !saved.heartColumn && !entry.shown.includes("heart")) entry.shown.push("heart");
   entry.sort ||= sorts[saved.sort] ? saved.sort : "artist";
   entry.dir ||= saved.dir === "up" || saved.dir === "down" ? saved.dir : firstDir[entry.sort];
   entry.hearts ??= !!saved.hearts;
@@ -8819,6 +8943,7 @@ WRAPPED_PAGES.tracks = async function (entry) {
       const text = document.createElement("span");
       text.textContent = column.head;
       if (column.head !== column.name) cell.setAttribute("aria-label", column.name);
+      if (column.key === "heart") cell.classList.add("wrapped-track-head-heart");
       const dir = document.createElement("span");
       dir.className = "wrapped-sort-dir";
       cell.append(text, dir);
@@ -8846,7 +8971,6 @@ WRAPPED_PAGES.tracks = async function (entry) {
       }
       header.append(cell);
     }
-    header.append(spacer(wrappedHeart({ inLibrary: true, favorite: false }, async () => ({}))));
   };
   const holder = document.createElement("div");
   // Only the hearted ones (as the copy last saw them)
@@ -8856,7 +8980,7 @@ WRAPPED_PAGES.tracks = async function (entry) {
   hearts.title = "Only hearted tracks";
   const show = () => {
     const columns = visible();
-    tracksBox.style.setProperty("--track-columns", ["auto", "36px", ...columns.map((c) => c.width), "auto"].join(" "));
+    tracksBox.style.setProperty("--track-columns", ["auto", "36px", ...columns.map((c) => c.width)].join(" "));
     tracksBox.classList.toggle("editing", !!entry.editing);
     buildHeader(columns);
     paintTools();
@@ -9036,7 +9160,7 @@ function wrappedMixedSections(albums, artists, tracks, remove) {
     const grid = document.createElement("div");
     grid.className = "wrapped-cards";
     for (const a of artists) {
-      grid.append(withX(wrappedCard({ title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: a.imageKey, round: true }, () => openWrappedPage({ page: "artist", handle: a.handle })), a, "artist"));
+      grid.append(withX(wrappedCard({ title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: artistPictures(a), round: true }, () => openWrappedPage({ page: "artist", handle: a.handle })), a, "artist"));
     }
     out.push(grid);
   }
@@ -9123,7 +9247,8 @@ WRAPPED_PAGES.listenlater = async function () {
   );
 };
 
-// ----- Our genres: your library by the tags Wrapped keeps (tags.rs) -----
+// ----- Genres: Wrapped's own (the tags tags.rs keeps for your artists) or
+// Roon's (Settings' Genres picks). Both through genreBrowser below. -----
 
 const GENRE_KINDS = [
   ["genre", "Genres"],
@@ -9131,7 +9256,12 @@ const GENRE_KINDS = [
   ["scene", "Scenes"],
 ];
 
+// Wrapped's genres: the library by the tags Wrapped keeps, a tab each for
+// genres, styles and scenes. A tag that names another one ("melodic death
+// metal", "death metal") is its sub-genre (tags.rs works that out), and
+// counts take in the sub-genres' artists
 WRAPPED_PAGES.genres = async function (entry) {
+  if (wrappedSettings?.genres === "roon") return roonGenresPage(entry);
   wrappedHeading("Genres", "Your library by Wrapped's own tags, not Roon's");
   if (wrappedNeedsLibrary()) return;
   const ticket = ++wrappedTicket;
@@ -9153,52 +9283,34 @@ WRAPPED_PAGES.genres = async function (entry) {
     return;
   }
   entry.kind ||= "genre";
-  entry.filter ||= "";
-  // (the tabs pick genres, styles or scenes; the list's headings sort it,
-  // biggest first to start with)
-  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
-  const genreSorts = {
-    name: (a, b) => byName(a.name, b.name),
-    artists: (a, b) => a.artists - b.artists || byName(b.name, a.name),
-  };
-  const genreFirst = { name: "up", artists: "down" };
-  entry.sorting ||= {};
-  const sortEntry = entry.sorting;
-  shelfSortStart("genres", sortEntry, genreSorts, genreFirst, "artists");
+  const node = (r, depth, path) => ({
+    name: r.name,
+    kind: r.kind,
+    depth,
+    path: path ? `${path}\u0000${r.name}` : `${r.kind}\u0000${r.name}`,
+    artists: r.artists,
+    albums: r.albums,
+    imageKey: r.imageKeys?.length ? r.imageKeys : r.imageKey,
+    subCount: r.subgenres,
+    examples: r.examples,
+  });
+  const kindName = () => GENRE_KINDS.find(([k]) => k === entry.kind)[1];
   const tabs = document.createElement("div");
   tabs.className = "wrapped-tabs small";
-  const holder = document.createElement("div");
-  const show = () => {
-    for (const tab of tabs.querySelectorAll(".wrapped-tab")) tab.classList.toggle("selected", tab.dataset.kind === entry.kind);
-    const f = entry.filter;
-    const list = rows.filter((r) => r.kind === entry.kind && (!f || r.name.includes(f)));
-    const kind = GENRE_KINDS.find(([k]) => k === entry.kind)[1].toLowerCase();
-    wrappedHeading("Genres", `${list.length.toLocaleString()} ${f ? "matching " : ""}${kind} across your library, by Wrapped's own tags`);
-    shelfSorted(list, sortEntry, genreSorts);
-    holder.replaceChildren(
-      wrappedShelf(
-        "genres",
-        list.map((r) => {
-          const artists = `${r.artists} artist${r.artists === 1 ? "" : "s"}`;
-          return { title: r.name, sub: artists, cells: { examples: r.examples.join(", "), artists }, imageKey: r.imageKey, why: r.examples.join(", "), name: r.name };
-        }),
-        (r) => openWrappedPage({ page: "ourgenre", name: r.name }),
-        [
-          { id: "name", head: GENRE_KINDS.find(([k]) => k === entry.kind)[1].replace(/s$/, ""), width: "minmax(0, 2fr)", sort: "name", title: true },
-          { id: "examples", head: "Artists like", width: "minmax(0, 1.6fr)" },
-          { id: "artists", head: "Artists", width: "92px", center: true, sort: "artists" },
-        ],
-        {
-          entry: sortEntry,
-          onSort: (key) => {
-            shelfSortPick("genres", sortEntry, key, genreFirst);
-            show();
-          },
-        },
-      ),
-    );
-    if (!list.length) holder.replaceChildren(wrappedNote("Nothing by that name."));
-  };
+  const browser = genreBrowser({
+    page: "genres",
+    entry,
+    // (filtered, every level matching shows, not just the top one)
+    tops: (f) => rows.filter((r) => r.kind === entry.kind && (f ? r.name.includes(f) : !r.parent)).map((r) => node(r, 0, "")),
+    subsOf: async (n) => rows.filter((r) => r.kind === n.kind && r.parent === n.name).map((r) => node(r, n.depth + 1, n.path)),
+    openPage: (n) => openWrappedPage({ page: "ourgenre", name: n.name }),
+    noun: () => kindName().replace(/s$/, "").toLowerCase(),
+    heading: (count, f) => wrappedHeading("Genres", `${count.toLocaleString()} ${f ? "matching " : ""}${count === 1 ? kindName().replace(/s$/, "").toLowerCase() : kindName().toLowerCase()} across your library, by Wrapped's own tags`),
+    examples: true,
+    before: () => {
+      for (const tab of tabs.children) tab.classList.toggle("selected", tab.dataset.kind === entry.kind);
+    },
+  });
   for (const [kind, label] of GENRE_KINDS) {
     const tab = document.createElement("button");
     tab.className = "wrapped-tab";
@@ -9206,48 +9318,444 @@ WRAPPED_PAGES.genres = async function (entry) {
     tab.textContent = label;
     tab.addEventListener("click", () => {
       entry.kind = kind;
-      show();
+      browser.show();
     });
     tabs.append(tab);
   }
-  const filter = wrappedFilter("Filter", (text) => {
-    entry.filter = text;
-    show();
-  });
-  filter.value = entry.filter;
   const row = document.createElement("div");
   row.className = "wrapped-tabs-row";
-  row.append(tabs, filter, wrappedShelfControls("genres", show));
-  wrappedBody.append(row, holder);
-  show();
+  row.append(tabs, browser.filter, wrappedShelfControls("genres", browser.show));
+  wrappedBody.append(row, browser.holder);
+  browser.show();
 };
 
-// One of our genres: the library's artists that carry the tag
-WRAPPED_PAGES.ourgenre = async function (entry) {
-  wrappedHeading(entry.name, "Artists in your library with this tag");
-  if (wrappedNeedsLibrary()) return;
-  const ticket = ++wrappedTicket;
-  let artists;
+// Roon's genres (Settings' Genres: Roon): Roon's own Genres list, through
+// the official browse service, with what the Library link knows about each
+// (Roon's picture, its sub-genres; kept for the session). Genres with
+// nothing in the library are left out.
+const roonGenreInfo = new Map(); // genre name -> { imageKey, artists, albums, subgenres } (null: Roon didn't say)
+
+// Asks the Library link about the genres it hasn't been asked about yet
+async function roonGenreLoad(names) {
+  const missing = [...new Set(names)].filter((name) => !roonGenreInfo.has(name));
+  if (!missing.length || !libraryReady) return;
+  let found = [];
   try {
-    artists = await invoke("wrapped_genre_artists", { name: entry.name });
+    found = await invoke("library_genre_info", { names: missing });
+  } catch {
+    return;
+  }
+  for (const info of found || []) roonGenreInfo.set(info.name, info);
+  for (const name of missing) if (!roonGenreInfo.has(name)) roonGenreInfo.set(name, null);
+}
+
+// ("1,607 Artists, 3,629 Albums")
+function roonGenreCount(text, word) {
+  const n = (text || "").match(new RegExp(`([\\d,.]+)\\s+${word}`, "i"))?.[1];
+  return n == null ? null : Number(n.replace(/[,.]/g, ""));
+}
+
+// A Roon genre for the page: name, counts (the browse list's for the top
+// level, else the Library link's), picture, sub-genre names, where it sits
+function roonGenreNode(name, depth, path, counts = {}) {
+  const info = roonGenreInfo.get(name);
+  return {
+    name,
+    depth,
+    path: path ? `${path}\u0000${name}` : name,
+    artists: counts.artists ?? info?.artists ?? null,
+    albums: counts.albums ?? info?.albums ?? null,
+    imageKey: info?.imageKey || null,
+    subgenres: info?.subgenres || [],
+    subCount: (info?.subgenres || []).length,
+  };
+}
+
+async function roonGenresPage(entry) {
+  wrappedHeading("Genres", "Roon's genres");
+  const ticket = ++wrappedTicket;
+  wrappedBody.append(wrappedNote("Loading..."));
+  let view;
+  try {
+    view = await invoke("roon_browse_path", { session: "wrapped-genres", hierarchy: "genres", path: [], count: 1000 });
   } catch (err) {
     if (ticket === wrappedTicket) wrappedFailed(err);
     return;
   }
   if (ticket !== wrappedTicket) return;
-  wrappedHeading(entry.name, `${artists.length.toLocaleString()} artist${artists.length === 1 ? "" : "s"} in your library with this tag, the strongest first`);
+  wrappedBody.replaceChildren();
+  const rows = (view.items || []).filter((item) => item.hint !== "header" && item.title);
+  const counts = new Map(rows.map((r) => [r.title, { artists: roonGenreCount(r.subtitle, "Artists?"), albums: roonGenreCount(r.subtitle, "Albums?") }]));
+  const all = () => rows.map((r) => roonGenreNode(r.title, 0, "", counts.get(r.title))).filter((node) => !genreEmpty(node));
+  if (!all().length) {
+    wrappedBody.append(wrappedNote("Roon didn't list any genres with music of yours in them."));
+    return;
+  }
+  const browser = genreBrowser({
+    page: "roongenres",
+    entry,
+    tops: (f) => all().filter((node) => !f || node.name.toLowerCase().includes(f)),
+    subsOf: async (node) => {
+      await roonGenreLoad(node.subgenres);
+      return node.subgenres.map((name) => roonGenreNode(name, node.depth + 1, node.path));
+    },
+    openPage: (node) => openWrappedPage({ page: "genre", name: node.name }),
+    noun: () => "genre",
+    heading: (count, f) => wrappedHeading("Genres", `${count.toLocaleString()} ${f ? "matching " : ""}${count === 1 ? "genre" : "genres"}, as Roon has them`),
+  });
+  const controls = document.createElement("div");
+  controls.className = "wrapped-tabs-row";
+  controls.append(browser.filter, wrappedShelfControls("roongenres", browser.show));
+  wrappedBody.append(controls, browser.holder);
+  browser.show();
+  // What the Library link knows (pictures, sub-genres, and which are
+  // empty), the first time: the page fills in when it comes
+  const unknown = rows.map((r) => r.title).filter((name) => !roonGenreInfo.has(name));
+  if (unknown.length && libraryReady) {
+    await roonGenreLoad(unknown);
+    if (ticket === wrappedTicket) browser.show();
+  }
+}
+
+// (nothing of yours in it: no artists and no albums, when that's known)
+const genreEmpty = (node) => node.artists === 0 && node.albums === 0;
+const genrePlural = (n, word) => (n == null ? "" : `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`);
+const genreCounts = (node) => [genrePlural(node.artists, "artist"), genrePlural(node.albums, "album")].filter(Boolean).join(" · ");
+const GENRE_TILE = { s: 120, m: 160, l: 220 }; // a small tile's width
+const GENRE_GAP = 10;
+
+// The genres, Wrapped's or Roon's, biggest first, as a grid or a list (the
+// page's shelf view). Grid: tiles sized by their share of the artists,
+// tinted with the accent; a tile's top half opens its sub-genres in a
+// panel under it (and theirs in panels inside that, as deep as they go),
+// its bottom half the genre's page. List: the name (with the picture and
+// the sub-genre count) opens the sub-genres under it, the rest of the row
+// the genre's page, wherever the columns are.
+//   opts: page (the shelf's name), entry, tops(filter) and subsOf(node)
+//   (the genres: { name, depth, path, artists, albums, imageKey, subCount,
+//   examples }), openPage(node), noun(), heading(count, filter), examples
+//   (an "Artists like" column), before() (on every redraw)
+// Returns { holder, filter, show }.
+function genreBrowser(opts) {
+  const { page, entry } = opts;
+  entry.filter ||= "";
+  entry.open ||= new Set(); // the paths of the genres whose sub-genres are open
+  const byName = (a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base", numeric: true });
+  const sorts = {
+    artists: (a, b) => (a.artists ?? -1) - (b.artists ?? -1) || (a.albums ?? -1) - (b.albums ?? -1) || byName(b, a),
+    albums: (a, b) => (a.albums ?? -1) - (b.albums ?? -1) || (a.artists ?? -1) - (b.artists ?? -1) || byName(b, a),
+    name: byName,
+  };
+  const firstDir = { artists: "down", albums: "down", name: "up" };
+  entry.sorting ||= {};
+  const sortEntry = entry.sorting;
+  shelfSortStart(page, sortEntry, sorts, firstDir, "artists");
+  const sorted = (nodes) => shelfSorted(nodes.filter((node) => !genreEmpty(node)), sortEntry, sorts);
+  const subsOf = async (node) => sorted(await opts.subsOf(node));
+  const holder = document.createElement("div");
+
+  // ----- Grid -----
+  const grid = (nodes) => {
+    const box = document.createElement("div");
+    box.className = "rgenre-grid";
+    const total = nodes.reduce((sum, node) => sum + (node.artists || 0), 0);
+    const totalAlbums = nodes.reduce((sum, node) => sum + (node.albums || 0), 0);
+    for (const node of nodes) {
+      // (its share of the artists here, or of the albums when no artists are
+      // counted; at most a 2 by 2 tile, so one genre can't take the page)
+      const share = total ? (node.artists || 0) / total : totalAlbums ? (node.albums || 0) / totalAlbums : 0;
+      box.append(tile(node, share >= 0.2 ? "big" : share >= 0.05 ? "wide" : ""));
+    }
+    const layout = () => layoutGrid(box);
+    new ResizeObserver(layout).observe(box);
+    box.layout = layout;
+    for (const node of nodes) if (entry.open.has(node.path) && node.subCount) togglePanel(box, node);
+    return box;
+  };
+  // Rows in 2px steps (each tile or panel spans what its height needs, the
+  // gap under it included), so a panel takes just its own height and two
+  // small tiles stack exactly as tall as a big one
+  const layoutGrid = (box) => {
+    const width = box.clientWidth;
+    if (!width) return;
+    const target = GENRE_TILE[shelfView(page).size] || GENRE_TILE.m;
+    const cols = Math.max(2, Math.floor((width + GENRE_GAP) / (target + GENRE_GAP)));
+    const col = Math.floor((width - GENRE_GAP * (cols - 1)) / cols / 2) * 2;
+    box.style.gridTemplateColumns = `repeat(${cols}, minmax(0, 1fr))`;
+    for (const el of box.children) {
+      const panel = el.classList.contains("rgenre-panel");
+      const height = panel ? el.scrollHeight : el.classList.contains("big") ? 2 * col + GENRE_GAP : col;
+      if (!panel) el.style.height = `${height}px`;
+      el.style.gridRow = `span ${Math.ceil((height + GENRE_GAP) / 2)}`;
+    }
+  };
+  const tile = (node, size) => {
+    const box = document.createElement("div");
+    box.className = `rgenre-tile${size ? ` ${size}` : ""}`;
+    box.dataset.path = node.path;
+    // (a list of pictures is tried in turn, as some don't load)
+    const keys = [node.imageKey].flat().filter(Boolean);
+    if (keys.length) {
+      const img = document.createElement("img");
+      img.alt = "";
+      img.loading = "lazy";
+      const load = (i) => (img.src = `${convertFileSrc(keys[i], "roonimg")}?width=${size === "big" ? 640 : 400}&height=${size ? 400 : 320}&src=broker${opts.squarePictures ? "&square=1" : ""}&v=2`);
+      let at = 0;
+      img.addEventListener("error", () => (++at < keys.length ? load(at) : img.remove()));
+      load(0);
+      box.append(img);
+    }
+    const tint = document.createElement("div");
+    tint.className = "rgenre-tint";
+    const shade = document.createElement("div");
+    shade.className = "rgenre-shade";
+    const subs = node.subCount;
+    const top = document.createElement("button");
+    top.className = "rgenre-half rgenre-top";
+    const name = document.createElement("span");
+    name.className = "rgenre-name";
+    name.textContent = node.name;
+    top.append(name);
+    const bottom = document.createElement("button");
+    bottom.className = "rgenre-half rgenre-bottom";
+    const count = document.createElement("span");
+    count.className = "rgenre-counts";
+    count.textContent = genreCounts(node);
+    const go = document.createElement("span");
+    go.className = "rgenre-go";
+    go.textContent = "Open artists →";
+    bottom.append(count, go);
+    bottom.title = `Open ${node.name}`;
+    bottom.addEventListener("click", () => opts.openPage(node));
+    if (subs) {
+      const chip = document.createElement("span");
+      chip.className = "rgenre-chip";
+      const arrow = document.createElement("span");
+      arrow.className = "rgenre-chip-arrow";
+      arrow.textContent = "▾";
+      chip.append(arrow, ` ${subs} sub-${opts.noun()}${subs === 1 ? "" : "s"}`);
+      top.append(chip);
+      top.title = `${node.name}'s sub-${opts.noun()}s`;
+      top.addEventListener("click", () => {
+        if (entry.open.has(node.path)) entry.open.delete(node.path);
+        else entry.open.add(node.path);
+        togglePanel(box.parentElement, node);
+      });
+    } else {
+      // (nothing under it: the whole tile opens the genre)
+      box.classList.add("whole");
+      top.tabIndex = -1;
+      top.addEventListener("click", () => opts.openPage(node));
+    }
+    box.append(tint, shade, top, bottom);
+    return box;
+  };
+  // Opens or closes a genre's panel of sub-genres, right after its tile
+  const togglePanel = (box, node) => {
+    const tileEl = [...box.children].find((el) => el.dataset.path === node.path && !el.classList.contains("rgenre-panel"));
+    const old = [...box.children].find((el) => el.classList.contains("rgenre-panel") && el.dataset.path === node.path);
+    if (old) {
+      old.remove();
+      tileEl?.classList.remove("open");
+      box.layout();
+      return;
+    }
+    if (!tileEl) return;
+    const panel = document.createElement("div");
+    panel.className = `rgenre-panel${node.depth % 2 ? " odd" : ""}`;
+    panel.dataset.path = node.path;
+    const head = document.createElement("div");
+    head.className = "rgenre-panel-head";
+    const title = document.createElement("b");
+    title.textContent = `${node.name}: sub-${opts.noun()}s`;
+    const close = document.createElement("button");
+    close.className = "wrapped-button small";
+    close.textContent = "Close";
+    close.addEventListener("click", () => {
+      entry.open.delete(node.path);
+      togglePanel(box, node);
+    });
+    head.append(title, close);
+    const inner = document.createElement("div");
+    inner.append(wrappedNote("Loading...", "wrapped-note small"));
+    panel.append(head, inner);
+    tileEl.after(panel);
+    tileEl.classList.add("open");
+    // (the panel's height can change with what opens inside it)
+    new ResizeObserver(() => box.layout()).observe(panel);
+    box.layout();
+    subsOf(node).then((nodes) => {
+      if (!panel.isConnected) return;
+      inner.replaceChildren(nodes.length ? grid(nodes) : wrappedNote("None of these have music of yours in them.", "wrapped-note small"));
+    });
+  };
+
+  // ----- List -----
+  const columns = () => [
+    { id: "name", head: opts.noun().replace(/^./, (c) => c.toUpperCase()), width: "minmax(0, 2fr)", sort: "name", title: true },
+    ...(opts.examples ? [{ id: "examples", head: "Artists like", width: "minmax(0, 1.6fr)" }] : []),
+    { id: "artists", head: "Artists", width: "92px", center: true, sort: "artists" },
+    { id: "albums", head: "Albums", width: "92px", center: true, sort: "albums" },
+    { id: "subs", head: `Sub-${opts.noun()}s`, width: "100px", center: true },
+  ];
+  const listItem = (node) => ({
+    title: node.name,
+    cells: {
+      examples: (node.examples || []).join(", "),
+      artists: node.artists == null ? "" : node.artists.toLocaleString(),
+      albums: node.albums == null ? "" : node.albums.toLocaleString(),
+      subs: node.subCount ? String(node.subCount) : "",
+    },
+    imageKey: node.imageKey,
+    node,
+  });
+  // (the name, its picture and its sub-genre count open the sub-genres;
+  // the rest, the genre's page; a genre with none is one button)
+  const split = {
+    side: (column, item) => (item.node.subCount && (column === "art" || column === "name" || column === "subs") ? "left" : "right"),
+    decorate: (item, cell, column) => {
+      if (!column.title) return;
+      const arrow = document.createElement("span");
+      arrow.className = "rgenre-arrow";
+      arrow.textContent = item.node.subCount ? (entry.open.has(item.node.path) ? "▾" : "▸") : "";
+      cell.prepend(arrow);
+    },
+    onLeft: (item, row, make) => toggleRows(item, row, make),
+  };
+  const toggleRows = async (item, row, make) => {
+    const node = item.node;
+    const arrow = row.querySelector(".rgenre-arrow");
+    if (row.dataset.open) {
+      // (everything under it, however deep)
+      let next = row.nextElementSibling;
+      while (next && next.dataset.path?.startsWith(`${node.path}\u0000`)) {
+        const gone = next;
+        next = next.nextElementSibling;
+        gone.remove();
+      }
+      delete row.dataset.open;
+      entry.open.delete(node.path);
+      if (arrow) arrow.textContent = "▸";
+      return;
+    }
+    row.dataset.open = "1";
+    entry.open.add(node.path);
+    if (arrow) arrow.textContent = "▾";
+    const nodes = await subsOf(node);
+    if (!row.isConnected || !row.dataset.open) return;
+    let after = row;
+    for (const sub of nodes) {
+      const subRow = make(listItem(sub));
+      subRow.dataset.path = sub.path;
+      // (set in to the right, with a line per level to its left)
+      subRow.classList.add("rgenre-sub");
+      subRow.style.setProperty("--depth", sub.depth);
+      after.after(subRow);
+      after = subRow;
+      if (entry.open.has(sub.path) && sub.subCount) await toggleRows(listItem(sub), subRow, make);
+      // (its own open rows come before the next sibling)
+      while (after.nextElementSibling?.dataset.path?.startsWith(`${sub.path}\u0000`)) after = after.nextElementSibling;
+    }
+  };
+
+  const show = () => {
+    opts.before?.();
+    const f = entry.filter.toLowerCase();
+    const list = sorted(opts.tops(f));
+    opts.heading(list.length, f);
+    if (!list.length) {
+      holder.replaceChildren(wrappedNote("Nothing by that name."));
+      return;
+    }
+    if (shelfView(page).view === "grid") {
+      holder.replaceChildren(grid(list));
+      return;
+    }
+    const shelf = wrappedShelf(
+      page,
+      list.map(listItem),
+      (item) => opts.openPage(item.node),
+      columns(),
+      {
+        entry: sortEntry,
+        onSort: (key) => {
+          shelfSortPick(page, sortEntry, key, firstDir);
+          show();
+        },
+      },
+      split,
+    );
+    shelf.classList.add("rgenre-list");
+    holder.replaceChildren(shelf);
+    // (the open ones open again; rows know their genre for that)
+    for (const row of shelf.querySelectorAll(".wrapped-shelf-row.split")) {
+      const item = row.shelfItem;
+      if (!item) continue;
+      row.dataset.path = item.node.path;
+      if (entry.open.has(item.node.path) && item.node.subCount) toggleRows(item, row, row.shelfMake);
+    }
+  };
+  const filter = wrappedFilter("Filter", (text) => {
+    entry.filter = text;
+    show();
+  });
+  filter.value = entry.filter;
+  return { holder, filter, show };
+}
+
+// One of Wrapped's genres: the library's artists with the tag (or one of
+// its sub-genres'), the strongest first, and their albums; like the
+// library's own pages
+WRAPPED_PAGES.ourgenre = async function (entry) {
+  wrappedHeading(entry.name, "Artists in your library with this tag");
+  if (wrappedNeedsLibrary()) return;
+  const ticket = ++wrappedTicket;
+  let artists;
+  let library;
+  try {
+    [artists, library] = await Promise.all([invoke("wrapped_genre_artists", { name: entry.name }), invoke("wrapped_library_albums")]);
+  } catch (err) {
+    if (ticket === wrappedTicket) wrappedFailed(err);
+    return;
+  }
+  if (ticket !== wrappedTicket) return;
   if (!artists.length) return wrappedBody.append(wrappedNote("Nobody in your library carries this tag."));
-  const actions = document.createElement("div");
-  actions.className = "wrapped-actions";
+  // (their albums: by the artist's id, else the name)
+  const ids = new Set(artists.map((a) => a.performerId).filter((id) => id != null));
+  const names = new Set(artists.map((a) => a.name.toLowerCase()));
+  const albums = library.filter((a) => (a.performerId != null && ids.has(a.performerId)) || names.has((a.artist || "").toLowerCase()));
+  entry.section ||= "artists";
+  entry.sorts ||= { artists: {}, albums: {} };
+  entry.filter ||= "";
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+
+  const sections = document.createElement("div");
+  sections.className = "wrapped-tabs";
+  const sectionTabs = [
+    ["artists", "Artists in your library"],
+    ["albums", "Albums in your library"],
+  ].map(([key, label]) => {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.section = key;
+    tab.textContent = label;
+    tab.addEventListener("click", () => {
+      if (entry.section === key) return;
+      entry.section = key;
+      draw();
+    });
+    sections.append(tab);
+    return tab;
+  });
   const radio = document.createElement("button");
   radio.className = "wrapped-button small";
   radio.textContent = "Shuffle";
   radio.title = "Roon shuffles the songs of this tag's strongest artists (up to 12)";
   radio.addEventListener("click", async () => {
     try {
-      const ids = artists.slice(0, 12).filter((a) => a.performerId != null);
+      const strongest = artists.slice(0, 12).filter((a) => a.performerId != null);
       const handles = [];
-      for (const a of ids) {
+      for (const a of strongest) {
         const card = await invoke("library_artist_by_id", { performerId: a.performerId });
         handles.push(card.handle);
       }
@@ -9259,20 +9767,137 @@ WRAPPED_PAGES.ourgenre = async function (entry) {
       wrappedToast(String(err));
     }
   });
-  actions.append(radio);
-  wrappedBody.append(actions);
-  wrappedBody.append(
-    wrappedLazyGrid(
-      artists.map((a) => ({
-        title: a.name,
-        sub: a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "",
-        imageKey: a.imageKey,
-        round: true,
-        performerId: a.performerId,
-      })),
-      (a) => openWrappedPage({ page: "artist", performerId: a.performerId, name: a.title }),
-    ),
-  );
+  const head = document.createElement("div");
+  head.className = "wrapped-tabs-row";
+  head.append(sections, radio);
+  const body = document.createElement("div");
+  wrappedBody.append(head, body);
+
+  const shelfRow = (tabs, placeholder, page, show) => {
+    const filter = wrappedFilter(placeholder, (text) => {
+      entry.filter = text;
+      show();
+    });
+    filter.value = entry.filter;
+    const row = document.createElement("div");
+    row.className = "wrapped-tabs-row";
+    row.append(tabs, filter, wrappedShelfControls(page, show));
+    return row;
+  };
+
+  const drawArtists = () => {
+    const sortEntry = entry.sorts.artists;
+    const sorts = {
+      strength: (a, b) => a.weight - b.weight || byName(b.name, a.name),
+      artist: byArtistSort,
+      albums: (a, b) => (a.albumCount || 0) - (b.albumCount || 0) || byName(b.name, a.name),
+    };
+    const first = { strength: "down", artist: "up", albums: "down" };
+    shelfSortStart("ourgenreartists", sortEntry, sorts, first, "strength");
+    const holder = document.createElement("div");
+    const pick = (key) => {
+      shelfSortPick("ourgenreartists", sortEntry, key, first);
+      show();
+    };
+    const tabs = wrappedShelfTabs(
+      sortEntry,
+      [
+        ["strength", "Strongest"],
+        ["albums", "By albums"],
+        ["artist", "By artist"],
+      ],
+      pick,
+    );
+    const show = () => {
+      tabs.paint(shelfView("ourgenreartists").view);
+      const f = entry.filter.toLowerCase();
+      const list = shelfSorted(f ? artists.filter((a) => a.name.toLowerCase().includes(f)) : artists.slice(), sortEntry, sorts);
+      wrappedHeading(entry.name, `${list.length.toLocaleString()} ${f ? "matching " : ""}artist${list.length === 1 ? "" : "s"} in your library with this tag`);
+      holder.replaceChildren(
+        wrappedShelf(
+          "ourgenreartists",
+          list.map((a) => {
+            const count = a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "";
+            return { title: a.name, sub: count, cells: { strength: String(a.weight), albums: count }, imageKey: artistPictures(a), round: true, performerId: a.performerId };
+          }),
+          (a) => openWrappedPage({ page: "artist", performerId: a.performerId, name: a.title }),
+          [
+            { id: "artist", head: "Artist", width: "minmax(0, 2fr)", sort: "artist", title: true },
+            { id: "strength", head: "Tag strength", width: "110px", center: true, sort: "strength" },
+            { id: "albums", head: "Albums", width: "92px", center: true, sort: "albums" },
+          ],
+          { entry: sortEntry, onSort: pick },
+        ),
+      );
+      if (!list.length) holder.replaceChildren(wrappedNote("No artist by that name."));
+    };
+    body.append(shelfRow(tabs, "Filter artists", "ourgenreartists", show), holder);
+    show();
+  };
+
+  const drawAlbums = () => {
+    const sortEntry = entry.sorts.albums;
+    const labelOf = (a) => (a.labels || [])[0] || "";
+    const sorts = {
+      title: (a, b) => byName(a.title, b.title) || byName(a.artist, b.artist),
+      artist: (a, b) => byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0) || byName(a.title, b.title),
+      year: (a, b) => (a.year || 0) - (b.year || 0) || byName(a.artist, b.artist) || byName(a.title, b.title),
+    };
+    const missing = { year: shelfLast((a) => a.year) };
+    const first = { title: "up", artist: "up", year: "down" };
+    shelfSortStart("ourgenrealbums", sortEntry, sorts, first, "artist");
+    const holder = document.createElement("div");
+    const pick = (key) => {
+      shelfSortPick("ourgenrealbums", sortEntry, key, first);
+      show();
+    };
+    const tabs = wrappedShelfTabs(
+      sortEntry,
+      [
+        ["artist", "By artist"],
+        ["title", "By title"],
+        ["year", "By year"],
+      ],
+      pick,
+    );
+    const show = () => {
+      tabs.paint(shelfView("ourgenrealbums").view);
+      const f = entry.filter.toLowerCase();
+      const matches = (a) => a.title.toLowerCase().includes(f) || a.artist.toLowerCase().includes(f);
+      const list = shelfSorted(f ? albums.filter(matches) : albums.slice(), sortEntry, sorts, missing);
+      wrappedHeading(entry.name, `${list.length.toLocaleString()} ${f ? "matching " : ""}album${list.length === 1 ? "" : "s"} in your library by its artists`);
+      holder.replaceChildren(
+        wrappedShelf(
+          "ourgenrealbums",
+          list.map((a) => ({
+            title: a.title,
+            sub: [a.artist, a.year].filter(Boolean).join(" · "),
+            cells: { artist: a.artist, label: labelOf(a), year: a.year ? String(a.year) : "" },
+            imageKey: a.imageKey,
+            albumId: a.albumId,
+          })),
+          (a) => openWrappedPage({ page: "album", albumId: a.albumId }),
+          [
+            { id: "title", head: "Album", width: "minmax(0, 2fr)", sort: "title", title: true },
+            { id: "artist", head: "Artist", width: "minmax(0, 1.4fr)", sort: "artist" },
+            { id: "label", head: "Label", width: "minmax(0, 1.1fr)" },
+            { id: "year", head: "Year", width: "64px", center: true, sort: "year" },
+          ],
+          { entry: sortEntry, onSort: pick },
+        ),
+      );
+      if (!list.length) holder.replaceChildren(wrappedNote(f ? "No album by that name." : "None of these artists' albums are in your library copy."));
+    };
+    body.append(shelfRow(tabs, "Filter albums or artists", "ourgenrealbums", show), holder);
+    show();
+  };
+
+  const draw = () => {
+    for (const tab of sectionTabs) tab.classList.toggle("selected", tab.dataset.section === entry.section);
+    body.replaceChildren();
+    (entry.section === "albums" ? drawAlbums : drawArtists)();
+  };
+  draw();
 };
 
 WRAPPED_PAGES.history = async function (entry) {
@@ -11007,6 +11632,17 @@ WRAPPED_PAGES.settings = async function () {
     "sideMenu",
   ));
 
+  // Genres: whose genres the Genres page shows
+  const genresCard = card("Genres", "Whose genres the Genres page shows: Wrapped's own, from the tags it keeps for your artists (Last.fm and MusicBrainz, with styles and scenes), or Roon's own genres.");
+  genresCard.head.append(pillRow(
+    [
+      ["wrapped", "Wrapped"],
+      ["roon", "Roon"],
+    ],
+    wrappedSettings.genres === "roon" ? "roon" : "wrapped",
+    "genres",
+  ));
+
   // Hearts & Library: the link to Roon's library that the hearts, Add to
   // library, the quality light and Wrapped's pages run on; and what Add to
   // library adds
@@ -11088,30 +11724,223 @@ WRAPPED_PAGES.settings = async function () {
   toastedCard.append(button("Open", () => send("open_window", { window: "settings" })));
 };
 
+// A genre (Roon's): what of yours is in it (its sub-genres' too, as Roon
+// counts them), artists or albums, like the library's own pages; and
+// Roon's picks for it (top and recommended artists and albums, new
+// releases), which aren't limited to your library
+const genreLibrary = new Map(); // "artists:" or "albums:" + genre name -> the list (kept for the session)
+async function genreLibraryList(kind, name) {
+  const key = `${kind}:${name}`;
+  if (!genreLibrary.has(key)) {
+    genreLibrary.set(key, await invoke(kind === "artists" ? "library_genre_artists" : "library_genre_albums", { name }));
+  }
+  return genreLibrary.get(key);
+}
+
 WRAPPED_PAGES.genre = async function (entry) {
   wrappedHeading(entry.name, "Genre");
   if (wrappedNeedsLibrary()) return;
   const ticket = ++wrappedTicket;
-  wrappedBody.append(wrappedNote("Loading..."));
-  let page;
-  try {
-    page = await invoke("library_genre_page", { name: entry.name });
-  } catch (err) {
-    if (ticket === wrappedTicket) wrappedFailed(err);
-    return;
-  }
-  if (ticket !== wrappedTicket) return;
-  wrappedBody.replaceChildren();
-  const holder = document.createElement("div");
-  wrappedBody.append(holder);
-  const any = [
-    wrappedPicks(holder, "Top artists", page.topArtists.map(artistItem), openArtist),
-    wrappedPicks(holder, "Artists Roon recommends", page.recommendedArtists.map(artistItem), openArtist),
-    wrappedPicks(holder, "Top albums", page.topAlbums.map(albumItem), openAlbum),
-    wrappedPicks(holder, "Albums Roon recommends", page.recommendedAlbums.map(albumItem), openAlbum),
-    wrappedPicks(holder, "New releases", page.newReleases.map(albumItem), openAlbum),
-  ].some(Boolean);
-  if (!any) holder.append(wrappedNote("Roon has nothing to show for this genre."));
+  entry.section ||= "artists";
+  entry.sorts ||= { artists: {}, albums: {} };
+  entry.filter ||= "";
+  const sections = document.createElement("div");
+  sections.className = "wrapped-tabs";
+  const sectionTabs = [
+    ["artists", "Artists in your library"],
+    ["albums", "Albums in your library"],
+    ["picks", "Roon's picks"],
+  ].map(([key, label]) => {
+    const tab = document.createElement("button");
+    tab.className = "wrapped-tab";
+    tab.dataset.section = key;
+    tab.textContent = label;
+    tab.addEventListener("click", () => {
+      if (entry.section === key) return;
+      entry.section = key;
+      draw();
+    });
+    sections.append(tab);
+    return tab;
+  });
+  const head = document.createElement("div");
+  head.className = "wrapped-tabs-row";
+  head.append(sections);
+  const body = document.createElement("div");
+  wrappedBody.append(head, body);
+  let drawn = 0;
+
+  const draw = async () => {
+    const mine = ++drawn;
+    for (const tab of sectionTabs) tab.classList.toggle("selected", tab.dataset.section === entry.section);
+    body.replaceChildren(wrappedNote("Loading..."));
+    if (entry.section === "picks") return drawPicks(mine);
+    const kind = entry.section;
+    let list;
+    try {
+      list = await genreLibraryList(kind, entry.name);
+    } catch (err) {
+      if (ticket === wrappedTicket && mine === drawn) body.replaceChildren(wrappedNote(String(err)));
+      return;
+    }
+    if (ticket !== wrappedTicket || mine !== drawn) return;
+    body.replaceChildren();
+    (kind === "artists" ? drawArtists : drawAlbums)(list);
+  };
+
+  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base", numeric: true });
+  const shelfRow = (tabs, filter, page, show) => {
+    const row = document.createElement("div");
+    row.className = "wrapped-tabs-row";
+    row.append(tabs, filter, wrappedShelfControls(page, show));
+    return row;
+  };
+  const filterBox = (placeholder, show) => {
+    const filter = wrappedFilter(placeholder, (text) => {
+      entry.filter = text;
+      show();
+    });
+    filter.value = entry.filter;
+    return filter;
+  };
+
+  const drawArtists = (artists) => {
+    const sortEntry = entry.sorts.artists;
+    const sorts = {
+      artist: byArtistSort,
+      albums: (a, b) => (a.albumCount || 0) - (b.albumCount || 0) || byName(b.name, a.name),
+      year: (a, b) => (a.beginYear || 0) - (b.beginYear || 0) || byName(a.name, b.name),
+    };
+    const missing = { year: shelfLast((a) => a.beginYear) };
+    const first = { artist: "up", albums: "down", year: "down" };
+    shelfSortStart("genreartists", sortEntry, sorts, first, "albums");
+    const holder = document.createElement("div");
+    const pick = (key) => {
+      shelfSortPick("genreartists", sortEntry, key, first);
+      show();
+    };
+    const tabs = wrappedShelfTabs(
+      sortEntry,
+      [
+        ["albums", "By albums"],
+        ["artist", "By artist"],
+        ["year", "By year"],
+      ],
+      pick,
+    );
+    const show = () => {
+      tabs.paint(shelfView("genreartists").view);
+      const f = entry.filter.toLowerCase();
+      const list = shelfSorted(f ? artists.filter((a) => a.name.toLowerCase().includes(f)) : artists.slice(), sortEntry, sorts, missing);
+      wrappedHeading(entry.name, `Genre · ${list.length.toLocaleString()} ${f ? "matching " : ""}artist${list.length === 1 ? "" : "s"} in your library`);
+      holder.replaceChildren(
+        wrappedShelf(
+          "genreartists",
+          list.map((a) => {
+            const albums = a.albumCount ? `${a.albumCount} album${a.albumCount === 1 ? "" : "s"}` : "";
+            return {
+              handle: a.handle,
+              title: a.name,
+              sub: albums,
+              cells: { year: a.beginYear ? String(a.beginYear) : "", albums },
+              imageKey: artistPictures(a),
+              round: true,
+            };
+          }),
+          openArtist,
+          [
+            { id: "artist", head: "Artist", width: "minmax(0, 2fr)", sort: "artist", title: true },
+            { id: "year", head: "Started", width: "76px", center: true, sort: "year" },
+            { id: "albums", head: "Albums", width: "92px", center: true, sort: "albums" },
+          ],
+          { entry: sortEntry, onSort: pick },
+        ),
+      );
+      if (!list.length) holder.replaceChildren(wrappedNote(f ? "No artist by that name." : "Nothing of yours in this genre."));
+    };
+    body.append(shelfRow(tabs, filterBox("Filter artists", show), "genreartists", show), holder);
+    show();
+  };
+
+  const drawAlbums = (albums) => {
+    const sortEntry = entry.sorts.albums;
+    const labelOf = (a) => (a.labels || [])[0] || "";
+    const sorts = {
+      title: (a, b) => byName(a.title, b.title) || byName(a.artist, b.artist),
+      artist: (a, b) => byName(a.artist, b.artist) || (a.year || 0) - (b.year || 0) || byName(a.title, b.title),
+      year: (a, b) => (a.year || 0) - (b.year || 0) || byName(a.artist, b.artist) || byName(a.title, b.title),
+    };
+    const missing = { year: shelfLast((a) => a.year) };
+    const first = { title: "up", artist: "up", year: "down" };
+    shelfSortStart("genrealbums", sortEntry, sorts, first, "artist");
+    const holder = document.createElement("div");
+    const pick = (key) => {
+      shelfSortPick("genrealbums", sortEntry, key, first);
+      show();
+    };
+    const tabs = wrappedShelfTabs(
+      sortEntry,
+      [
+        ["artist", "By artist"],
+        ["title", "By title"],
+        ["year", "By year"],
+      ],
+      pick,
+    );
+    const show = () => {
+      tabs.paint(shelfView("genrealbums").view);
+      const f = entry.filter.toLowerCase();
+      const matches = (a) => a.title.toLowerCase().includes(f) || a.artist.toLowerCase().includes(f);
+      const list = shelfSorted(f ? albums.filter(matches) : albums.slice(), sortEntry, sorts, missing);
+      wrappedHeading(entry.name, `Genre · ${list.length.toLocaleString()} ${f ? "matching " : ""}album${list.length === 1 ? "" : "s"} in your library`);
+      holder.replaceChildren(
+        wrappedShelf(
+          "genrealbums",
+          list.map((a) => ({
+            handle: a.handle,
+            title: a.title,
+            sub: [a.artist, a.year].filter(Boolean).join(" · "),
+            cells: { artist: a.artist, label: labelOf(a), year: a.year ? String(a.year) : "" },
+            imageKey: a.imageKey,
+          })),
+          openAlbum,
+          [
+            { id: "title", head: "Album", width: "minmax(0, 2fr)", sort: "title", title: true },
+            { id: "artist", head: "Artist", width: "minmax(0, 1.4fr)", sort: "artist" },
+            { id: "label", head: "Label", width: "minmax(0, 1.1fr)" },
+            { id: "year", head: "Year", width: "64px", center: true, sort: "year" },
+          ],
+          { entry: sortEntry, onSort: pick },
+        ),
+      );
+      if (!list.length) holder.replaceChildren(wrappedNote(f ? "No album by that name." : "Nothing of yours in this genre."));
+    };
+    body.append(shelfRow(tabs, filterBox("Filter albums or artists", show), "genrealbums", show), holder);
+    show();
+  };
+
+  const drawPicks = async (mine) => {
+    wrappedHeading(entry.name, "Genre · Roon's picks, from all of Roon");
+    let page;
+    try {
+      page = await invoke("library_genre_page", { name: entry.name });
+    } catch (err) {
+      if (ticket === wrappedTicket && mine === drawn) body.replaceChildren(wrappedNote(String(err)));
+      return;
+    }
+    if (ticket !== wrappedTicket || mine !== drawn) return;
+    body.replaceChildren();
+    const any = [
+      wrappedPicks(body, "Top artists", page.topArtists.map(artistItem), openArtist),
+      wrappedPicks(body, "Artists Roon recommends", page.recommendedArtists.map(artistItem), openArtist),
+      wrappedPicks(body, "Top albums", page.topAlbums.map(albumItem), openAlbum),
+      wrappedPicks(body, "Albums Roon recommends", page.recommendedAlbums.map(albumItem), openAlbum),
+      wrappedPicks(body, "New releases", page.newReleases.map(albumItem), openAlbum),
+    ].some(Boolean);
+    if (!any) body.append(wrappedNote("Roon has nothing to show for this genre."));
+  };
+
+  draw();
 };
 
 // "Open in Roon": Roon's own search run for the name (wrapper.rs types it
@@ -11472,7 +12301,7 @@ function discoverCover(imageKey, covers, size, name) {
     const img = document.createElement("img");
     img.loading = "lazy";
     img.alt = "";
-    img.src = `${convertFileSrc(key, "roonimg")}?width=${Math.round(size / 2)}&height=${Math.round(size / 2)}&src=broker`;
+    img.src = `${convertFileSrc(key, "roonimg")}?width=${Math.round(size / 2)}&height=${Math.round(size / 2)}&src=broker&v=2`;
     box.append(img);
   }
   return box;
@@ -11797,7 +12626,7 @@ function albumHeader(card) {
 function artistHeader(card) {
   const head = document.createElement("div");
   head.className = "wrapped-artist-head";
-  head.append(wrappedArt(card.imageKey, 600, card.name, true));
+  head.append(wrappedArt(artistPictures(card), 600, card.name, true));
   const info = document.createElement("div");
   info.className = "wrapped-album-info";
   const name = document.createElement("h2");
@@ -12188,7 +13017,7 @@ function searchResults(hits, query) {
     out.push(wrappedSection("Artists"));
     out.push(
       wrappedGrid(
-        hits.artists.slice(0, 12).map((a) => ({ handle: a.handle, performerId: a.performerId, title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: a.imageKey, round: true })),
+        hits.artists.slice(0, 12).map((a) => ({ handle: a.handle, performerId: a.performerId, title: a.name, sub: a.albumCount ? `${a.albumCount} albums` : "", imageKey: artistPictures(a), round: true })),
         (item) => {
           if (item.performerId != null) rememberSearch({ kind: "artist", performerId: item.performerId, name: item.title, imageKey: item.imageKey });
           else if (query) rememberSearch({ kind: "query", text: query });

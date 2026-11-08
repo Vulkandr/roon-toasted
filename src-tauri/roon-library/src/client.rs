@@ -100,6 +100,8 @@ const SIG_GENRE_TOP_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGen
 const SIG_GENRE_RECOMMENDED_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreRecommendedPerformers(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
 const SIG_GENRE_TOP_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreTopAlbums(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumLite>>)";
 const SIG_GENRE_RECOMMENDED_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreRecommendedAlbums(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumWithExtras>>)";
+const SIG_GET_GENRE: &str = "Sooloos.Broker.Api.Library::GetGenre(Sooloos.Broker.Api.GetGenreParameters, string, Base.ResultCallback<Sooloos.Broker.Api.Genre>)";
+const SIG_GENRE_DESTROY: &str = "Sooloos.Broker.Api.Genre::Destroy()";
 const SIG_GENRE_NEW_RELEASES: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenreNewReleases(string, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.AlbumWithExtras>>)";
 
 const FAVORITE: u32 = 1;
@@ -313,7 +315,13 @@ pub struct ArtistCard {
     pub handle: String,
     pub performer_id: Option<u64>,
     pub name: String,
+    /// The first of `image_keys`.
     pub image_key: Option<String>,
+    /// Roon's pictures of the artist to try in turn: its avatar (what
+    /// Roon's own artist grid shows), then its photo. Not every one loads.
+    pub image_keys: Vec<String>,
+    /// The name as Roon sorts it ("Beatles, The"), when Roon gives one.
+    pub sort_key: Option<String>,
     pub favorite: bool,
     /// How many albums the artist is the main performer of, as Roon counts them.
     pub album_count: Option<i32>,
@@ -369,6 +377,19 @@ pub struct GenrePage {
     pub top_albums: Vec<AlbumCard>,
     pub recommended_albums: Vec<AlbumCard>,
     pub new_releases: Vec<AlbumCard>,
+}
+
+/// One genre as Roon has it (see `genre_info`): its picture (a broker image
+/// key), how many main artists and albums of the library it has, and its
+/// sub-genres' names.
+#[derive(Debug, Clone, PartialEq, Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct GenreInfo {
+    pub name: String,
+    pub image_key: Option<String>,
+    pub artists: Option<i32>,
+    pub albums: Option<i32>,
+    pub subgenres: Vec<String>,
 }
 
 /// What a "one box" call is about (see `LibraryClient::one_box`).
@@ -1558,6 +1579,16 @@ impl LibraryClient {
     /// default focus): a VirtualPerformerQuery read page by page, like the
     /// history. `progress` gets (read so far, total) per page.
     pub async fn library_artists(&self, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<ArtistCard>, LibraryError> {
+        self.artists_query(None, progress).await
+    }
+
+    /// The library's main artists in a genre (by name, as Roon spells it;
+    /// its sub-genres' artists included, as Roon counts them).
+    pub async fn genre_artists(&self, genre: &str) -> Result<Vec<ArtistCard>, LibraryError> {
+        self.artists_query(Some(genre), &|_, _| {}).await
+    }
+
+    async fn artists_query(&self, genre: Option<&str>, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<ArtistCard>, LibraryError> {
         const PAGE: usize = 100;
         let (library, profile) = {
             let g = self.inner.graph.lock().unwrap();
@@ -1571,13 +1602,18 @@ impl LibraryClient {
         lang.string(Some("en"));
         let mut yes = Writer::new();
         yes.boolean(true);
-        let criteria = self.inner.remoting.inline_struct(
-            "Sooloos.Broker.Api.PerformerQueryCriteria",
-            &[
-                field("string Sooloos.Broker.Api.PerformerQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes()),
-                field("bool Sooloos.Broker.Api.PerformerQueryCriteria::RequireIsMainPerformer", PropertyType::Bool, yes.into_bytes()),
-            ],
-        )?;
+        let mut fields = vec![
+            field("string Sooloos.Broker.Api.PerformerQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes()),
+            field("bool Sooloos.Broker.Api.PerformerQueryCriteria::RequireIsMainPerformer", PropertyType::Bool, yes.into_bytes()),
+        ];
+        if let Some(genre) = genre {
+            fields.push(field(
+                "System.Collections.Generic.IList<string> Sooloos.Broker.Api.PerformerQueryCriteria::RequireGenres",
+                PropertyType::Object,
+                string_list(&[genre]),
+            ));
+        }
+        let criteria = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PerformerQueryCriteria", &fields)?;
         let mut page_size = Writer::new();
         page_size.integer(PAGE as i32);
         let params = self.inner.remoting.inline_struct(
@@ -1617,6 +1653,16 @@ impl LibraryClient {
     /// Every album in the library (Roon's Albums browser, in its default order):
     /// a VirtualAlbumQuery read page by page, like the artists.
     pub async fn library_albums(&self, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<AlbumCard>, LibraryError> {
+        self.albums_query(None, progress).await
+    }
+
+    /// The library's albums in a genre (by name, as Roon spells it; its
+    /// sub-genres' albums included, as Roon counts them).
+    pub async fn genre_albums(&self, genre: &str) -> Result<Vec<AlbumCard>, LibraryError> {
+        self.albums_query(Some(genre), &|_, _| {}).await
+    }
+
+    async fn albums_query(&self, genre: Option<&str>, progress: &(dyn Fn(usize, usize) + Sync)) -> Result<Vec<AlbumCard>, LibraryError> {
         const PAGE: usize = 100;
         let (library, profile) = {
             let g = self.inner.graph.lock().unwrap();
@@ -1628,10 +1674,15 @@ impl LibraryClient {
         let field = |name: &'static str, prop_type: PropertyType, value: Vec<u8>| StructField { name, prop_type, value };
         let mut lang = Writer::new();
         lang.string(Some("en"));
-        let criteria = self.inner.remoting.inline_struct(
-            "Sooloos.Broker.Api.AlbumQueryCriteria",
-            &[field("string Sooloos.Broker.Api.AlbumQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes())],
-        )?;
+        let mut fields = vec![field("string Sooloos.Broker.Api.AlbumQueryCriteria::UiLanguage", PropertyType::String, lang.into_bytes())];
+        if let Some(genre) = genre {
+            fields.push(field(
+                "System.Collections.Generic.IList<string> Sooloos.Broker.Api.AlbumQueryCriteria::RequireGenres",
+                PropertyType::Object,
+                string_list(&[genre]),
+            ));
+        }
+        let criteria = self.inner.remoting.inline_struct("Sooloos.Broker.Api.AlbumQueryCriteria", &fields)?;
         let mut page_size = Writer::new();
         page_size.integer(PAGE as i32);
         let params = self.inner.remoting.inline_struct(
@@ -2019,6 +2070,67 @@ impl LibraryClient {
             recommended_albums: self.album_cards(&g, Some(&rec_albums), None),
             new_releases: self.album_cards(&g, Some(&new_releases), None),
         })
+    }
+
+    /// What Roon knows about each genre (by name, as Roon spells it): the
+    /// picture its own Genres page shows, how many artists and albums of
+    /// the library it has, and its sub-genres' names. Asked for all at once.
+    /// Each Genre object is released (Destroy) once read, so the Core doesn't
+    /// keep them for us. A genre the Core doesn't answer for is left out.
+    pub async fn genre_info(&self, names: &[String]) -> Result<Vec<GenreInfo>, LibraryError> {
+        let library = self.inner.graph.lock().unwrap().first_of_type("Library").map(|o| o.oid);
+        let library = library.ok_or_else(|| LibraryError::UnsupportedCore("no Library service in the graph".into()))?;
+        let mut jobs = tokio::task::JoinSet::new();
+        for (i, name) in names.iter().enumerate() {
+            let client = self.clone();
+            let name = name.clone();
+            jobs.spawn(async move { (i, client.one_genre(library, &name).await) });
+        }
+        let mut found = Vec::new();
+        while let Some(done) = jobs.join_next().await {
+            if let Ok((i, Some(info))) = done {
+                found.push((i, info));
+            }
+        }
+        found.sort_by_key(|(i, _)| *i);
+        Ok(found.into_iter().map(|(_, info)| info).collect())
+    }
+
+    async fn one_genre(&self, library: u64, name: &str) -> Option<GenreInfo> {
+        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.GetGenreParameters", &[]).ok()?;
+        let mut args = Writer::new();
+        args.bytes(&params).string(Some(name));
+        let res = self.inner.remoting.call(library, SIG_GET_GENRE, args.as_bytes()).await.ok()?;
+        if !res.success() || res.payload.is_empty() {
+            return None;
+        }
+        let oid = Reader::new(&res.payload).flex_long().ok().filter(|oid| *oid != 0)?;
+        // The genre, then its sub-genres' names (when it has any)
+        let subs_named = |g: &ObjectGraph| {
+            g.get(oid).is_some_and(|o| {
+                o.has_field("Name")
+                    && (o.field("SubgenreCount").and_then(Value::as_int).unwrap_or(0) == 0
+                        || list_members(g, o.field("Subgenres"), None)
+                            .is_some_and(|m| m.iter().all(|s| g.get(*s).is_some_and(|s| s.has_field("Name")))))
+            })
+        };
+        self.wait_until(Duration::from_secs(4), subs_named).await;
+        let info = {
+            let g = self.inner.graph.lock().unwrap();
+            g.get(oid).map(|o| GenreInfo {
+                name: name.to_string(),
+                image_key: image_key(&g, o, "Image"),
+                artists: o.field("MainPerformerCount").and_then(Value::as_int),
+                albums: o.field("AlbumCount").and_then(Value::as_int),
+                subgenres: list_members(&g, o.field("Subgenres"), None)
+                    .unwrap_or_default()
+                    .iter()
+                    .filter_map(|s| g.get(*s)?.str_field("Name").map(str::to_string))
+                    .collect(),
+            })
+        };
+        let _ = self.inner.remoting.call_no_reply(oid, SIG_GENRE_DESTROY, &[]);
+        info
     }
 
     /// One of the Library's "one box" calls (what Roon's own pages are built
@@ -4595,6 +4707,19 @@ fn strings_of(g: &ObjectGraph, list: Option<&Value>) -> Vec<String> {
 /// The object ids a DataList holds: its items when they came by reference,
 /// or, for items that came by value (PerformerWithExtras), the object their
 /// `via` member points at. None while the list itself hasn't arrived.
+/// A list of strings as a struct member: a length prefix around the count
+/// and the strings (like SwimParameters' Genres)
+fn string_list(texts: &[&str]) -> Vec<u8> {
+    let mut items = Writer::new();
+    items.flex_int(texts.len() as u32);
+    for text in texts {
+        items.string(Some(text));
+    }
+    let mut out = Writer::new();
+    out.integer(items.len() as i32).bytes(items.as_bytes());
+    out.into_bytes()
+}
+
 fn list_members(g: &ObjectGraph, list: Option<&Value>, via: Option<&str>) -> Option<Vec<u64>> {
     let list = match list? {
         Value::Null => return Some(Vec::new()),
@@ -4777,11 +4902,21 @@ fn describe_playlist(g: &ObjectGraph, p: &RoonObject) -> PlaylistCard {
 }
 
 fn describe_artist_card(g: &ObjectGraph, p: &RoonObject, profile: Option<&[u8]>) -> ArtistCard {
+    let mut image_keys: Vec<String> = Vec::new();
+    for field in ["Avatar", "Photo"] {
+        if let Some(key) = image_key(g, p, field) {
+            if !image_keys.contains(&key) {
+                image_keys.push(key);
+            }
+        }
+    }
     ArtistCard {
         handle: p.oid.to_string(),
         performer_id: p.long_field("PerformerId"),
         name: p.str_field("Name").unwrap_or_default().to_string(),
-        image_key: image_key(g, p, "Photo").or_else(|| image_key(g, p, "Avatar")),
+        image_key: image_keys.first().cloned(),
+        image_keys,
+        sort_key: p.str_field("SortKey").filter(|s| !s.is_empty()).map(str::to_string),
         favorite: read_state(p.field("IsFavorite"), profile),
         album_count: p.field("MainPerformerAlbumCount").and_then(Value::as_int),
         begin_year: year_of(p.field("BirthDate")),

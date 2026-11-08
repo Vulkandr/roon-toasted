@@ -39,6 +39,7 @@ mod toast;
 mod tray;
 mod unstick;
 mod widget;
+mod pictures;
 mod tags;
 mod wrapped;
 mod wrapper;
@@ -488,6 +489,7 @@ pub fn run() {
         .manage(wrapped::LibraryCopy::default())
         .manage(tags::Tags::default())
         .manage(sound::Sound::default())
+        .manage(pictures::Pictures::default())
         .manage(update::Updates::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -712,6 +714,9 @@ pub fn run() {
             library::library_artist_extras,
             library::library_artist_facts,
             library::library_genre_page,
+            library::library_genre_info,
+            library::library_genre_artists,
+            library::library_genre_albums,
             library::library_history,
             library::library_artists,
             library::library_share_link,
@@ -729,6 +734,7 @@ pub fn run() {
             wrapped::wrapped_library_tracks,
             wrapped::wrapped_library_favorite,
             tags::wrapped_genres,
+            pictures::wrapped_artist_picture,
             tags::wrapped_genre_artists,
             library::library_track_handle,
             library::library_playlist_tracks,

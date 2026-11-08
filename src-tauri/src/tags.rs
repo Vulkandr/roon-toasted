@@ -26,7 +26,7 @@ use tauri::Emitter;
 const KEEP_FOR_MS: i64 = 90 * 86_400_000;
 const USER_AGENT: &str = concat!("RoonToasted/", env!("CARGO_PKG_VERSION"), " (https://github.com/Vulkandr/roon-toasted)");
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TagKind {
     Genre,
@@ -722,9 +722,20 @@ const MEMBER_TOP: usize = 5;
 pub struct GenreRow {
     pub name: String,
     pub kind: TagKind,
+    /// Its library artists, its sub-genres' included.
     pub artists: usize,
+    /// Those artists' albums, as Roon counts them.
+    pub albums: u32,
+    /// The genre it's a kind of, by name ("death metal" for "melodic death
+    /// metal"), when that one is a genre here too.
+    pub parent: Option<String>,
+    /// How many genres here are kinds of it directly.
+    pub subgenres: usize,
     /// A library artist's picture to stand for the genre.
     pub image_key: Option<String>,
+    /// Pictures to try for it, best first (its strongest artists'): some of
+    /// Roon's artist pictures don't load, so the page goes down the list.
+    pub image_keys: Vec<String>,
     /// A few of its artists, best known first.
     pub examples: Vec<String>,
 }
@@ -737,6 +748,8 @@ pub struct GenreArtist {
     pub name: String,
     pub performer_id: Option<u64>,
     pub image_key: Option<String>,
+    pub image_keys: Vec<String>,
+    pub sort_key: Option<String>,
     pub album_count: Option<i32>,
     pub weight: u32,
 }
@@ -753,34 +766,269 @@ fn memberships(tags: &[Tag]) -> Vec<(String, TagKind, u32)> {
     out
 }
 
+/// Well-known tags whose names don't say what they're a kind of (child,
+/// parent), for Wrapped's genre tree. The rest go by their names (see
+/// `parent_name`).
+const GENRE_PARENTS: &[(&str, &str)] = &[
+    // metal
+    ("metalcore", "metal"),
+    ("deathcore", "metalcore"),
+    ("mathcore", "metalcore"),
+    ("djent", "progressive metal"),
+    ("grindcore", "metal"),
+    ("deathgrind", "grindcore"),
+    ("goregrind", "grindcore"),
+    ("powerviolence", "grindcore"),
+    ("sludge", "doom metal"),
+    ("doom", "doom metal"),
+    ("thrash", "thrash metal"),
+    ("death", "death metal"),
+    ("blackgaze", "black metal"),
+    ("nwobhm", "heavy metal"),
+    ("crossover", "thrash metal"),
+    // punk, hardcore and rock
+    ("hardcore", "punk"),
+    ("screamo", "hardcore"),
+    ("crust", "punk"),
+    ("emo", "punk"),
+    ("punk", "rock"),
+    ("grunge", "rock"),
+    ("alternative", "rock"),
+    ("indie", "alternative"),
+    ("shoegaze", "alternative"),
+    ("new wave", "rock"),
+    ("darkwave", "new wave"),
+    ("dark wave", "new wave"),
+    ("coldwave", "new wave"),
+    ("psychedelic", "rock"),
+    ("heavy psych", "psychedelic"),
+    ("stoner", "rock"),
+    ("garage", "rock"),
+    ("progressive", "rock"),
+    ("britpop", "rock"),
+    // electronic
+    ("synthwave", "electronic"),
+    ("darksynth", "synthwave"),
+    ("retrowave", "synthwave"),
+    ("outrun", "synthwave"),
+    ("chillwave", "electronic"),
+    ("vaporwave", "electronic"),
+    ("synthpop", "electronic"),
+    ("electro", "electronic"),
+    ("electronica", "electronic"),
+    ("industrial", "electronic"),
+    ("ebm", "industrial"),
+    ("house", "electronic"),
+    ("techno", "electronic"),
+    ("trance", "electronic"),
+    ("ambient", "electronic"),
+    ("downtempo", "electronic"),
+    ("trip-hop", "electronic"),
+    ("trip hop", "electronic"),
+    ("dubstep", "electronic"),
+    ("drum and bass", "electronic"),
+    ("drum n bass", "electronic"),
+    ("dnb", "drum and bass"),
+    ("jungle", "drum and bass"),
+    ("idm", "electronic"),
+    ("glitch", "idm"),
+    ("breakbeat", "electronic"),
+    ("dance", "electronic"),
+    ("edm", "electronic"),
+    ("disco", "dance"),
+    ("noise", "experimental"),
+    ("power electronics", "noise"),
+    ("drone", "experimental"),
+    ("avant-garde", "experimental"),
+    // pop, hip hop, r&b
+    ("k-pop", "pop"),
+    ("j-pop", "pop"),
+    ("hip-hop", "hip hop"),
+    ("rap", "hip hop"),
+    ("trap", "hip hop"),
+    ("grime", "hip hop"),
+    ("soul", "r&b"),
+    ("funk", "r&b"),
+    ("rnb", "r&b"),
+    // jazz, blues, folk, country, reggae
+    ("fusion", "jazz"),
+    ("bebop", "jazz"),
+    ("swing", "jazz"),
+    ("neofolk", "folk"),
+    ("singer-songwriter", "folk"),
+    ("americana", "country"),
+    ("bluegrass", "country"),
+    ("dub", "reggae"),
+    ("ska", "reggae"),
+    // classical and soundtracks
+    ("baroque", "classical"),
+    ("opera", "classical"),
+    ("neoclassical", "classical"),
+    ("score", "soundtrack"),
+    ("video game music", "soundtrack"),
+    ("vgm", "video game music"),
+    ("game music", "video game music"),
+    ("orchestral", "classical"),
+    ("classical guitar", "classical"),
+    // (more seen in real libraries)
+    ("rapcore", "metal"),
+    ("death 'n' roll", "death metal"),
+    ("death n roll", "death metal"),
+    ("cybergrind", "grindcore"),
+    ("emo violence", "hardcore"),
+    ("neocrust", "crust"),
+    ("neue deutsche härte", "industrial metal"),
+    ("rock and roll", "rock"),
+    ("rock brazil", "rock"),
+    ("jam band", "rock"),
+    ("fuzz", "stoner rock"),
+    ("gothic", "rock"),
+    ("slowcore", "alternative"),
+    ("crossover prog", "progressive rock"),
+    ("neo-psychedelia", "psychedelic"),
+    ("psytrance", "trance"),
+    ("chiptune", "electronic"),
+    ("electronic music", "electronic"),
+    ("electropop", "synthpop"),
+    ("electroclash", "electro"),
+    ("aggrotech", "industrial"),
+    ("cyberpunk", "industrial"),
+    ("harsh noise wall", "noise"),
+    ("ambient noise wall", "noise"),
+    ("breaks", "breakbeat"),
+    ("breakcore", "electronic"),
+    ("big beat", "electronic"),
+    ("frenchcore", "electronic"),
+    ("acid", "electronic"),
+];
+
+/// The genre a tag is a kind of: Wrapped's list of well-known ones first,
+/// else by its name, its first word (or what's before a hyphen) dropped:
+/// "melodic death metal" is a kind of "death metal", "post-metal" of
+/// "metal". (The name can be no genre at all, like "hop" from "hip hop";
+/// only names that are genres here count.)
+fn parent_name(tag: &str) -> Option<String> {
+    if let Some((_, parent)) = GENRE_PARENTS.iter().find(|(child, _)| *child == tag) {
+        return Some(parent.to_string());
+    }
+    let cut = tag.find([' ', '-'])?;
+    let rest = tag[cut + 1..].trim();
+    (!rest.is_empty()).then(|| rest.to_string())
+}
+
+/// What a tag is a kind of, nearest first, through every level
+/// ("melodic death metal": "death metal", "metal").
+fn ancestors(tag: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut at = tag.to_string();
+    while let Some(parent) = parent_name(&at) {
+        if parent == tag || out.contains(&parent) || out.len() >= 10 {
+            break;
+        }
+        out.push(parent.clone());
+        at = parent;
+    }
+    out
+}
+
+/// Whether `tag` is a kind of `parent`, at any level (see `ancestors`).
+fn is_kind_of(tag: &str, parent: &str) -> bool {
+    ancestors(tag).iter().any(|a| a == parent)
+}
+
 /// Every genre, style and scene the library's artists belong to, biggest
-/// first (artists without tags yet aren't counted; Settings tags them).
+/// first (artists without tags yet aren't counted; Settings tags them). A
+/// genre needs two artists of its own; its counts take in its sub-genres'
+/// artists too (see `is_kind_of`), like Roon's genres do.
 #[tauri::command]
 pub fn wrapped_genres(app: AppHandle) -> Vec<GenreRow> {
     let library = app.state::<crate::wrapped::LibraryCopy>().artists(&app);
     let tags = app.state::<Tags>();
-    let mut rows: HashMap<String, GenreRow> = HashMap::new();
-    tags.with_store(&app, |s| {
-        for artist in &library {
-            let Some(have) = s.artists.get(&key_of(&artist.name)) else { continue };
-            for (name, kind, _) in memberships(&have.tags) {
-                let row = rows.entry(format!("{name}\u{0}{kind:?}")).or_insert_with(|| GenreRow { name: name.clone(), kind, artists: 0, image_key: None, examples: Vec::new() });
-                row.artists += 1;
-                if row.image_key.is_none() {
-                    row.image_key = artist.image_key.clone();
+    // Each artist's tags, then the genres with two artists of their own
+    let member: Vec<Vec<(String, TagKind, u32)>> = tags.with_store(&app, |s| {
+        library.iter().map(|artist| s.artists.get(&key_of(&artist.name)).map(|have| memberships(&have.tags)).unwrap_or_default()).collect()
+    });
+    let mut rows: HashMap<(String, TagKind), GenreRow> = HashMap::new();
+    for (i, tags) in member.iter().enumerate() {
+        for (name, kind, _) in tags {
+            let row = rows.entry((name.clone(), *kind)).or_insert_with(|| GenreRow {
+                name: name.clone(),
+                kind: *kind,
+                artists: 0,
+                albums: 0,
+                parent: None,
+                subgenres: 0,
+                image_key: None,
+                image_keys: Vec::new(),
+                examples: Vec::new(),
+            });
+            row.artists += 1;
+            if row.image_key.is_none() {
+                row.image_key = library[i].image_key.clone();
+            }
+            if row.examples.len() < 3 {
+                row.examples.push(library[i].name.clone());
+            }
+        }
+    }
+    let mut rows: Vec<GenreRow> = rows.into_values().filter(|r| r.artists >= 2).collect();
+    // Who's a kind of whom: the nearest genre here it's a kind of
+    let names: std::collections::HashSet<(String, TagKind)> = rows.iter().map(|r| (r.name.clone(), r.kind)).collect();
+    for row in &mut rows {
+        row.parent = ancestors(&row.name).into_iter().find(|a| names.contains(&(a.clone(), row.kind)));
+    }
+    // (every tag's ancestors, worked out once)
+    let mut lineage: HashMap<String, Vec<String>> = HashMap::new();
+    for tags in &member {
+        for (name, _, _) in tags {
+            lineage.entry(name.clone()).or_insert_with(|| ancestors(name));
+        }
+    }
+    let kind_of = |tag: &str, parent: &str| lineage.get(tag).is_some_and(|up| up.iter().any(|a| a == parent));
+    let parents: Vec<(String, TagKind)> = rows.iter().filter_map(|r| r.parent.clone().map(|p| (p, r.kind))).collect();
+    // Counts with the sub-genres' artists, each artist once
+    for row in &mut rows {
+        row.subgenres = parents.iter().filter(|(p, k)| *k == row.kind && *p == row.name).count();
+        let mut artists = 0;
+        let mut albums = 0u32;
+        let mut pictures: Vec<(u32, &str)> = Vec::new();
+        for (i, tags) in member.iter().enumerate() {
+            let weight = tags.iter().filter(|(n, k, _)| *k == row.kind && (*n == row.name || kind_of(n, &row.name))).map(|(_, _, w)| *w).max();
+            if let Some(weight) = weight {
+                artists += 1;
+                albums += library[i].album_count.unwrap_or(0).max(0) as u32;
+                // (photos rather than logos for a genre: each artist's photo,
+                // its last picture, first; the page asks in plain sizes,
+                // which give a photo too)
+                let keys = &library[i].image_keys;
+                if let Some(key) = keys.last().or(library[i].image_key.as_ref()) {
+                    pictures.push((weight * 2 + 1, key));
                 }
-                if row.examples.len() < 3 {
-                    row.examples.push(artist.name.clone());
+                for key in keys.iter().rev().skip(1) {
+                    pictures.push((weight * 2, key));
                 }
             }
         }
-    });
-    let mut rows: Vec<GenreRow> = rows.into_values().filter(|r| r.artists >= 2).collect();
+        row.artists = artists;
+        row.albums = albums;
+        // (the strongest artists' pictures first, a few to fall back on)
+        pictures.sort_by(|a, b| b.0.cmp(&a.0));
+        row.image_keys = pictures.iter().map(|(_, key)| key.to_string()).fold(Vec::new(), |mut keys, key| {
+            if keys.len() < 8 && !keys.contains(&key) {
+                keys.push(key);
+            }
+            keys
+        });
+        if let Some(first) = row.image_keys.first() {
+            row.image_key = Some(first.clone());
+        }
+    }
     rows.sort_by(|a, b| b.artists.cmp(&a.artists).then_with(|| a.name.cmp(&b.name)));
     rows
 }
 
-/// The library's artists of one tag, the tag's weight on them first.
+/// The library's artists of one tag, its sub-genres' included (see
+/// `is_kind_of`), the tag's weight on them first.
 #[tauri::command]
 pub fn wrapped_genre_artists(app: AppHandle, name: String) -> Vec<GenreArtist> {
     let want = key_of(&name);
@@ -791,8 +1039,16 @@ pub fn wrapped_genre_artists(app: AppHandle, name: String) -> Vec<GenreArtist> {
             .iter()
             .filter_map(|artist| {
                 let have = s.artists.get(&key_of(&artist.name))?;
-                let weight = memberships(&have.tags).into_iter().find(|(n, _, _)| *n == want).map(|(_, _, w)| w)?;
-                Some(GenreArtist { name: artist.name.clone(), performer_id: artist.performer_id, image_key: artist.image_key.clone(), album_count: artist.album_count, weight })
+                let weight = memberships(&have.tags).into_iter().filter(|(n, _, _)| *n == want || is_kind_of(n, &want)).map(|(_, _, w)| w).max()?;
+                Some(GenreArtist {
+                    name: artist.name.clone(),
+                    performer_id: artist.performer_id,
+                    image_key: artist.image_key.clone(),
+                    image_keys: artist.image_keys.clone(),
+                    sort_key: artist.sort_key.clone(),
+                    album_count: artist.album_count,
+                    weight,
+                })
             })
             .collect()
     });
@@ -1233,6 +1489,22 @@ pub async fn wrapped_similar(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn kinds_of_by_name() {
+        use super::is_kind_of;
+        assert!(is_kind_of("melodic death metal", "death metal"));
+        assert!(is_kind_of("melodic death metal", "metal"));
+        assert!(is_kind_of("post-metal", "metal"));
+        assert!(is_kind_of("metalcore", "metal"));
+        assert!(is_kind_of("deathcore", "metal"));
+        assert!(is_kind_of("death doom", "metal"));
+        assert!(is_kind_of("darksynth", "electronic"));
+        assert!(!is_kind_of("metal", "rock"));
+        assert!(!is_kind_of("metal", "metal"));
+        assert!(!is_kind_of("gothic metal", "c metal"));
+        assert!(!is_kind_of("folk", "k"));
+    }
+
     use super::*;
 
     #[test]

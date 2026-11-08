@@ -537,11 +537,12 @@ pub fn image_request(app: &AppHandle, request: Request<Vec<u8>>, responder: UriS
     let query = request.uri().query().unwrap_or("").to_string();
 
     tauri::async_runtime::spawn(async move {
+        // (only a picture is kept: a failure may be fixed by the next try)
         let reply = |status: u16, content_type: &str, body: Vec<u8>| {
             Response::builder()
                 .status(status)
                 .header("Content-Type", content_type)
-                .header("Cache-Control", "max-age=31536000")
+                .header("Cache-Control", if status == 200 { "max-age=31536000" } else { "no-store" })
                 .header("Access-Control-Allow-Origin", "*")
                 .body(body)
                 .unwrap()
@@ -586,15 +587,31 @@ pub fn image_request(app: &AppHandle, request: Request<Vec<u8>>, responder: UriS
         let broker_first = query.split('&').any(|pair| pair == "src=broker");
         let size = opts.width.map(|w| w.max(opts.height.unwrap_or(0)));
         let image = core.image();
+        // (a broker key in a plain width, else square. Roon's own apps ask
+        // for artist pictures square ("1by1"), and only then does the Core
+        // give the picture asked for: in a plain width it gives the
+        // artist's one default picture, or nothing. square=1 asks square
+        // first.)
+        let square = query.split('&').any(|pair| pair == "square=1");
+        let broker = || async {
+            let Some(px) = size else { return image.get_broker_image(&key, None).await };
+            let squared = format!("1by1_{px}");
+            let plain = px.to_string();
+            let (first, second) = if square { (&squared, &plain) } else { (&plain, &squared) };
+            match image.get_broker_image_spec(&key, first).await {
+                Ok(bytes) => Ok(bytes),
+                Err(_) => image.get_broker_image_spec(&key, second).await,
+            }
+        };
         let fetched = if broker_first {
-            match image.get_broker_image(&key, size).await {
+            match broker().await {
                 Ok(bytes) => Ok(bytes),
                 Err(_) => image.get_image(&key, &opts).await,
             }
         } else {
             match image.get_image(&key, &opts).await {
                 Ok(bytes) => Ok(bytes),
-                Err(_) => image.get_broker_image(&key, size).await,
+                Err(_) => broker().await,
             }
         };
         match fetched {

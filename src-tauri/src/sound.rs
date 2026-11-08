@@ -493,7 +493,7 @@ impl Sound {
 
     /// One call to Deezer's API (50 calls in 5 s at most: one every 120 ms
     /// here, and a wait when it says that's too many).
-    async fn deezer(&self, client: &reqwest::Client, url: &str, query: &[(&str, &str)]) -> Result<Value, String> {
+    pub(crate) async fn deezer(&self, client: &reqwest::Client, url: &str, query: &[(&str, &str)]) -> Result<Value, String> {
         for attempt in 0..2 {
             Self::turn(&self.deezer, Duration::from_millis(120)).await;
             let v: Value = client

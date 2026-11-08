@@ -4372,6 +4372,291 @@ button.wrapped-shelf-heading.selected {
   text-align: center;
 }
 
+/* Roon's genres (the Genres page with Settings' Genres on Roon): tiles
+   sized by their share, Roon's picture tinted with the accent, the name on
+   top and the counts at the bottom; the top half opens the sub-genres in a
+   panel under the tile, the bottom half the genre's page. The grid's rows
+   are 2px steps, set by roonGenresPage's layout. */
+.rgenre-grid {
+  display: grid;
+  column-gap: 10px;
+  row-gap: 0;
+  grid-auto-flow: dense;
+  grid-auto-rows: 2px;
+}
+
+.rgenre-grid > * {
+  margin-bottom: 10px;
+}
+
+.rgenre-tile {
+  position: relative;
+  overflow: hidden;
+  border-radius: 10px;
+  isolation: isolate;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 55%, #000), color-mix(in srgb, var(--accent) 18%, #000));
+}
+
+.rgenre-tile.big,
+.rgenre-tile.wide {
+  grid-column: span 2;
+}
+
+.rgenre-tile img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: grayscale(1) contrast(1.1);
+  z-index: -3;
+}
+
+/* (the picture in the accent's color, its light and dark kept) */
+.rgenre-tint {
+  position: absolute;
+  inset: 0;
+  z-index: -2;
+  background: var(--accent);
+  mix-blend-mode: color;
+}
+
+.rgenre-shade {
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0.08) 38%, rgba(0, 0, 0, 0.08) 62%, rgba(0, 0, 0, 0.6));
+}
+
+.rgenre-half {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  border: 0;
+  background: none;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  transition: background 0.12s;
+}
+
+.rgenre-half:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.rgenre-top {
+  top: 0;
+  justify-content: flex-start;
+}
+
+.rgenre-bottom {
+  bottom: 0;
+  justify-content: flex-end;
+}
+
+/* (no sub-genres: one button, the bottom half reaching to the top) */
+.rgenre-tile.whole .rgenre-top {
+  pointer-events: none;
+}
+
+.rgenre-tile.whole .rgenre-bottom {
+  height: 100%;
+}
+
+/* (a line between the two buttons while the tile is pointed at) */
+.rgenre-tile:not(.whole):hover::after {
+  content: "";
+  position: absolute;
+  left: 12%;
+  right: 12%;
+  top: 50%;
+  border-top: 1px solid rgba(255, 255, 255, 0.25);
+  pointer-events: none;
+}
+
+.rgenre-name {
+  max-width: 100%;
+  font-size: 17px;
+  font-weight: 700;
+  line-height: 1.15;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  overflow-wrap: anywhere;
+}
+
+.rgenre-tile.wide .rgenre-name {
+  font-size: 21px;
+}
+
+.rgenre-tile.big .rgenre-name {
+  font-size: 30px;
+}
+
+/* (just the words and the arrow, which turns up while it's open) */
+.rgenre-chip {
+  margin-top: 4px;
+  font-size: 12px;
+  white-space: nowrap;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+.rgenre-top:hover .rgenre-chip {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.rgenre-chip-arrow {
+  display: inline-block;
+  transition: transform 0.15s;
+}
+
+.rgenre-tile.open .rgenre-chip-arrow {
+  transform: rotate(180deg);
+}
+
+.rgenre-counts {
+  font-size: 12px;
+  text-align: center;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+
+.rgenre-tile.big .rgenre-counts {
+  font-size: 13px;
+}
+
+.rgenre-go {
+  margin-top: 3px;
+  font-size: 11px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.rgenre-bottom:hover .rgenre-go {
+  opacity: 1;
+}
+
+.rgenre-tile.open {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+/* The sub-genres, under their genre's row (a panel in a panel a shade
+   apart) */
+.rgenre-panel {
+  grid-column: 1 / -1;
+  align-self: start;
+  padding: 12px 14px 4px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--card);
+}
+
+.rgenre-panel.odd {
+  background: var(--bg);
+}
+
+.rgenre-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.rgenre-panel-head b {
+  font-size: 15px;
+}
+
+/* The list: the name side and the counts side, lit apart */
+.wrapped-shelf-row.split[data-hot="left"] [data-side="left"],
+.wrapped-shelf-row.split[data-hot="right"] [data-side="right"] {
+  color: var(--accent);
+}
+
+/* (the list's pictures in the accent's color too) */
+.rgenre-list .wrapped-art {
+  position: relative;
+  isolation: isolate;
+}
+
+.rgenre-list .wrapped-art img {
+  filter: grayscale(1) contrast(1.1);
+}
+
+.rgenre-list .wrapped-art:has(img)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--accent);
+  mix-blend-mode: color;
+  pointer-events: none;
+}
+
+/* A genre's sub-genres in the list: their picture and name set in to the
+   right, one step per level, with a line down the left of each level and
+   the row's highlight starting where they do. (The row itself stays full
+   width, so every column lines up with its heading.) */
+.wrapped-shelf-row.rgenre-sub {
+  position: relative;
+  isolation: isolate;
+}
+
+button.wrapped-shelf-row.rgenre-sub:hover {
+  background: none;
+}
+
+.wrapped-shelf-row.rgenre-sub::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  left: calc(var(--depth) * 26px);
+  z-index: -1;
+  border-radius: 8px;
+  transition: background 0.15s;
+  pointer-events: none;
+}
+
+button.wrapped-shelf-row.rgenre-sub:hover::after {
+  background: var(--hover);
+}
+
+.wrapped-shelf-row.rgenre-sub > .wrapped-art {
+  transform: translateX(calc(var(--depth) * 26px));
+}
+
+.wrapped-shelf-row.rgenre-sub .wrapped-shelf-title {
+  padding-left: calc(var(--depth) * 26px);
+}
+
+.wrapped-shelf-row.rgenre-sub::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: calc(var(--depth) * 26px);
+  background: repeating-linear-gradient(
+    to right,
+    transparent 0 19px,
+    color-mix(in srgb, var(--accent) 45%, transparent) 19px 21px,
+    transparent 21px 26px
+  );
+  pointer-events: none;
+}
+
+.rgenre-arrow {
+  display: inline-block;
+  width: 16px;
+  color: var(--muted);
+}
+
 /* Album and artist page heads */
 .wrapped-album-head,
 .wrapped-artist-head {
@@ -7613,6 +7898,22 @@ details.settings-card-sub:not([open]) {
   border-left-color: transparent;
 }
 
+/* Tracks' row of tools: the filter gives up its room first (down to a
+   narrow box) so the tools beside it keep theirs */
+.wrapped-tabs-row:has(.wrapped-track-tools) {
+  flex-wrap: wrap;
+}
+
+.wrapped-tabs-row:has(.wrapped-track-tools) > :not(.wrapped-filter) {
+  flex: none;
+}
+
+.wrapped-tabs-row:has(.wrapped-track-tools) > .wrapped-filter {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 120px;
+}
+
 .wrapped-track-tools,
 .wrapped-wrench {
   display: flex;
@@ -7705,6 +8006,13 @@ details.settings-card-sub:not([open]) {
 
 .wrapped-column-grab.dragging {
   opacity: 0.45;
+}
+
+/* (while a heading is being moved) */
+body.wrapped-column-moving,
+body.wrapped-column-moving * {
+  cursor: grabbing !important;
+  user-select: none;
 }
 
 .wrapped-column-grab.drop {

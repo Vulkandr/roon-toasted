@@ -75,10 +75,20 @@ impl ImageService {
     /// the Library link hands them out. The Core serves those at
     /// /image/<key>.jpg, or scaled to a square at /image/<key>.<px>.jpg.
     pub async fn get_broker_image(&self, image_key: &str, size: Option<u32>) -> Result<Vec<u8>, ApiError> {
-        let url = match size {
-            Some(px) => format!("{}/image/{}.{}.jpg", self.base_url, image_key, px),
-            None => format!("{}/image/{}.jpg", self.base_url, image_key),
-        };
+        match size {
+            Some(px) => self.get_broker_image_spec(image_key, &px.to_string()).await,
+            None => self.fetch_broker(format!("{}/image/{}.jpg", self.base_url, image_key)).await,
+        }
+    }
+
+    /// A broker image in one of the Core's own sizes ("spec"): a width
+    /// ("400"), or a shape and width ("1by1_256", what Roon's apps ask for
+    /// artist pictures; many artist pictures come only that way).
+    pub async fn get_broker_image_spec(&self, image_key: &str, spec: &str) -> Result<Vec<u8>, ApiError> {
+        self.fetch_broker(format!("{}/image/{}.{}.jpg", self.base_url, image_key, spec)).await
+    }
+
+    async fn fetch_broker(&self, url: String) -> Result<Vec<u8>, ApiError> {
         let response = reqwest::get(&url)
             .await
             .map_err(|e| ApiError::Io(format!("image fetch failed: {}", e)))?;

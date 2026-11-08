@@ -1,7 +1,7 @@
 [
   {
     "version": "1.5.0",
-    "date": "2026-11-06",
+    "date": "2026-11-07",
     "sections": [
       {
         "title": "What's new",
@@ -10,7 +10,14 @@
           ["Sort by column", "In the list, click a column's heading to sort by it, and click it again to reverse it, like on Tracks. In the grid, the By tabs sort the same way. Each page remembers its sort."],
           ["Record labels and start years", "Albums show their record label, and Artists show the label of their newest album and the year they started (from Roon, or from MusicBrainz through Wrapped's tagging). The filters find labels too."],
           ["Tracks columns", "Tracks has a Columns button with a switch for every column. New columns: Track number, Album artist, Composer, Format, Dynamic range, Plays, Last played and File name. Every column sorts from its heading."],
-          ["Rearrange columns", "Turn on the wrench, then drag a heading onto another to move its column there. Reset order puts them back. It works on Tracks, and on Albums, Artists and Genres in list view."]
+          ["Rearrange columns", "Turn on the wrench, then drag a heading onto another to move its column there. Reset order puts them back. It works on Tracks, and on Albums, Artists and Genres in list view."],
+          ["New Genres page", "Genres are tiles sized by how much of your library they hold, biggest first, with their pictures tinted in your accent color. The top half of a tile opens its sub-genres in a panel under it, and theirs inside that, as deep as they go; the bottom half opens the genre. In list view the genre's name opens its sub-genres under it and the rest of the row opens the genre. Genres with nothing of yours in them are left out."],
+          ["Roon's genres or Wrapped's", "A new Genres card in Wrapped's Settings picks whose genres the Genres page shows: Wrapped's own (from the tags it keeps for your artists) or Roon's, with Roon's pictures and sub-genres."],
+          ["Sub-genres for Wrapped's tags", "Wrapped's genres now nest: melodic death metal sits under death metal, metalcore and grindcore under metal, darksynth under synthwave, and so on. A genre's counts and its page take in its sub-genres' artists."],
+          ["Genre pages show your library", "A genre's page now opens to the artists and albums in your library, in grid or list, with a filter and sorting. Roon's top and recommended picks for it are on their own tab."],
+          ["Artist pictures like Roon's", "Artists show the same pictures as Roon, logos included, and hundreds of pictures that didn't load before now do. For artists Roon has no picture of, Wrapped looks on Deezer and uses its picture when that artist has one of your albums or songs."],
+          ["Roon's artist order", "Artists sort the way Roon sorts them, so \"The Beatles\" is under B and \":wumpscut:\" under W."],
+          ["Heart column", "On Tracks the heart is its own column: it sorts by hearted, moves like the others, and can be switched off in Columns."]
         ]
       },
       {
@@ -25,7 +32,9 @@
         "title": "Good to know",
         "items": [
           ["Read the library once", "Labels, start years and the new Tracks columns fill in after one more Read the library, in Wrapped's Settings."],
-          ["Plays", "Plays and Last played come from your Last.fm history."]
+          ["Plays", "Plays and Last played come from your Last.fm history."],
+          ["Artists refresh", "Each time Toasted connects to Roon it reads your artists again (a few seconds), so their pictures and order stay current."],
+          ["Deezer pictures", "Each artist is looked up on Deezer once; a found picture is kept, and one not found is looked for again after 30 days."]
         ]
       }
     ]
