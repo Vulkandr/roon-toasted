@@ -49,5 +49,21 @@ const latest = {
 const out = path.join(bundleDir, "latest.json");
 fs.writeFileSync(out, JSON.stringify(latest, null, 2) + "\n");
 console.log(`wrote ${out}`);
+
+// This build's .exe and symbols, kept per version in symbols/ (gitignored):
+// a hang snapshot (hang-*.dmp, see applog.rs) can only be read against the
+// exact build that made it, and the next build overwrites target/release.
+const releaseDir = path.join(root, "src-tauri", "target", "release");
+const symbolsDir = path.join(root, "symbols", version);
+fs.mkdirSync(symbolsDir, { recursive: true });
+for (const name of ["roon-toasted.exe", "roon_toasted.pdb"]) {
+	const from = path.join(releaseDir, name);
+	if (fs.existsSync(from)) {
+		fs.copyFileSync(from, path.join(symbolsDir, name));
+		console.log(`kept ${name} in ${symbolsDir}`);
+	} else {
+		console.warn(`${name} not found in ${releaseDir} (hang snapshots from this build can't be read)`);
+	}
+}
 console.log("Upload these to the GitHub release v" + version + ":");
 for (const f of [installer, signature, out]) console.log("  " + f);

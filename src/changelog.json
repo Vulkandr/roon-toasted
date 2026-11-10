@@ -1,5 +1,18 @@
 [
   {
+    "version": "1.5.1",
+    "date": "2026-11-09",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["A log for problems", "Toasted now keeps a log, toasted-log.txt in its app data folder (%APPDATA%\\com.vulkan.roon-toasted). It notes what Toasted does as it starts and connects, and any errors. It stays small and never leaves your PC."],
+          ["Freeze reports", "If Toasted ever stops responding, it notes in the log what it was doing and saves a snapshot of the moment (hang-*.dmp, next to the log) that shows exactly where it got stuck. If Toasted freezes on you, attaching both to a GitHub issue helps get it fixed."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.5.0",
     "date": "2026-11-07",
     "sections": [

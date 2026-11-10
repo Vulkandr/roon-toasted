@@ -7,6 +7,27 @@ use tauri::{
     AppHandle, Emitter, Manager, WebviewWindow, WindowEvent,
 };
 
+// Every println! and eprintln! in the app also goes to the log file
+// (applog.rs). Defined before the modules, so these stand in for the
+// standard ones everywhere below; `std::println!` is still the plain one.
+macro_rules! println {
+    () => {
+        $crate::applog::print(false, format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::applog::print(false, format_args!($($arg)*))
+    };
+}
+macro_rules! eprintln {
+    () => {
+        $crate::applog::print(true, format_args!(""))
+    };
+    ($($arg:tt)*) => {
+        $crate::applog::print(true, format_args!($($arg)*))
+    };
+}
+
+mod applog;
 mod audio;
 mod autostart;
 mod background;
@@ -408,16 +429,25 @@ fn hide_window(window: WebviewWindow) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Dev builds: print warnings from libraries (like roon-api) to the
-    // terminal; but not Symphonia's MP3 decoder's at the start of every
-    // preview (a 30-second clip cut from a longer song begins in the middle
-    // of the data its first frames lean on, which the decoder skips)
-    #[cfg(debug_assertions)]
+    // Started only to save a snapshot of a stuck copy (see applog.rs)
+    if let Some(code) = applog::dump_mode() {
+        std::process::exit(code);
+    }
+
+    // Warnings from libraries (like roon-api) into the log file, and in dev
+    // builds the terminal too; but not Symphonia's MP3 decoder's at the
+    // start of every preview (a 30-second clip cut from a longer song
+    // begins in the middle of the data its first frames lean on, which the
+    // decoder skips)
     {
         use tracing_subscriber::filter::{LevelFilter, Targets};
         use tracing_subscriber::prelude::*;
         let shown = Targets::new().with_default(LevelFilter::WARN).with_target("symphonia_bundle_mp3", LevelFilter::ERROR);
-        let _ = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer()).with(shown).try_init();
+        let to_log = tracing_subscriber::fmt::layer().with_ansi(false).without_time().with_writer(|| applog::TracingWriter);
+        #[cfg(debug_assertions)]
+        let _ = tracing_subscriber::registry().with(tracing_subscriber::fmt::layer()).with(to_log).with(shown).try_init();
+        #[cfg(not(debug_assertions))]
+        let _ = tracing_subscriber::registry().with(to_log).with(shown).try_init();
     }
 
     // Restarted (switching Cores): give the old copy's WebView2 time to finish
@@ -511,26 +541,35 @@ pub fn run() {
             }
         })
         .setup(move |app| {
+            use applog::step;
+            // The log file and the main-thread watchdog first (see
+            // applog.rs), so every step below is timed and a stuck one named
+            applog::init(app.handle());
+            applog::start_watchdog(app.handle());
+            applog::test_freeze();
+
             // Tray icon and its right-click menu (see tray.rs), and the
             // logo on the tray and taskbar buttons (icon.rs)
-            tray::build(app)?;
-            icon::start(app.handle());
+            step("tray", || tray::build(app))?;
+            step("icon", || icon::start(app.handle()));
 
             #[cfg(windows)]
-            for label in [
-                TOASTER_WINDOW,
-                SETTINGS_WINDOW,
-                toast::TOAST_WINDOW,
-                changelog::CHANGELOG_WINDOW,
-            ] {
-                if let Some(window) = app.get_webview_window(label) {
-                    round_corners(&window);
+            step("round corners", || {
+                for label in [
+                    TOASTER_WINDOW,
+                    SETTINGS_WINDOW,
+                    toast::TOAST_WINDOW,
+                    changelog::CHANGELOG_WINDOW,
+                ] {
+                    if let Some(window) = app.get_webview_window(label) {
+                        round_corners(&window);
+                    }
                 }
-            }
+            });
 
             // Reopen the Toaster at its last size/position if the user chose that.
             #[cfg(desktop)]
-            {
+            step("window positions", || {
                 use tauri_plugin_window_state::WindowExt;
                 let saved = settings::get_settings(app.handle().clone());
                 if saved.toaster_window == settings::ToasterWindow::Remember {
@@ -544,68 +583,70 @@ pub fn run() {
                     use tauri_plugin_window_state::StateFlags;
                     let _ = wrapper.restore_state(StateFlags::SIZE | StateFlags::POSITION);
                 }
-            }
+            });
 
             // Taskbar buttons only when "Auto-Hide" is off
-            settings::apply_taskbar(app.handle());
+            step("taskbar buttons", || settings::apply_taskbar(app.handle()));
 
             // The global hotkeys from Settings
             #[cfg(desktop)]
-            hotkeys::register_saved(app.handle());
+            step("hotkeys", || hotkeys::register_saved(app.handle()));
 
             // Windows' startup list, to match Start with Windows (autostart.rs)
-            autostart::apply(app.handle());
+            step("autostart", || autostart::apply(app.handle()));
 
             // The status check other apps (the Stream Deck plugin) use to see
             // that Roon: Toasted is running (see status.rs)
-            status::start(app.handle());
+            step("status", || status::start(app.handle()));
 
             // The toast, the taskbar widget and the "Enable Wrapper" button
             // are shown straight through Windows, which skips Tauri's
             // skipTaskbar; as tool windows they stay off the taskbar and
             // out of Alt+Tab
-            for label in [toast::TOAST_WINDOW, widget::WIDGET_WINDOW, wrapper::BUTTON_WINDOW] {
-                make_tool_window(app.handle(), label);
-            }
+            step("tool windows", || {
+                for label in [toast::TOAST_WINDOW, widget::WIDGET_WINDOW, wrapper::BUTTON_WINDOW] {
+                    make_tool_window(app.handle(), label);
+                }
+            });
 
             // The taskbar widget, if it's switched on (see widget.rs)
-            widget::start(app.handle());
+            step("widget", || widget::start(app.handle()));
 
             // The Wrapper (see wrapper.rs): picks up a Roon an earlier run
             // left hidden. Before launch::startup, which may open it.
-            wrapper::start(app.handle());
+            step("wrapper", || wrapper::start(app.handle()));
             // Roon's sidebar in the Wrapper's colors (see skin.rs)
-            skin::start(app.handle());
+            step("skin", || skin::start(app.handle()));
             // Which page Roon is on, from its log (see roonnav.rs)
-            roonnav::start(app.handle());
+            step("roon log", || roonnav::start(app.handle()));
 
             // roon-toasted:// links, and opening the Toaster if a link or
             // --search started the app (see launch.rs)
-            launch::startup(app.handle());
+            step("launch", || launch::startup(app.handle()));
 
             // Connect the zone state to the app, then connect to Roon in the background.
-            app.state::<zones::Zones>().init(app.handle());
-            app.state::<queue::Queue>().init(app.handle());
-            roon::start(app.handle());
+            step("zones", || app.state::<zones::Zones>().init(app.handle()));
+            step("queue", || app.state::<queue::Queue>().init(app.handle()));
+            step("roon", || roon::start(app.handle()));
 
             // Hearts and add-to-library, if switched on (see library.rs)
-            library::start(app.handle());
-            update::start(app.handle());
+            step("library", || library::start(app.handle()));
+            step("updates", || update::start(app.handle()));
             // Wrapped's Home page kept current (see home.rs)
-            home::schedule(app.handle());
-            scrobbles::schedule(app.handle());
+            step("home", || home::schedule(app.handle()));
+            step("scrobbles", || scrobbles::schedule(app.handle()));
             // Discover's weekly lists, made every Monday (see discover.rs)
-            discover::schedule(app.handle());
+            step("discover", || discover::schedule(app.handle()));
             // Roon stuck at a song's end: on to the next one
-            unstick::schedule(app.handle());
+            step("unstick", || unstick::schedule(app.handle()));
             // A library shuffle that was running when Toasted closed
-            shuffle::resume(app.handle());
+            step("shuffle", || shuffle::resume(app.handle()));
 
             // Just updated: the Changelog opens (see changelog.rs)
-            changelog::at_start(app.handle());
+            step("changelog", || changelog::at_start(app.handle()));
 
             // Square corners while in a Zonekeeper zone (see zonekeeper.rs)
-            zonekeeper::start(app.handle());
+            step("zonekeeper", || zonekeeper::start(app.handle()));
 
             // After switching Cores (the app restarts itself), bring Settings
             // back so the new connection can be seen
@@ -613,6 +654,7 @@ pub fn run() {
                 show(app.handle(), SETTINGS_WINDOW);
             }
 
+            applog::startup_done();
             Ok(())
         })
         .on_window_event(|window, event| match event {

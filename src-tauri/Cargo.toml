@@ -1,6 +1,6 @@
 [package]
 name = "roon-toasted"
-version = "1.5.0"
+version = "1.5.1"
 description = "Roon: Toasted, a Roon companion for Windows"
 authors = ["Vulkandr"]
 license = "MPL-2.0"
@@ -65,7 +65,7 @@ tauri-plugin-global-shortcut = "~2.3"
 # sound.rs: Windows' folder picker for "Manually choose music folder")
 # (same version Tauri uses)
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Com", "Win32_UI_Accessibility", "Win32_Storage_Xps", "Win32_UI_Input_KeyboardAndMouse", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Security_Cryptography", "Foundation_Collections"] }
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging", "Win32_Devices_Display", "Win32_System_Registry", "Win32_System_Threading", "Win32_System_LibraryLoader", "Win32_UI_Magnification", "Win32_UI_Shell", "Win32_UI_Shell_Common", "Win32_System_Com", "Win32_UI_Accessibility", "Win32_Storage_Xps", "Win32_UI_Input_KeyboardAndMouse", "Media_Ocr", "Graphics_Imaging", "Storage_Streams", "Security_Cryptography", "Foundation_Collections", "Win32_System_Diagnostics_Debug", "Win32_Storage_FileSystem", "Win32_System_Kernel", "Win32_System_Memory", "Win32_System_SystemInformation"] }
 
 
 # Local copies of two Roon libraries with fixes: roon-api in vendor/roon-api
@@ -87,4 +87,8 @@ codegen-units = 1
 lto = true
 opt-level = 3
 panic = "abort"
-strip = true
+# Symbols in a separate .pdb next to the .exe (the .exe itself stays the
+# same size), so a hang snapshot can be read; scripts/latest-json.mjs keeps
+# a copy per version in symbols/. `strip = true` would leave no .pdb.
+strip = false
+debug = "line-tables-only"
