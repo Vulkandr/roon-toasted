@@ -7,7 +7,8 @@
         "title": "What's new",
         "items": [
           ["A log for problems", "Toasted now keeps a log, toasted-log.txt in its app data folder (%APPDATA%\\com.vulkan.roon-toasted). It notes what Toasted does as it starts and connects, and any errors. It stays small and never leaves your PC."],
-          ["Freeze reports", "If Toasted ever stops responding, it notes in the log what it was doing and saves a snapshot of the moment (hang-*.dmp, next to the log) that shows exactly where it got stuck. If Toasted freezes on you, attaching both to a GitHub issue helps get it fixed."]
+          ["Crash reports", "If Toasted crashes, the log notes where and why, and a snapshot of that moment is saved next to it (crash-*.dmp) before Toasted closes."],
+          ["Freeze reports", "If Toasted ever stops responding, it notes in the log what it was doing and saves a snapshot of the moment (hang-*.dmp, next to the log) that shows exactly where it got stuck. If Toasted freezes on you, attaching both to a GitHub issue helps get it fixed, and the same goes for crashes."]
         ]
       }
     ]

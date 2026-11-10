@@ -21,8 +21,13 @@
 //!   that (`--hang-dump <pid> <file>`, see `dump_mode`): a process writing
 //!   its own snapshot can lock up while doing it, which would turn a slow
 //!   start into a real freeze.
+//! - A crash (a Rust panic, which in a release build ends the app on the
+//!   spot) is logged with its message and code location, and a snapshot of
+//!   that moment is saved as `crash-<time>.dmp` (last 3 kept) before the
+//!   app closes (`install_crash_handler`).
 //! - `TOASTED_TEST_FREEZE=<seconds>` in the environment holds the main
-//!   thread that long at startup, to try the watchdog out.
+//!   thread that long at startup, to try the watchdog out;
+//!   `TOASTED_TEST_CRASH=1` crashes it at startup, to try the crash handler.
 
 use std::fs::{self, File, OpenOptions};
 use std::io::Write;
@@ -41,6 +46,9 @@ const MAX_PENDING: usize = 2000;
 /// How long the main thread may stay quiet before it counts as stuck.
 const STUCK_AFTER: Duration = Duration::from_secs(10);
 const DUMPS_KEPT: usize = 3;
+/// The app data folder's name under %APPDATA% (tauri.conf.json's
+/// identifier), for a crash before Tauri has said where it is.
+const APP_ID: &str = "com.vulkan.roon-toasted";
 
 struct Log {
     dir: Option<PathBuf>,
@@ -101,6 +109,87 @@ fn write_line(text: &str) {
         if file.write_all(line.as_bytes()).is_ok() {
             log.size += line.len() as u64;
         }
+    }
+}
+
+/// `write_line` for the crash handler: never waits for the lock (the crash
+/// may have happened while this very thread held it), and before the
+/// folder is known it uses %APPDATA%'s, so the lines land before the app
+/// closes.
+fn write_line_now(text: &str) {
+    let line = format!("{} {}\n", stamp(), text.trim_end());
+    let Some(mut log) = lock_soon() else {
+        std::eprintln!("{line}");
+        return;
+    };
+    if log.dir.is_none() {
+        let Some(dir) = std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join(APP_ID)) else {
+            return;
+        };
+        let _ = fs::create_dir_all(&dir);
+        log.file = OpenOptions::new().create(true).append(true).open(dir.join(LOG_NAME)).ok();
+        log.dir = Some(dir);
+        let pending = std::mem::take(&mut log.pending);
+        if let Some(file) = log.file.as_mut() {
+            for held in pending {
+                let _ = file.write_all(held.as_bytes());
+            }
+        }
+    }
+    if let Some(file) = log.file.as_mut() {
+        let _ = file.write_all(line.as_bytes());
+    }
+}
+
+/// The folder the log is in, once known.
+fn log_dir() -> Option<PathBuf> {
+    lock_soon().and_then(|log| log.dir.clone())
+}
+
+/// The log's lock if it comes free within a moment (another thread writing
+/// a line), else None (this thread held it when it crashed).
+fn lock_soon() -> Option<std::sync::MutexGuard<'static, Log>> {
+    for _ in 0..50 {
+        match LOG.try_lock() {
+            Ok(log) => return Some(log),
+            Err(std::sync::TryLockError::Poisoned(p)) => return Some(p.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(Duration::from_millis(2)),
+        }
+    }
+    None
+}
+
+/// Logs a crash and saves a snapshot of that moment before the app closes.
+/// Installed first thing in `run`, keeping the standard handler (which
+/// prints the message in a dev build's terminal).
+pub fn install_crash_handler() {
+    let standard = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("unnamed").to_string();
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "(no message)".into());
+        let place = info.location().map(|l| format!("{}:{}", l.file(), l.line())).unwrap_or_else(|| "?".into());
+        write_line_now(&format!("[crash] thread '{name}' crashed at {place}: {message}"));
+        if let Some(dir) = log_dir() {
+            match save_snapshot(&dir, "crash") {
+                Ok(note) => write_line_now(&format!("[crash] {note}")),
+                Err(e) => write_line_now(&format!("[crash] snapshot failed: {e}")),
+            }
+        }
+        write_line_now("[crash] Toasted closes now");
+        standard(info);
+    }));
+}
+
+/// Crashes the app at startup if `TOASTED_TEST_CRASH` is set.
+pub fn test_crash() {
+    if std::env::var_os("TOASTED_TEST_CRASH").is_some() {
+        step("test crash (TOASTED_TEST_CRASH)", || panic!("a test crash (TOASTED_TEST_CRASH is set)"));
     }
 }
 
@@ -276,28 +365,31 @@ pub fn start_watchdog(app: &AppHandle) {
     });
 }
 
-/// Has a second copy of the app save the minidump, and logs how it went.
+/// Has a second copy of the app save the hang snapshot, and logs how it went.
 fn snapshot(app: &AppHandle) {
     use tauri::Manager;
     let Ok(dir) = app.path().app_data_dir() else {
         return;
     };
-    let name = format!("hang-{}.dmp", stamp().replace([' ', ':'], "-").replace('.', "-"));
+    match save_snapshot(&dir, "hang") {
+        Ok(note) => write_line(&format!("[watchdog] {note}")),
+        Err(e) => write_line(&format!("[watchdog] snapshot failed: {e}")),
+    }
+}
+
+/// Has a second copy of the app write `<kind>-<time>.dmp` of this one into
+/// `dir` (waiting up to a minute), and keeps the newest few of that kind.
+fn save_snapshot(dir: &Path, kind: &str) -> Result<String, String> {
+    let name = format!("{kind}-{}.dmp", stamp().replace([' ', ':'], "-").replace('.', "-"));
     let path = dir.join(&name);
     let started = Instant::now();
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(e) => return write_line(&format!("[watchdog] snapshot failed: {e}")),
-    };
-    let child = std::process::Command::new(exe)
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let mut child = std::process::Command::new(exe)
         .arg("--hang-dump")
         .arg(std::process::id().to_string())
         .arg(&path)
-        .spawn();
-    let mut child = match child {
-        Ok(child) => child,
-        Err(e) => return write_line(&format!("[watchdog] snapshot failed: couldn't start the helper ({e})")),
-    };
+        .spawn()
+        .map_err(|e| format!("couldn't start the helper ({e})"))?;
     // (it takes a second or two; given up on after a minute)
     let status = loop {
         match child.try_wait() {
@@ -312,11 +404,11 @@ fn snapshot(app: &AppHandle) {
     match status {
         Some(status) if status.success() && path.exists() => {
             let size = fs::metadata(&path).map(|m| m.len() / 1024).unwrap_or(0);
-            write_line(&format!("[watchdog] snapshot saved: {name} ({size} KB, {} ms)", started.elapsed().as_millis()));
-            prune_dumps(&dir);
+            prune_dumps(dir, kind);
+            Ok(format!("snapshot saved: {name} ({size} KB, {} ms)", started.elapsed().as_millis()))
         }
-        Some(status) => write_line(&format!("[watchdog] snapshot failed (helper exit code {:?})", status.code())),
-        None => write_line("[watchdog] snapshot failed: the helper didn't finish within a minute"),
+        Some(status) => Err(format!("helper exit code {:?}", status.code())),
+        None => Err("the helper didn't finish within a minute".into()),
     }
 }
 
@@ -337,14 +429,15 @@ pub fn dump_mode() -> Option<i32> {
     })
 }
 
-/// Only the newest few snapshots stay.
-fn prune_dumps(dir: &Path) {
+/// Only the newest few snapshots of a kind ("hang", "crash") stay.
+fn prune_dumps(dir: &Path, kind: &str) {
+    let prefix = format!("{kind}-");
     let Ok(entries) = fs::read_dir(dir) else {
         return;
     };
     let mut dumps: Vec<(std::time::SystemTime, PathBuf)> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.file_name().to_string_lossy().starts_with("hang-") && e.file_name().to_string_lossy().ends_with(".dmp"))
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix) && e.file_name().to_string_lossy().ends_with(".dmp"))
         .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
     dumps.sort_by(|a, b| b.0.cmp(&a.0));

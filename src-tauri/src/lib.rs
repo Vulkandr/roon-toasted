@@ -433,6 +433,8 @@ pub fn run() {
     if let Some(code) = applog::dump_mode() {
         std::process::exit(code);
     }
+    // A crash is logged, with a snapshot, before the app closes
+    applog::install_crash_handler();
 
     // Warnings from libraries (like roon-api) into the log file, and in dev
     // builds the terminal too; but not Symphonia's MP3 decoder's at the
@@ -547,6 +549,7 @@ pub fn run() {
             applog::init(app.handle());
             applog::start_watchdog(app.handle());
             applog::test_freeze();
+            applog::test_crash();
 
             // Tray icon and its right-click menu (see tray.rs), and the
             // logo on the tray and taskbar buttons (icon.rs)
