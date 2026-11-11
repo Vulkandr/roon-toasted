@@ -1288,11 +1288,13 @@ listen("wrapped-settings-changed", (event) => showDiscovery(event.payload));
 
 const libraryEnabled = document.querySelector("#library-enabled");
 const libraryMode = document.querySelector("#library-mode");
+const banButton = document.querySelector("#ban-button");
 const libraryDetail = document.querySelector("#library-detail");
 
 function showLibrary(settings) {
   libraryEnabled.checked = settings.libraryControls;
   libraryMode.checked = settings.libraryAddMode === "album";
+  banButton.checked = !!settings.banButton;
   document.querySelectorAll(".library-option").forEach((option) => {
     option.classList.toggle("disabled", !settings.libraryControls);
   });
@@ -1333,6 +1335,7 @@ function librarySwitch(input, group, change) {
 }
 librarySwitch(libraryEnabled, "#library-group", (on) => ({ libraryControls: on }));
 librarySwitch(libraryMode, "#library-mode-group", (album) => ({ libraryAddMode: album ? "album" : "track" }));
+librarySwitch(banButton, "#ban-button-group", (on) => ({ banButton: on }));
 
 invoke("get_settings").then(showLibrary);
 listen("settings-changed", (event) => showLibrary(event.payload));

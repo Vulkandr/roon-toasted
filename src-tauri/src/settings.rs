@@ -125,6 +125,9 @@ pub struct AppSettings {
     pub library_controls: bool,
     /// What "add to library" adds: just the song, or its whole album.
     pub library_add_mode: roon_library::AddMode,
+    /// The Ban button on the player (after Queue): bans the song that's
+    /// playing for the Roon profile in use. Off unless switched on.
+    pub ban_button: bool,
     /// Look for new releases on GitHub (update.rs); nothing installs without a click.
     pub check_for_updates: bool,
     /// A Roon Core address the user typed in (Settings > Roon Core > Manual),
@@ -210,6 +213,7 @@ impl Default for AppSettings {
             toast_seconds: 8,
             library_controls: true,
             library_add_mode: roon_library::AddMode::Track,
+            ban_button: false,
             check_for_updates: true,
             manual_core_host: None,
             manual_core_port: DEFAULT_CORE_PORT,

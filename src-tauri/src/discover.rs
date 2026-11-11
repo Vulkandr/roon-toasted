@@ -2870,7 +2870,14 @@ const OLD_FAVORITE_LISTENS: u32 = 8;
 /// Album covers kept per list, for its card.
 const COVERS: usize = 4;
 
-async fn publish(app: &AppHandle, client: &LibraryClient, which: Which, picked: Picked, offset: i32) -> Result<(), String> {
+async fn publish(app: &AppHandle, client: &LibraryClient, which: Which, mut picked: Picked, offset: i32) -> Result<(), String> {
+    // Songs the profile has banned stay off its lists (Roon's own ban,
+    // made there or with the Ban button)
+    let banned = client.banned_among(&picked.songs, profile(app).as_deref());
+    if !banned.is_empty() {
+        note(format!("{} banned songs left out", banned.len()));
+        picked.songs.retain(|song| !banned.contains(song));
+    }
     let now = now_ms();
     let date = short_date(now, offset);
     let description = format!("Built by Roon: Wrapped on {date}: {}.", which.blurb());
@@ -3024,7 +3031,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1180;
+pub const BUILD: u32 = 1191;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).

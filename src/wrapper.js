@@ -125,6 +125,8 @@ let colorsMode = "default"; // "default", "album" or "custom", from Settings
 let customAccent = "#7b5fc7"; // Colors: Custom's accent, from Settings
 let customBackground = null; // and its background (null: tinted from the accent)
 let addMode = "track"; // what "add to library" adds, from Settings
+// (the Ban button after Queue, on or off: Settings, Hearts & Library)
+let banButton = false;
 let queue = { zoneId: null, items: [] };
 // Wrapped (the menu over Roon's logo and the page over Roon's content):
 // Roon's sidebar width in real pixels (null = collapsed, undefined = no
@@ -427,6 +429,7 @@ function applySettings(settings) {
   customAccent = settings.shownAccent;
   customBackground = settings.shownBackground;
   addMode = settings.libraryAddMode;
+  banButton = !!settings.banButton;
   rememberPlayer = settings.wrapperRememberPlayer !== false;
   if (colorsChanged) applyColors();
   renderLibrary();
@@ -3919,6 +3922,7 @@ function renderLibrary() {
   markWrappedPlaying();
   const show = libraryReady && zone != null && zone.nowPlaying != null;
   libraryBtn.classList.toggle("spacer", !show);
+  renderBan();
   if (!show) return;
 
   const track = libraryTracks[zone.zoneId];
@@ -3947,6 +3951,45 @@ function renderLibrary() {
       .catch(() => delete libraryTracks[zoneId]);
   }
 }
+
+// ----- The Ban button (after Queue; Settings, Hearts & Library, off unless
+// switched on): bans the song that's playing for the Roon profile in use,
+// red while it is, and a second click lifts it. Any song can be banned, in
+// the library or not, as in Roon -----
+const banBtn = $("#ban-btn");
+const BAN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>';
+let banBusy = false;
+function renderBan() {
+  const show = banButton && libraryReady && zone != null && zone.nowPlaying != null;
+  banBtn.hidden = !show;
+  if (!show) return;
+  const track = libraryTracks[zone.zoneId];
+  banBtn.classList.toggle("on", !!track?.banned);
+  banBtn.classList.toggle("busy", banBusy);
+  banBtn.disabled = track == null;
+  banBtn.title = !track ? "Waiting for Roon..." : track.banned ? "Lift the ban" : "Ban this song";
+}
+banBtn.addEventListener("click", async (event) => {
+  event.stopPropagation();
+  const track = zone ? libraryTracks[zone.zoneId] : null;
+  if (!zone || !track || banBusy) return;
+  const zoneId = zone.zoneId;
+  banBusy = true;
+  renderBan();
+  try {
+    // (what the song is goes along, for History's Banned: Roon has no
+    // list of the bans outside the library)
+    const np = zone.nowPlaying;
+    const song = np ? { title: np.title, artist: np.artist || "", album: np.album || "", imageKey: np.imageKey ?? null, inLibrary: !!track.inLibrary } : null;
+    libraryTracks[zoneId] = await invoke("library_ban", { zoneId, banned: !track.banned, song });
+    wrappedToast(libraryTracks[zoneId]?.banned ? "Banned" : "Ban lifted");
+  } catch (err) {
+    wrappedToast(String(err));
+  } finally {
+    banBusy = false;
+    renderLibrary();
+  }
+});
 
 // ----- Rating the Discover lists' songs (discover.rs) -----
 //
@@ -4792,10 +4835,9 @@ function openProfileMenu(anchor) {
   profileMenu.append(note);
   profileMenu.hidden = false;
   profileAnchor = anchor;
-  // Under its anchor: right-aligned with the title bar's button, left-
-  // aligned with Settings' entry
+  // Under its anchor, their left edges in line
   const rect = anchor.getBoundingClientRect();
-  const left = anchor === profileButton ? rect.right - profileMenu.offsetWidth : rect.left;
+  const left = rect.left;
   profileMenu.style.left = `${Math.max(12, Math.min(left, window.innerWidth - profileMenu.offsetWidth - 12))}px`;
   profileMenu.style.top = `${rect.bottom + 6}px`;
   reportHole();
@@ -10209,6 +10251,32 @@ WRAPPED_PAGES.history = async function (entry) {
     ["albums", "Top albums"],
     ["tracks", "Top tracks"],
   ];
+  // (what's banned for this profile, while the Ban button is on: the
+  // Banned button, right of the tabs, puts these three in place
+  // of the listening ones, and is then the History button that brings
+  // those back)
+  const BANNED_VIEWS = [
+    ["banned-artist", "Banned artists"],
+    ["banned-album", "Banned albums"],
+    ["banned-song", "Banned songs"],
+  ];
+  const bannedTabs = document.createElement("div");
+  bannedTabs.className = "wrapped-tabs";
+  const inBanned = () => String(entry.view).startsWith("banned-");
+  const swap = document.createElement("button");
+  swap.className = "wrapped-button small";
+  swap.hidden = !banButton;
+  swap.addEventListener("click", () => {
+    if (inBanned()) {
+      entry.bannedView = entry.view;
+      entry.view = entry.historyView || "recent";
+    } else {
+      entry.historyView = entry.view;
+      entry.view = entry.bannedView || "banned-artist";
+    }
+    show();
+  });
+  if (!banButton && inBanned()) entry.view = "recent";
   entry.view ||= "recent";
   entry.days ??= 91;
   const heading = () => {
@@ -10218,9 +10286,43 @@ WRAPPED_PAGES.history = async function (entry) {
     wrappedHeading("History", historyStatus.plays ? `${n} Roon plays${historyStatus.complete ? "" : " so far"}${scrobbles}${when}` : "Not read from Roon yet");
   };
   const show = async () => {
-    for (const tab of tabs.querySelectorAll(".wrapped-tab[data-view]")) tab.classList.toggle("selected", tab.dataset.view === entry.view);
+    for (const tab of tabsRow.querySelectorAll(".wrapped-tab[data-view]")) tab.classList.toggle("selected", tab.dataset.view === entry.view);
+    tabs.hidden = inBanned();
+    bannedTabs.hidden = !inBanned();
+    swap.textContent = inBanned() ? "History" : "Banned";
     heading();
     holder.replaceChildren();
+    if (String(entry.view).startsWith("banned-")) {
+      const view = entry.view;
+      const kind = view.slice("banned-".length);
+      const list = await invoke("wrapped_banned_songs", { kind }).catch(() => []);
+      if (ticket !== wrappedTicket || entry.view !== view) return;
+      const who = currentProfile()?.name;
+      const whose = who ? ` for ${who}` : "";
+      const WORDS = {
+        artist: `Artists banned${whose}: the ones banned with the Ban button on their page, and the ones on Wrapped's own ban list (a thumbs down in Discover). None of their songs is recommended. An artist banned only in Roon itself can't show here: Roon keeps no list of those.`,
+        album: `Albums banned${whose} with the Ban button on their page. An album banned only in Roon itself can't show here: Roon keeps no list of those.`,
+        song: `Songs banned${whose}: the ones banned with Toasted's Ban button, and the songs in your library that Roon has as banned. A song outside the library banned only in Roon itself can't show here: Roon keeps no list of those.`,
+      };
+      const note = wrappedNote(`${WORDS[kind]} To lift a ban, open it and press its red ban mark.`);
+      if (!list.length) return holder.replaceChildren(note, wrappedNote("Nothing banned."));
+      const when = (b) => (b.at ? `banned ${historyWhen(b.at)}` : "banned in Roon");
+      const items = list.map((b) => ({
+        b,
+        title: b.title,
+        sub: [kind === "artist" ? null : b.artist, when(b)].filter(Boolean).join(" · "),
+        imageKey: b.imageKey,
+        round: kind === "artist",
+      }));
+      const open = (item) => {
+        const b = item.b;
+        if (kind === "artist") return openFromHistory("artist", { name: b.title });
+        if (b.albumId != null) return openWrappedPage({ page: "album", albumId: b.albumId });
+        return openWrappedPage({ page: "search", query: `${b.artist} ${b.album || b.title}`.trim() });
+      };
+      holder.replaceChildren(note, wrappedGrid(items, open));
+      return;
+    }
     if (!historyStatus.plays) {
       if (!historyStatus.syncing) holder.append(wrappedNote("Nothing read yet."));
       return;
@@ -10257,16 +10359,21 @@ WRAPPED_PAGES.history = async function (entry) {
       holder.replaceChildren(periods, historyTop(rows, entry.view));
     }
   };
-  for (const [view, label] of views) {
-    const tab = document.createElement("button");
-    tab.className = "wrapped-tab";
-    tab.dataset.view = view;
-    tab.textContent = label;
-    tab.addEventListener("click", () => {
-      entry.view = view;
-      show();
-    });
-    tabs.append(tab);
+  for (const [group, list] of [
+    [tabs, views],
+    [bannedTabs, BANNED_VIEWS],
+  ]) {
+    for (const [view, label] of list) {
+      const tab = document.createElement("button");
+      tab.className = "wrapped-tab";
+      tab.dataset.view = view;
+      tab.textContent = label;
+      tab.addEventListener("click", () => {
+        entry.view = view;
+        show();
+      });
+      group.append(tab);
+    }
   }
   const sync = async (full) => {
     try {
@@ -10286,7 +10393,8 @@ WRAPPED_PAGES.history = async function (entry) {
   // (the read's progress sits in the row, left of the button, so the list
   // doesn't move down while it runs)
   progress.classList.add("wrapped-history-progress");
-  tabsRow.append(tabs, progress, reload);
+  // (the Banned / History button right of the tabs it swaps)
+  tabsRow.append(tabs, bannedTabs, swap, progress, reload);
   wrappedBody.append(tabsRow, holder);
   // Progress of a sync (started here or elsewhere), while this page shows
   const unlisten = await listen("wrapped-history", (event) => {
@@ -12276,6 +12384,21 @@ WRAPPED_PAGES.settings = async function () {
     ),
   );
   addRow.classList.toggle("off", !toastedNow.libraryControls);
+  // (the Ban button: off unless switched on; Toasted's Settings has the
+  // same switch)
+  cardRow(
+    heartsCard,
+    "Ban button",
+    statusLine("A button after Queue that bans the song that's playing"),
+    toastedPills(
+      [
+        [false, "Off"],
+        [true, "On"],
+      ],
+      !!toastedNow.banButton,
+      (on) => ({ banButton: on }),
+    ),
+  );
   invoke("library_status").then(paintLink).catch(() => {});
   const unlistenLink = await listen("library-status", (event) => {
     if (ticket !== wrappedTicket) return unlistenLink();
@@ -13258,6 +13381,32 @@ function playlistRows(list, mine) {
   return rows;
 }
 
+// Ban the album (while the Ban button is on in Settings): Roon's own album
+// ban for the profile in use. Red while banned; a second click lifts it.
+// An array, to spread into the page's buttons: empty with the setting off
+function albumBanButton(card) {
+  if (!banButton) return [];
+  let banned = !!card.banned;
+  const ban = wrappedIconButton(BAN_ICON, "", async () => {
+    ban.classList.add("busy");
+    try {
+      const album = { title: card.title, artist: card.artist || "", album: card.title, imageKey: card.imageKey ?? null, albumId: card.albumId ?? null, inLibrary: !!card.inLibrary };
+      banned = await invoke("library_album_ban", { handle: card.handle, banned: !banned, album });
+      wrappedToast(banned ? "Album banned" : "Ban lifted");
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+    ban.classList.remove("busy");
+    paint();
+  }, "wrapped-artist-ban");
+  const paint = () => {
+    ban.classList.toggle("on", banned);
+    ban.title = banned ? "Banned: click to lift the ban" : "Ban this album";
+  };
+  paint();
+  return [ban];
+}
+
 // The album page's top: art, title, artist (a link), facts, Play now, heart, radio
 function albumHeader(card) {
   const head = document.createElement("div");
@@ -13321,6 +13470,7 @@ function albumHeader(card) {
     }),
     wrappedDive({ kind: "album", handle: card.handle, title: card.title, artist: radioSeed.name, imageKey: card.imageKey, radio: radioSeed }, () => wrappedRadioBuilder("album", radioSeed)),
     wrappedOpenInRoon(`${card.artist} ${card.title}`.trim(), card.title),
+    ...albumBanButton(card),
     wrappedIconButton(PLAYLIST_ICON, "Save this album as a Wrapped playlist", async () => {
       if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
       const name = `${WRAPPED_PREFIX}${card.title}`;
@@ -13359,6 +13509,39 @@ function artistHeader(card) {
     wrappedDive({ kind: "artist", handle: card.handle, title: card.name, imageKey: card.imageKey, radio }, () => wrappedRadioBuilder("artist", radio)),
     wrappedOpenInRoon(card.name, card.name),
   );
+  // Ban the artist (while the Ban button is on in Settings): Roon's own
+  // artist ban for the profile in use, and Wrapped's ban list with it, so
+  // none of their songs is picked by Roon, Discover, Home or Deep Dive.
+  // Red while banned; a second click lifts it
+  if (banButton) {
+    let banned = !!card.banned;
+    const ban = wrappedIconButton(BAN_ICON, "", async () => {
+      ban.classList.add("busy");
+      try {
+        banned = await invoke("library_artist_ban", { handle: card.handle, name: card.name, banned: !banned, imageKey: card.imageKey ?? null });
+        wrappedToast(banned ? `${card.name} is banned` : `Ban lifted from ${card.name}`);
+      } catch (err) {
+        wrappedToast(String(err));
+      }
+      ban.classList.remove("busy");
+      paintBan();
+    }, "wrapped-artist-ban");
+    const paintBan = () => {
+      ban.classList.toggle("on", banned);
+      ban.title = banned ? "Banned: click to lift the ban" : "Ban this artist: none of their songs gets recommended";
+    };
+    paintBan();
+    // (banned on Wrapped's own list already, from Discover's thumbs down)
+    invoke("wrapped_ban_list")
+      .then((list) => {
+        if (list.some((b) => b.name.toLowerCase() === card.name.toLowerCase())) {
+          banned = true;
+          paintBan();
+        }
+      })
+      .catch(() => {});
+    actions.append(ban);
+  }
   info.append(name, facts, genres, outside, actions);
   head.append(info);
   return head;
@@ -13739,14 +13922,32 @@ function trackRows(tracks, album = {}) {
     });
     row.append(number, title);
     wholeRowOpens(row, title);
-    row.append(
-      wrappedHeart({ inLibrary: track.inLibrary, favorite: track.favorite }, async (favorite) => {
-        const next = track.inLibrary
-          ? await invoke("library_track_heart", { handle: track.handle, favorite })
-          : await invoke("library_track_add", { handle: track.handle });
-        return { inLibrary: next.inLibrary, favorite: next.favorite };
-      }),
-    );
+    const heart = wrappedHeart({ inLibrary: track.inLibrary, favorite: track.favorite }, async (favorite) => {
+      const next = track.inLibrary
+        ? await invoke("library_track_heart", { handle: track.handle, favorite })
+        : await invoke("library_track_add", { handle: track.handle });
+      return { inLibrary: next.inLibrary, favorite: next.favorite };
+    });
+    row.append(heart);
+    // (a banned song has its ban mark, as in Roon, left of the heart so the
+    // hearts stay in their column; a click lifts the ban)
+    if (track.banned) {
+      const mark = wrappedIconButton(BAN_ICON, "Banned: click to lift the ban", async () => {
+        try {
+          const song = { title: track.title, artist: (album.artist || "").split(/ \/ |, /)[0], album: album.title || "", imageKey: album.imageKey ?? null, inLibrary: !!track.inLibrary };
+          const next = await invoke("library_track_ban", { handle: track.handle, banned: false, song });
+          if (!next.banned) {
+            track.banned = false;
+            mark.remove();
+            wrappedToast("Ban lifted");
+            renderLibrary();
+          }
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      }, "wrapped-track-ban");
+      row.insertBefore(mark, heart);
+    }
     const length = document.createElement("span");
     length.className = "wrapped-track-length";
     length.textContent = track.lengthSeconds ? formatTime(track.lengthSeconds) : "";

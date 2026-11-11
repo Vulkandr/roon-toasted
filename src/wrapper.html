@@ -24,19 +24,20 @@
         <span class="titlebar-title" data-tauri-drag-region="deep">Roon: Wrapped</span>
         <!-- A build number for checking a dev build came through (bumped by hand) -->
         <span id="titlebar-build" class="titlebar-build" data-tauri-drag-region="deep"></span>
+        <!-- The Roon profile in use (hearts, bans and history go to it): its
+             picture and name, right of the title; a click picks another
+             (wrapper.js, "Profiles"). Hidden while Hearts & Library is off
+             or not connected -->
+        <button id="profile-button" class="titlebar-profile" hidden>
+          <span class="profile-pic"></span>
+          <span class="profile-name"></span>
+        </button>
         <span id="status" class="titlebar-status" data-tauri-drag-region="deep" hidden></span>
         <span class="titlebar-spacer" data-tauri-drag-region="deep"></span>
         <!-- While Now Playing is open: back to Roon (same as its X) -->
         <button id="stage-minimize" class="titlebar-minimize" title="Minimize the player and go back to Roon" hidden>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           <span>Minimize player</span>
-        </button>
-        <!-- The Roon profile in use (hearts, bans and history go to it): its
-             picture and name; a click picks another (wrapper.js, "Profiles").
-             Hidden while Hearts & Library is off or not connected -->
-        <button id="profile-button" class="titlebar-profile" hidden>
-          <span class="profile-pic"></span>
-          <span class="profile-name"></span>
         </button>
         <!-- On the right, where Roon's own title bar has Enable Wrapper -->
         <button id="detach" class="titlebar-action" title="Close the Wrapper and give Roon its own window back">Return Roon</button>
@@ -131,6 +132,11 @@
               </button>
               <button id="queue-btn" class="icon-btn" title="Queue">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg>
+              </button>
+              <!-- Ban the song that's playing (Settings, Hearts & Library:
+                   off unless switched on) -->
+              <button id="ban-btn" class="icon-btn" title="Ban" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/></svg>
               </button>
             </div>
           </div>

@@ -2287,6 +2287,19 @@ input[type="range"]:disabled {
   color: var(--accent);
 }
 
+/* The Ban button: red while the song that's playing is banned */
+#ban-btn[hidden] {
+  display: none;
+}
+
+#ban-btn.on {
+  color: #e5484d;
+}
+
+#ban-btn.busy {
+  opacity: 0.5;
+}
+
 /* Inverted colors (the layout's "Invert colors"): on the player's controls,
    whatever was white or grey takes the app's or album's color, and whatever
    had that color turns white: the title, the play button, buttons that are
@@ -5033,13 +5046,6 @@ body > .wrapped-toast {
   margin-bottom: 22px;
 }
 
-/* Settings' choices, lit like the ones in Toasted's own Settings: the
-   side that's picked is in the accent; only a picked "Off" stays plain
-   (wrapper.js marks those "off-side") */
-.wrapped-settings-pages .wrapped-tab.selected:not(.off-side) {
-  color: var(--on-accent);
-  background: var(--accent);
-}
 
 /* Settings in pages, like Toasted's own Settings: the list of pages on
    the left (it stays put while the page scrolls), the page that's picked
@@ -5588,11 +5594,20 @@ body > .wrapped-toast {
   color: var(--text);
 }
 
+/* The one that's picked is lit in the accent, on every page of Wrapped
+   as in Toasted's own Settings (History's views, Deep Dive's tabs, the
+   sorts, Settings' choices); only a picked "Off" stays plain (wrapper.js
+   marks those "off-side" in Settings) */
 .wrapped-tab.selected {
-  color: var(--text);
+  color: var(--on-accent);
   font-weight: 600;
-  background: var(--track);
+  background: var(--accent);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+}
+
+.wrapped-tab.selected.off-side {
+  color: var(--text);
+  background: var(--track);
 }
 
 /* (a row of tabs with a button beside them, like History's reload) */
@@ -5781,6 +5796,21 @@ body > .wrapped-toast {
   width: 34px;
   height: 34px;
   display: grid;
+}
+
+/* The Ban button on an artist's page: red while the artist is banned */
+.wrapped-artist-ban.on {
+  color: #e5484d;
+}
+
+.wrapped-artist-ban.busy {
+  opacity: 0.5;
+}
+
+/* A banned song's mark on its row (a click lifts the ban) */
+.wrapped-track-ban {
+  flex: none;
+  color: #e5484d;
 }
 
 .wrapped-track-length {
@@ -7888,7 +7918,6 @@ body > .wrapped-toast {
 
 /* Wrapped Discovery's On, glowing while a tier is working */
 .wrapped-tab.selected.glow {
-  color: var(--accent);
   box-shadow:
     0 0 0 1px color-mix(in srgb, var(--accent) 70%, transparent),
     0 0 12px color-mix(in srgb, var(--accent) 55%, transparent);
@@ -8546,4 +8575,9 @@ body.wrapped-column-moving * {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* History's Banned / History button, gone while the Ban button is off */
+.wrapped-tabs-row .wrapped-button[hidden] {
+  display: none;
 }

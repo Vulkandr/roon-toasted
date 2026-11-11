@@ -1216,6 +1216,13 @@ async fn build(app: &AppHandle, picks: Vec<DivePick>, text: &str, plan: &DivePla
         *n += 1;
         songs.push((*b, *m, why));
     }
+    // (songs this profile has banned stay off the Deep Dive)
+    let picked: Vec<String> = songs.iter().map(|(b, m, _)| albums[*b].songs[*m].handle.clone()).collect();
+    let banned = client.banned_among(&picked, None);
+    if !banned.is_empty() {
+        note(format!("{} banned songs left out", banned.len()));
+        songs.retain(|(b, m, _)| !banned.contains(&albums[*b].songs[*m].handle));
+    }
     if songs.is_empty() {
         return Err("Tier 2 found nothing among the candidates that fits. Try other words, or another Where from.".into());
     }

@@ -466,6 +466,64 @@ pub async fn library_heart(app: AppHandle, zone_id: String, favorite: bool) -> R
     client.set_favorite(&zone_id, favorite, Some(add)).await.map_err(describe)
 }
 
+/// Bans the zone's current track for the profile in use, or lifts its ban
+/// (the Ban button, when it's switched on in Settings).
+#[tauri::command]
+pub async fn library_ban(app: AppHandle, zone_id: String, banned: bool, song: Option<crate::wrapped::BannedSong>) -> Result<TrackInfo, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let result = client.set_banned(&zone_id, banned).await;
+    // (Roon has no list of bans outside the library: Wrapped keeps the
+    // ones made here, for History's Banned)
+    if let (Ok(now), Some(song)) = (&result, song) {
+        crate::wrapped::ban_note(&app, song, now.banned);
+    }
+    result.map_err(describe)
+}
+
+/// Bans an artist for the profile in use, or lifts the ban (the Ban button
+/// on an artist's page): Roon's own artist ban, and Wrapped's ban list
+/// with it, so neither Roon nor Discover, Home or Deep Dive picks them.
+/// Returns whether the artist is banned now.
+#[tauri::command]
+pub async fn library_artist_ban(app: AppHandle, handle: String, name: String, banned: bool, image_key: Option<String>) -> Result<bool, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.set_artist_banned(&handle, banned).await.map_err(describe)?;
+    crate::wrapped::ban_note(&app, crate::wrapped::BannedSong { kind: "artist".into(), title: name.clone(), image_key, ..Default::default() }, banned);
+    if banned {
+        crate::discover::wrapped_ban_add(app.clone(), name);
+    } else {
+        crate::discover::wrapped_ban_remove(app.clone(), name);
+    }
+    Ok(banned)
+}
+
+/// Bans an album for the profile in use, or lifts the ban (the Ban button
+/// on an album's page): Roon's own album ban. Returns whether the album is
+/// banned now.
+#[tauri::command]
+pub async fn library_album_ban(app: AppHandle, handle: String, banned: bool, album: crate::wrapped::BannedSong) -> Result<bool, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let (now, _) = client.set_album_banned(&handle, banned).await.map_err(describe)?;
+    crate::wrapped::ban_note(&app, crate::wrapped::BannedSong { kind: "album".into(), ..album }, now);
+    Ok(now)
+}
+
+/// Bans one album track for the profile in use, or lifts its ban, by its
+/// handle (the ban mark on an album page's rows).
+#[tauri::command]
+pub async fn library_track_ban(app: AppHandle, handle: String, banned: bool, song: Option<crate::wrapped::BannedSong>) -> Result<AlbumTrack, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let now = client.set_track_banned(&handle, banned).await.map_err(describe)?;
+    if let Some(song) = song {
+        crate::wrapped::ban_note(&app, song, now.banned);
+    }
+    Ok(now)
+}
+
 /// Adds the zone's current track (or its album, per the setting unless `mode`
 /// says "track" or "album") to the library.
 #[tauri::command]

@@ -33,6 +33,8 @@ const ROOT_SERVICE_GUID: [u8; 16] = [
 
 // The exact method declarations, as the Roon client sends them.
 const SIG_FAVORITE_TRACK: &str = "Sooloos.Broker.Api.Library::FavoriteOrBan(System.Sooid, Sooloos.Broker.Api.TrackBase, Sooloos.Broker.Api.FavoriteBanState, Base.ResultCallback)";
+const SIG_BAN_PERFORMER: &str = "Sooloos.Broker.Api.Library::FavoriteOrBan(System.Sooid, Sooloos.Broker.Api.PerformerBase, Sooloos.Broker.Api.FavoriteBanState, Base.ResultCallback)";
+const SIG_BAN_ALBUM: &str = "Sooloos.Broker.Api.Library::FavoriteOrBan(System.Sooid, Sooloos.Broker.Api.AlbumBase, Sooloos.Broker.Api.FavoriteBanState, Base.ResultCallback)";
 const SIG_FAVORITE_ALBUMS: &str = "Sooloos.Broker.Api.Library::FavoriteOrBan(System.Sooid, System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.AlbumBase>, Sooloos.Broker.Api.FavoriteBanState, Base.ResultCallback)";
 const SIG_ADD_TRACK: &str = "Sooloos.Broker.Api.Library::AddToLibrary(Sooloos.Broker.Api.Profile, Sooloos.Broker.Api.TrackBase)";
 const SIG_ADD_ALBUM: &str = "Sooloos.Broker.Api.Library::AddToLibrary(Sooloos.Broker.Api.Profile, Sooloos.Broker.Api.AlbumBase)";
@@ -106,6 +108,9 @@ const SIG_GENRE_NEW_RELEASES: &str = "Sooloos.Broker.Api.Library::GetOneBoxGenre
 
 const FAVORITE: u32 = 1;
 const NOT_FAVORITE: u32 = 0;
+/// FavoriteBanState's third value: banned (the heart and the ban are one
+/// state per profile in Roon: none, favorite or banned).
+const BANNED: u32 = 2;
 
 /// Types whose pushes can change what we report for a zone.
 const WATCHED_TYPES: &[&str] = &[
@@ -245,6 +250,8 @@ pub struct AlbumTrack {
     pub length_seconds: Option<i32>,
     pub in_library: bool,
     pub favorite: bool,
+    /// Banned for the profile in use (a ban doesn't need the library).
+    pub banned: bool,
     /// True for the track the zone is playing right now.
     pub playing: bool,
     /// The Core's ids (durable), to match against a zone's track later.
@@ -317,6 +324,8 @@ pub struct AlbumCard {
     pub image_key: Option<String>,
     pub in_library: bool,
     pub favorite: bool,
+    /// Banned for the profile in use (Roon's own album ban).
+    pub banned: bool,
     /// "local", "qobuz", "tidal", "streaming" or "other".
     pub source: String,
 }
@@ -337,6 +346,8 @@ pub struct ArtistCard {
     /// The name as Roon sorts it ("Beatles, The"), when Roon gives one.
     pub sort_key: Option<String>,
     pub favorite: bool,
+    /// Banned for the profile in use (Roon's own artist ban).
+    pub banned: bool,
     /// How many albums the artist is the main performer of, as Roon counts them.
     pub album_count: Option<i32>,
     /// The year Roon gives for the artist's birth, which for a band is when
@@ -549,6 +560,9 @@ pub struct LibraryTrack {
     /// read of the library has each profile's.
     #[serde(default)]
     pub hearted_by: Vec<String>,
+    /// Every profile that has banned it, kept the same way.
+    #[serde(default)]
+    pub banned_by: Vec<String>,
     /// "local", "qobuz", "tidal", "streaming" or "other".
     pub source: String,
     /// When it came into the library (Roon's import date), Unix ms.
@@ -1326,6 +1340,40 @@ impl LibraryClient {
         }
         // The Core pushes the new IsFavorite onto the library track object.
         match self.wait_for_track(zone_id, |t| t.favorite == favorite).await {
+            Some(confirmed) => Ok(confirmed),
+            None => self.track_for_zone(zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into())),
+        }
+    }
+
+    /// Bans the track the zone has loaded for the profile in use, or lifts
+    /// its ban. Unlike a heart, Roon takes a ban for a track that isn't in
+    /// the library too (its own ban button is there for any track): the
+    /// ban then goes to the track that's playing itself. Resolves with the
+    /// confirmed state.
+    pub async fn set_banned(&self, zone_id: &str, banned: bool) -> Result<TrackInfo, LibraryError> {
+        let (in_library, playing, before) = {
+            let g = self.inner.graph.lock().unwrap();
+            let track = self.require_track(&g, zone_id)?;
+            (track.has_field("LibraryTrackId"), track.oid, self.describe(&g, zone_id, track))
+        };
+        if before.banned == banned {
+            return Ok(before);
+        }
+        let target = if in_library { self.await_library_track(zone_id).await? } else { playing };
+        let (profile, library) = {
+            let g = self.inner.graph.lock().unwrap();
+            (self.profile_sooid(&g), g.first_of_type("Library").map(|o| o.oid))
+        };
+        let (Some(profile), Some(library)) = (profile, library) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        args.sooid(&profile).long(target).flex_int(if banned { BANNED } else { NOT_FAVORITE });
+        let res = self.inner.remoting.call(library, SIG_FAVORITE_TRACK, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "FavoriteOrBan(ban)".into(), status: res.status }.into());
+        }
+        match self.wait_for_track(zone_id, |t| t.banned == banned).await {
             Some(confirmed) => Ok(confirmed),
             None => self.track_for_zone(zone_id).ok_or_else(|| LibraryError::NothingPlaying(zone_id.into())),
         }
@@ -4406,6 +4454,7 @@ impl LibraryClient {
                 length_seconds: t.field("LengthSeconds").and_then(Value::as_int),
                 in_library: t.has_field("LibraryTrackId"),
                 favorite: read_state(state_obj.field("IsFavorite"), profile.as_deref()),
+                banned: read_state(state_obj.field("IsBanned"), profile.as_deref()),
                 playing: ids.iter().flatten().any(|id| playing_ids.contains(id)),
                 track_id: ids[0],
                 library_track_id: ids[1],
@@ -4482,6 +4531,118 @@ impl LibraryClient {
         self.album_track(oid).ok_or_else(|| LibraryError::Unconfirmed(format!("\"{title}\" vanished")))
     }
 
+    /// Bans an artist for the profile in use, or lifts the ban, by its
+    /// handle (Roon's own artist ban: it keeps the artist out of what Roon
+    /// picks by itself). Returns the card again, and what the Core said
+    /// to the call, for the log while this is new.
+    pub async fn set_artist_banned(&self, handle: &str, banned: bool) -> Result<(ArtistCard, String), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad artist handle".into()))?;
+        let (profile, library, before) = {
+            let g = self.inner.graph.lock().unwrap();
+            let p = g.get(oid).ok_or_else(|| LibraryError::Unconfirmed("unknown artist handle".into()))?;
+            (self.profile_sooid(&g), g.first_of_type("Library").map(|o| o.oid), p.field("IsBanned").map(|v| format!("{v:?}")))
+        };
+        let (Some(profile), Some(library)) = (profile, library) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        args.sooid(&profile).long(oid).flex_int(if banned { BANNED } else { NOT_FAVORITE });
+        let res = self.inner.remoting.call(library, SIG_BAN_PERFORMER, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "FavoriteOrBan(artist)".into(), status: res.status }.into());
+        }
+        let pushed = self.wait_for(|g| g.get(oid).is_some_and(|o| read_state(o.field("IsBanned"), self.profile_sooid(g).as_deref()) == banned)).await;
+        let after = self.inner.graph.lock().unwrap().get(oid).and_then(|p| p.field("IsBanned").map(|v| format!("{v:?}")));
+        let said = format!("IsBanned before {before:?}, after {after:?}, {}", if pushed { "confirmed by the Core" } else { "no word from the Core" });
+        let card = self.artist_card(handle).ok_or_else(|| LibraryError::Unconfirmed("the artist vanished".into()))?;
+        Ok((card, said))
+    }
+
+    /// Bans an album for the profile in use, or lifts the ban, by its
+    /// handle (Roon's own album ban). Returns whether it is banned now,
+    /// and what the Core said to the call, for the log while this is new.
+    pub async fn set_album_banned(&self, handle: &str, banned: bool) -> Result<(bool, String), LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad album handle".into()))?;
+        let (profile, library, before) = {
+            let g = self.inner.graph.lock().unwrap();
+            let a = g.get(oid).ok_or_else(|| LibraryError::Unconfirmed("unknown album handle".into()))?;
+            (self.profile_sooid(&g), g.first_of_type("Library").map(|o| o.oid), a.field("IsBanned").map(|v| format!("{v:?}")))
+        };
+        let (Some(profile), Some(library)) = (profile, library) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        let mut args = Writer::new();
+        args.sooid(&profile).long(oid).flex_int(if banned { BANNED } else { NOT_FAVORITE });
+        let res = self.inner.remoting.call(library, SIG_BAN_ALBUM, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "FavoriteOrBan(album)".into(), status: res.status }.into());
+        }
+        let pushed = self.wait_for(|g| g.get(oid).is_some_and(|o| read_state(o.field("IsBanned"), self.profile_sooid(g).as_deref()) == banned)).await;
+        let g = self.inner.graph.lock().unwrap();
+        let after = g.get(oid).and_then(|a| a.field("IsBanned").map(|v| format!("{v:?}")));
+        let said = format!("IsBanned before {before:?}, after {after:?}, {}", if pushed { "confirmed by the Core" } else { "no word from the Core" });
+        // (no word back: the call went through, so it's taken as done)
+        let now = if pushed { banned } else { g.get(oid).is_some_and(|o| o.has_field("IsBanned") && read_state(o.field("IsBanned"), self.profile_sooid(&g).as_deref())) || banned };
+        Ok((now, said))
+    }
+
+    /// Which of these tracks (by handle) a profile has banned (its id in
+    /// hex; None: the profile in use). Roon keeps a ban on the track
+    /// itself, so this knows the bans made in Roon and here, for songs in
+    /// the library and outside it.
+    pub fn banned_among(&self, handles: &[String], profile: Option<&str>) -> HashSet<String> {
+        let g = self.inner.graph.lock().unwrap();
+        let sooid = match profile {
+            None => self.profile_sooid(&g),
+            Some(hex) => self
+                .profile_objects(&g)
+                .into_iter()
+                .filter_map(|p| p.field("ProfileId").and_then(Value::as_bytes))
+                .find(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>() == hex)
+                .map(<[u8]>::to_vec),
+        };
+        handles
+            .iter()
+            .filter(|handle| {
+                let Some(t) = handle.parse::<u64>().ok().and_then(|oid| g.get(oid)) else { return false };
+                let state_obj = self.library_track_object(&g, t).unwrap_or(t);
+                read_state(state_obj.field("IsBanned"), sooid.as_deref())
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Bans one of the album's tracks for the profile in use, or lifts its
+    /// ban, by its handle from `album_tracks` (in the library or not).
+    pub async fn set_track_banned(&self, handle: &str, banned: bool) -> Result<AlbumTrack, LibraryError> {
+        let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad track handle".into()))?;
+        let (profile, library, target, title, current) = {
+            let g = self.inner.graph.lock().unwrap();
+            let t = g.get(oid).ok_or_else(|| LibraryError::Unconfirmed("unknown track handle".into()))?;
+            let state_obj = self.library_track_object(&g, t).unwrap_or(t);
+            (
+                self.profile_sooid(&g),
+                g.first_of_type("Library").map(|o| o.oid),
+                state_obj.oid,
+                t.str_field("Title").unwrap_or_default().to_string(),
+                read_state(state_obj.field("IsBanned"), self.profile_sooid(&g).as_deref()),
+            )
+        };
+        let (Some(profile), Some(library)) = (profile, library) else {
+            return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
+        };
+        if current != banned {
+            let mut args = Writer::new();
+            args.sooid(&profile).long(target).flex_int(if banned { BANNED } else { NOT_FAVORITE });
+            let res = self.inner.remoting.call(library, SIG_FAVORITE_TRACK, args.as_bytes()).await?;
+            if !res.success() {
+                return Err(RemotingError::Failed { method: "FavoriteOrBan(ban)".into(), status: res.status }.into());
+            }
+            let _ = self.wait_for(|g| g.get(target).is_some_and(|o| read_state(o.field("IsBanned"), self.profile_sooid(g).as_deref()) == banned)).await;
+        }
+        self.album_track(oid).ok_or_else(|| LibraryError::Unconfirmed(format!("\"{title}\" vanished")))
+    }
+
     /// Adds one of the album's tracks to the library by its handle from `album_tracks`.
     pub async fn add_track(&self, handle: &str) -> Result<AlbumTrack, LibraryError> {
         let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad track handle".into()))?;
@@ -4523,6 +4684,7 @@ impl LibraryClient {
             length_seconds: t.field("LengthSeconds").and_then(Value::as_int),
             in_library: t.has_field("LibraryTrackId"),
             favorite: read_state(state_obj.field("IsFavorite"), profile.as_deref()),
+            banned: read_state(state_obj.field("IsBanned"), profile.as_deref()),
             playing: false,
             track_id: t.long_field("TrackId"),
             library_track_id: t.long_field("LibraryTrackId"),
@@ -4892,6 +5054,7 @@ fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) 
         image_key: image_key(g, a, "Image"),
         in_library: album_in_library(a),
         favorite: read_state(a.field("IsFavorite"), profile),
+        banned: read_state(a.field("IsBanned"), profile),
         source: source_name(a.field("Source").and_then(Value::as_int)),
     }
 }
@@ -4916,6 +5079,7 @@ fn describe_library_track(g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]
         year: album.and_then(|a| year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate")))),
         favorite: read_state(t.field("IsFavorite"), profile),
         hearted_by: state_profiles(t.field("IsFavorite")),
+        banned_by: state_profiles(t.field("IsBanned")),
         source: source_name(t.field("Source").and_then(Value::as_int)),
         added_at: ["ImportDate", "DateAdded", "AddedDate", "ImportTime"]
             .iter()
@@ -5055,6 +5219,7 @@ fn describe_artist_card(g: &ObjectGraph, p: &RoonObject, profile: Option<&[u8]>)
         image_keys,
         sort_key: p.str_field("SortKey").filter(|s| !s.is_empty()).map(str::to_string),
         favorite: read_state(p.field("IsFavorite"), profile),
+        banned: read_state(p.field("IsBanned"), profile),
         album_count: p.field("MainPerformerAlbumCount").and_then(Value::as_int),
         begin_year: year_of(p.field("BirthDate")),
     }

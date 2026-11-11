@@ -688,6 +688,104 @@ pub fn wrapped_profile_discover(app: AppHandle, id: String, on: bool) -> Wrapped
     now
 }
 
+/// Something banned as History's Banned lists it: a song, an album
+/// (`title` its title) or an artist (`title` the name).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BannedSong {
+    /// "song" (also when empty: the first records had no kind), "album"
+    /// or "artist".
+    pub kind: String,
+    pub title: String,
+    pub artist: String,
+    pub album: String,
+    pub image_key: Option<String>,
+    pub album_id: Option<u64>,
+    /// When it was banned with Toasted's button (Unix ms); 0 for a ban
+    /// only known from the library copy (made in Roon).
+    pub at: i64,
+    pub in_library: bool,
+}
+
+fn ban_key(title: &str, artist: &str) -> String {
+    format!("{}\u{0}{}", title.trim().to_lowercase(), artist.trim().to_lowercase())
+}
+
+fn ban_kind(song: &BannedSong) -> &str {
+    if song.kind.is_empty() { "song" } else { &song.kind }
+}
+
+/// The bans made with Toasted's button, by profile
+/// (`wrapped-bans-<profile id>.json`): Roon gives no list of the songs
+/// banned outside the library, so these are kept here.
+fn bans_path(app: &AppHandle) -> Option<PathBuf> {
+    let id = crate::discover::profile_in_use(app)?;
+    app.path().app_data_dir().ok().map(|dir| dir.join(format!("wrapped-bans-{id}.json")))
+}
+
+/// A ban made (or lifted) with Toasted's button, noted for the list; the
+/// library copy's own mark is kept in step.
+pub fn ban_note(app: &AppHandle, mut song: BannedSong, banned: bool) {
+    let Some(path) = bans_path(app) else { return };
+    let mut kept: Vec<BannedSong> = read_json(&path).unwrap_or_default();
+    let key = ban_key(&song.title, &song.artist);
+    let kind = ban_kind(&song).to_string();
+    kept.retain(|s| ban_kind(s) != kind || ban_key(&s.title, &s.artist) != key);
+    if banned {
+        song.at = now_ms();
+        kept.insert(0, song.clone());
+    }
+    write_json(&path, &kept);
+    if kind != "song" {
+        return;
+    }
+    if let Some(id) = crate::discover::profile_in_use(app) {
+        app.state::<LibraryCopy>().with_store(app, |s| {
+            for t in s.tracks.iter_mut().filter(|t| ban_key(&t.title, &t.artist) == key && (song.album.is_empty() || t.album.eq_ignore_ascii_case(&song.album))) {
+                t.banned_by.retain(|by| *by != id);
+                if banned {
+                    t.banned_by.push(id.clone());
+                }
+            }
+        });
+    }
+}
+
+/// The songs banned for the profile in use: the ones banned with Toasted's
+/// button (newest first), then the library's songs Roon has as banned.
+/// Songs banned in Roon that aren't in the library can't be listed: Roon
+/// has no list of those.
+#[tauri::command]
+pub fn wrapped_banned_songs(app: AppHandle, kind: Option<String>) -> Vec<BannedSong> {
+    let kind = kind.unwrap_or_else(|| "song".into());
+    let kept: Vec<BannedSong> = bans_path(&app).and_then(|p| read_json(&p)).unwrap_or_default();
+    let mut out: Vec<BannedSong> = kept.into_iter().filter(|s| ban_kind(s) == kind).collect();
+    let mut seen: std::collections::HashSet<String> = out.iter().map(|s| ban_key(&s.title, &s.artist)).collect();
+    if kind == "artist" {
+        // (and the artists on Wrapped's own ban list: a thumbs down in
+        // Discover, or one added in Settings)
+        for banned in crate::discover::wrapped_ban_list(app.clone()) {
+            if seen.insert(ban_key(&banned.name, "")) {
+                out.push(BannedSong { kind: "artist".into(), title: banned.name, at: banned.at, ..Default::default() });
+            }
+        }
+        return out;
+    }
+    if kind != "song" {
+        return out;
+    }
+    if let Some(id) = crate::discover::profile_in_use(&app) {
+        app.state::<LibraryCopy>().with_store(&app, |s| {
+            for t in s.tracks.iter().filter(|t| t.banned_by.contains(&id)) {
+                if seen.insert(ban_key(&t.title, &t.artist)) {
+                    out.push(BannedSong { kind: "song".into(), title: t.title.clone(), artist: t.artist.clone(), album: t.album.clone(), image_key: t.image_key.clone(), album_id: t.album_id, at: 0, in_library: true });
+                }
+            }
+        });
+    }
+    out
+}
+
 /// "Rescan daily" switched on or off for a profile (the Profile page).
 #[tauri::command]
 pub fn wrapped_profile_rescan_daily(app: AppHandle, id: String, on: bool) -> WrappedSettings {

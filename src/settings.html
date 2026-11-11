@@ -281,6 +281,22 @@
           </div>
         </div>
 
+        <!-- The Ban button on the Wrapper's player (after Queue): off
+             unless switched on. Wrapped's Settings has the same switch -->
+        <div class="setting-row ban-row">
+          <div class="setting library-option">
+            <span class="setting-name">Ban Button</span>
+            <div class="switch-group" id="ban-button-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="ban-button" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+        </div>
+
         <!-- Whether the Core accepts us, in plain words -->
         <p id="library-detail" class="muted library-detail">Off</p>
         <!-- What these do: folded away until its "Legend" line is clicked -->
@@ -293,6 +309,11 @@
           playing artist. A light next to the zone shows what's playing: Low Quality, CD Quality
           or Hi-Res (hover for the name). It uses a part of Roon that isn't officially open to apps, so a Roon
           update may break it until I'm able to repair it.
+        </p>
+        <p>
+          <strong>Ban Button:</strong> Adds a button after Queue on the Wrapper's player that bans
+          the song that's playing, for the Roon profile in use, as Roon's own ban does. It turns
+          red while the song is banned; a second click lifts the ban.
         </p>
         </details>
       </section>
