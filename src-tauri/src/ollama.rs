@@ -1067,7 +1067,7 @@ async fn pull(app: &AppHandle, model: &str) -> Result<(), String> {
     }
     if success {
         // (the new model is the one tier 2 uses from now on)
-        crate::wrapped::wrapped_settings_update(app.clone(), serde_json::json!({ "llmModel": model }))?;
+        crate::wrapped::wrapped_settings_update(app.clone(), serde_json::json!({ "llmModel": model }), None)?;
         Ok(())
     } else {
         Err("The download stopped before it finished.".into())

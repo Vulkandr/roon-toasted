@@ -127,9 +127,9 @@ pub fn zones_updated(app: &AppHandle, payload: &ZonesPayload) {
             album: np.album.clone(),
             image_key: np.image_key.clone(),
             seconds: saved.toast_seconds,
-            colors: saved.toaster_colors,
-            accent: saved.toaster_accent.clone(),
-            background: saved.toaster_background.clone(),
+            colors: saved.shown_colors,
+            accent: saved.shown_accent.clone(),
+            background: saved.shown_background.clone(),
         },
     );
 }
@@ -178,9 +178,9 @@ pub fn toast_test(app: AppHandle) {
             album: np.album.clone(),
             image_key: np.image_key.clone(),
             seconds: saved.toast_seconds,
-            colors: saved.toaster_colors,
-            accent: saved.toaster_accent.clone(),
-            background: saved.toaster_background.clone(),
+            colors: saved.shown_colors,
+            accent: saved.shown_accent.clone(),
+            background: saved.shown_background.clone(),
         },
         None => ToastPayload {
             zone_name: zone.map(|z| z.name.clone()).unwrap_or_default(),
@@ -189,9 +189,9 @@ pub fn toast_test(app: AppHandle) {
             album: "and the toast shows it here".into(),
             image_key: None,
             seconds: saved.toast_seconds,
-            colors: saved.toaster_colors,
-            accent: saved.toaster_accent.clone(),
-            background: saved.toaster_background.clone(),
+            colors: saved.shown_colors,
+            accent: saved.shown_accent.clone(),
+            background: saved.shown_background.clone(),
         },
     };
     send(&app, payload);

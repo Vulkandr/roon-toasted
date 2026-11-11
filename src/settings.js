@@ -124,6 +124,88 @@ function showPageGlows() {
   }
 }
 
+// ===== Profile =============================================================
+//
+// A Roon account can have several profiles: the library is shared, hearts,
+// bans and listening history are kept per profile. Toasted uses one
+// (library.rs), shown at the top of the list; with more than one, a click
+// opens the others under it. Picking one changes where Toasted's hearts go.
+// It doesn't change the profile Roon's own app is on, and the list says so.
+
+const navProfile = document.querySelector("#nav-profile");
+const navProfileButton = document.querySelector("#nav-profile-button");
+const navProfileList = document.querySelector("#nav-profile-list");
+let profileState = { profiles: [], current: null };
+
+// A profile's picture in its round frame, or its initial without one
+function paintProfilePic(frame, profile) {
+  const initial = () => {
+    frame.replaceChildren();
+    frame.textContent = (profile?.name || "?").trim().charAt(0).toUpperCase();
+  };
+  if (!profile?.imageKey) return initial();
+  const img = document.createElement("img");
+  img.alt = "";
+  img.addEventListener("error", initial);
+  img.src = `${window.__TAURI__.core.convertFileSrc(profile.imageKey, "roonimg")}?width=80&height=80&src=broker&square=1&v=2`;
+  frame.replaceChildren(img);
+}
+
+function showProfiles(state) {
+  profileState = state?.profiles ? state : { profiles: [], current: null };
+  const profile = profileState.profiles.find((p) => p.id === profileState.current);
+  const several = profileState.profiles.length > 1;
+  navProfile.hidden = !profile;
+  navProfileList.hidden = true;
+  navProfile.classList.toggle("pickable", several);
+  if (!profile) return;
+  paintProfilePic(document.querySelector("#nav-profile-pic"), profile);
+  document.querySelector("#nav-profile-name").textContent = profile.name;
+  document.querySelector("#nav-profile-note").textContent = "Roon profile";
+  navProfileButton.title = several
+    ? "The Roon profile Toasted uses: hearts, bans and history go to it. Click to pick another"
+    : "The Roon profile Toasted uses: hearts, bans and history go to it";
+  navProfileList.replaceChildren();
+  for (const p of profileState.profiles) {
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = `nav-profile-option${p.id === profileState.current ? " current" : ""}`;
+    const pic = document.createElement("span");
+    pic.className = "profile-pic";
+    paintProfilePic(pic, p);
+    const name = document.createElement("span");
+    name.textContent = p.name;
+    option.append(pic, name);
+    option.addEventListener("click", async () => {
+      navProfileList.hidden = true;
+      if (p.id === profileState.current) return;
+      try {
+        showProfiles(await invoke("library_set_profile", { id: p.id }));
+      } catch (err) {
+        console.error(err);
+      }
+    });
+    navProfileList.append(option);
+  }
+  const note = document.createElement("p");
+  note.className = "nav-profile-list-note";
+  note.textContent = "Changes the profile Toasted uses. Roon's own app keeps the profile it's on.";
+  navProfileList.append(note);
+}
+
+navProfileButton.addEventListener("click", () => {
+  if (profileState.profiles.length > 1) navProfileList.hidden = !navProfileList.hidden;
+});
+
+const readProfiles = () =>
+  invoke("library_profiles")
+    .then(showProfiles)
+    .catch((err) => console.error(err));
+readProfiles();
+listen("library-profiles", (event) => showProfiles(event.payload));
+// (Hearts & Library switched off, or its link lost: no profile to show)
+listen("library-status", readProfiles);
+
 const coreCard = document.querySelector(".core-card");
 const navCoreDot = document.querySelector("#nav-core-dot");
 const coreError = document.querySelector("#core-error");
@@ -655,6 +737,9 @@ const darkScheme = matchMedia("(prefers-color-scheme: dark)");
 let colorsNow = "default";
 let accentNow = "#7b5fc7";
 let backgroundNow = null; // Custom's background (null: tinted from the accent)
+// What the window itself is painted in: those three, unless the Roon
+// profile in use has colors of its own (settings.rs works that out)
+let shown = { colors: "default", accent: "#7b5fc7", background: null };
 
 // Settings takes the same colors as the Toaster: Custom's, or with Album
 // Art the colors of the album playing in the selected zone (the app's own
@@ -663,18 +748,18 @@ let artKey = null; // the selected zone's album art
 async function paintSettings() {
   const key = artKey;
   let hue = null;
-  if (colorsNow === "album" && key) {
+  if (shown.colors === "album" && key) {
     try {
       hue = await albumHue(key);
     } catch (err) {
       console.warn("album colors", err);
     }
     // (the art or the setting changed meanwhile: that call wins)
-    if (key !== artKey || colorsNow !== "album") return;
+    if (key !== artKey || shown.colors !== "album") return;
   }
   paintColors(
     document.documentElement,
-    hue ? albumPalette(hue, darkScheme.matches) : colorsNow === "custom" ? customPalette(accentNow, backgroundNow, darkScheme.matches) : {},
+    hue ? albumPalette(hue, darkScheme.matches) : shown.colors === "custom" ? customPalette(shown.accent, shown.background, darkScheme.matches) : {},
   );
 }
 darkScheme.addEventListener("change", paintSettings);
@@ -690,10 +775,14 @@ invoke("roon_zones").then(showZoneArt).catch((err) => console.error(err));
 listen("roon-zones", (event) => showZoneArt(event.payload));
 
 function showColors(settings) {
-  for (const pill of colorsPills.children) pill.classList.toggle("selected", pill.dataset.colors === settings.toasterColors);
-  colorsNow = settings.toasterColors;
-  accentNow = settings.toasterAccent || accentNow;
-  backgroundNow = settings.toasterBackground ?? null;
+  // (the colors in use: the shared ones, or the own ones of a Roon profile
+  // set to Custom in Wrapped's Settings. A change made here goes to
+  // whichever those are; settings.rs sees to that)
+  colorsNow = settings.shownColors ?? settings.toasterColors;
+  accentNow = settings.shownAccent || settings.toasterAccent || accentNow;
+  backgroundNow = (settings.shownColors ? settings.shownBackground : settings.toasterBackground) ?? null;
+  for (const pill of colorsPills.children) pill.classList.toggle("selected", pill.dataset.colors === colorsNow);
+  shown = { colors: colorsNow, accent: accentNow, background: backgroundNow };
   customPill.style.setProperty("--dot", accentNow);
   paintSettings();
 }

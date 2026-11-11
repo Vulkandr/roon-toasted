@@ -54,6 +54,23 @@ pub struct AppSettings {
     /// Colors: Custom's background, as "#rrggbb"; None: tinted from the
     /// accent, the way album colors tint it.
     pub toaster_background: Option<String>,
+    /// The profiles (by id) whose General settings are their own: Wrapped's
+    /// Profile page, Settings: Custom. The others, and every profile to
+    /// start with, follow the shared ones. Changed through
+    /// `wrapped_profile_custom` (wrapped.rs), which also gives a profile
+    /// its own copy the first time.
+    pub custom_profiles: Vec<String>,
+    /// A Custom profile's own colors, by profile id (its copy of the three
+    /// settings above; kept when it goes back to Default, for the next
+    /// time). `update_settings` writes here for the profile in use.
+    pub profile_colors: std::collections::HashMap<String, ProfileColors>,
+    /// The colors to show right now: the profile in use's own if it's
+    /// Custom, else the three settings above. Worked out by `with_shown`
+    /// every time the settings are handed out; what's saved of them is
+    /// never read. Every window paints from these.
+    pub shown_colors: ToasterColors,
+    pub shown_accent: String,
+    pub shown_background: Option<String>,
     /// Now Playing's Background: Custom images picked so far, newest first
     /// (background.rs). Changed through `wrapper_pick_background` and
     /// `wrapper_forget_background`, not `update_settings`.
@@ -64,6 +81,9 @@ pub struct AppSettings {
     /// Whether the global hotkeys are on at all (off: both released, e.g. for
     /// people who only open the Toaster from the Stream Deck).
     pub hotkeys_enabled: bool,
+    /// The Roon profile hearts, bans and history go to (its id; library.rs).
+    /// None: the account's first.
+    pub library_profile: Option<String>,
     /// The keyboard's Play/Pause, Stop, Next and Previous keys control the
     /// selected Roon zone instead of other apps (mediakeys.rs).
     pub media_keys_playback: bool,
@@ -165,8 +185,14 @@ impl Default for AppSettings {
             toaster_colors: ToasterColors::default(),
             toaster_accent: DEFAULT_ACCENT.into(),
             toaster_background: None,
+            custom_profiles: Vec::new(),
+            profile_colors: std::collections::HashMap::new(),
+            shown_colors: ToasterColors::default(),
+            shown_accent: DEFAULT_ACCENT.into(),
+            shown_background: None,
             background_images: Vec::new(),
             hotkeys_enabled: true,
+            library_profile: None,
             media_keys_playback: true,
             media_keys_volume: false,
             hotkey_player: Some("Ctrl+Alt+Z".into()),
@@ -294,6 +320,49 @@ pub enum ToasterColors {
     Custom,
 }
 
+/// A profile's own colors (see `AppSettings::profile_colors`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileColors {
+    pub colors: ToasterColors,
+    /// Custom's accent, as "#rrggbb".
+    pub accent: String,
+    /// Custom's background; None: tinted from the accent.
+    #[serde(default)]
+    pub background: Option<String>,
+}
+
+/// The profile in use (library.rs says which), if its General settings are
+/// its own (Custom).
+pub fn custom_profile(app: &AppHandle, settings: &AppSettings) -> Option<String> {
+    crate::library::profile_id(app, settings).filter(|id| settings.custom_profiles.contains(id))
+}
+
+/// Fills in the colors to show: the own colors of the profile in use, if
+/// it's Custom, else the shared ones.
+pub fn with_shown(app: &AppHandle, mut settings: AppSettings) -> AppSettings {
+    let own = custom_profile(app, &settings).and_then(|id| settings.profile_colors.get(&id).cloned());
+    match own {
+        Some(own) => {
+            settings.shown_colors = own.colors;
+            settings.shown_accent = own.accent;
+            settings.shown_background = own.background;
+        }
+        None => {
+            settings.shown_colors = settings.toaster_colors;
+            settings.shown_accent = settings.toaster_accent.clone();
+            settings.shown_background = settings.toaster_background.clone();
+        }
+    }
+    settings
+}
+
+/// Tells every window the settings again (the colors to show changed
+/// without a setting changing: another profile is in use).
+pub fn announce(app: &AppHandle) {
+    let _ = app.emit("settings-changed", get_settings(app.clone()));
+}
+
 /// The app's own purple, the custom accent's starting point.
 pub const DEFAULT_ACCENT: &str = "#7b5fc7";
 
@@ -351,23 +420,48 @@ pub fn save(path: &Path, settings: &AppSettings) -> Result<(), String> {
 /// Current settings (defaults for anything never changed).
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> AppSettings {
-    path(&app).map(|p| load(&p)).unwrap_or_default()
+    let settings = path(&app).map(|p| load(&p)).unwrap_or_default();
+    with_shown(&app, settings)
 }
 
 /// Changes one or more settings, e.g. `{ toasterWindow: "remember" }`.
 /// Unknown names or wrong value types are refused, so a typo can't silently
 /// do nothing. Returns the full updated settings.
+///
+/// The three colors are among the General settings a profile can have of
+/// its own: while the profile in use is Custom, a change to them goes to
+/// its copy, unless `shared` asks for the shared ones (Wrapped's General
+/// page, Edit Default).
 #[tauri::command]
-pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<AppSettings, String> {
+pub fn update_settings(app: AppHandle, changes: serde_json::Value, shared: Option<bool>) -> Result<AppSettings, String> {
     let path = path(&app).ok_or("Couldn't find the app data folder.")?;
     let Some(changes) = changes.as_object() else {
         return Err("Settings changes must be an object.".into());
     };
 
     let before = load(&path);
+    let own = if shared == Some(true) { None } else { custom_profile(&app, &before) };
     let mut current = serde_json::to_value(&before).map_err(|e| e.to_string())?;
     let fields = current.as_object_mut().expect("settings serialize to an object");
     for (name, value) in changes {
+        // (a color, for a Custom profile: into its own copy)
+        let part = match name.as_str() {
+            "toasterColors" => Some("colors"),
+            "toasterAccent" => Some("accent"),
+            "toasterBackground" => Some("background"),
+            _ => None,
+        };
+        if let (Some(id), Some(part)) = (&own, part) {
+            let all = fields.entry("profileColors").or_insert_with(|| serde_json::json!({}));
+            let Some(all) = all.as_object_mut() else {
+                return Err("The profiles' colors are damaged.".into());
+            };
+            let copy = all.entry(id.clone()).or_insert_with(|| {
+                serde_json::json!({ "colors": before.toaster_colors, "accent": before.toaster_accent, "background": before.toaster_background })
+            });
+            copy[part] = value.clone();
+            continue;
+        }
         if name == "selectedZoneId" {
             return Err("Use roon_select_zone to change the zone.".into());
         }
@@ -391,6 +485,10 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
 
     let updated: AppSettings =
         serde_json::from_value(current).map_err(|e| format!("Invalid setting value: {e}"))?;
+    let updated = with_shown(&app, updated);
+    if updated.profile_colors.values().any(|c| !is_hex_color(&c.accent) || c.background.as_deref().is_some_and(|b| !is_hex_color(b))) {
+        return Err("A profile's colors must be colors like #7b5fc7.".into());
+    }
     if !ZOOM_RANGE.contains(&updated.zoom) {
         return Err(format!(
             "Zoom must be between {} and {}.",

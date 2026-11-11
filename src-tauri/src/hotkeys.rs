@@ -313,7 +313,7 @@ pub async fn set_hotkey(
         return Err(reason);
     }
 
-    let _ = app.emit("settings-changed", &updated);
+    let _ = app.emit("settings-changed", settings::with_shown(&app, updated.clone()));
     Ok(status(&app))
 }
 

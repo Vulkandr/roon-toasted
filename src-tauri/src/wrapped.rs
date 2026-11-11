@@ -145,6 +145,21 @@ pub enum SimilarScope {
     Discover,
 }
 
+/// The settings on Settings' General page that a profile can have of its
+/// own (with Toasted's three colors, kept in settings.rs).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+pub struct GeneralSet {
+    pub page_size: String,
+    pub side_menu: String,
+    pub genres: String,
+    pub similar_by: SimilarBy,
+    pub similar_scope: SimilarScope,
+}
+
+/// Their names as the pages send them.
+const GENERAL_NAMES: [&str; 5] = ["pageSize", "sideMenu", "genres", "similarBy", "similarScope"];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct WrappedSettings {
@@ -202,6 +217,13 @@ pub struct WrappedSettings {
     /// Whose genres the Genres page shows: "wrapped" (Wrapped's own tags)
     /// or "roon" (Roon's genres).
     pub genres: String,
+    /// A Custom profile's own General settings, by profile id (kept when
+    /// it goes back to Default, for the next time).
+    pub profile_general: HashMap<String, GeneralSet>,
+    /// The shared General settings, when the ones above are a Custom
+    /// profile's own (`load`): for the General page's Edit Default. Never
+    /// saved.
+    pub shared_general: Option<GeneralSet>,
 }
 
 impl Default for WrappedSettings {
@@ -228,6 +250,8 @@ impl Default for WrappedSettings {
             side_menu: "roon".into(),
             live_albums: false,
             genres: "wrapped".into(),
+            profile_general: HashMap::new(),
+            shared_general: None,
         }
     }
 }
@@ -237,10 +261,49 @@ impl WrappedSettings {
         app.path().app_data_dir().ok().map(|dir| dir.join("wrapped-settings.json"))
     }
 
-    pub fn load(app: &AppHandle) -> Self {
-        Self::path(app).and_then(|p| read_json(&p)).unwrap_or_default()
+    /// The settings as saved: the General ones are the shared ones.
+    fn load_saved(app: &AppHandle) -> Self {
+        let mut saved: Self = Self::path(app).and_then(|p| read_json(&p)).unwrap_or_default();
+        saved.shared_general = None;
+        saved
     }
 
+    /// The settings to go by: with the General ones of the profile in use,
+    /// if it's Custom (the shared ones are then in `shared_general`).
+    pub fn load(app: &AppHandle) -> Self {
+        Self::load_saved(app).for_profile(app)
+    }
+
+    fn general(&self) -> GeneralSet {
+        GeneralSet {
+            page_size: self.page_size.clone(),
+            side_menu: self.side_menu.clone(),
+            genres: self.genres.clone(),
+            similar_by: self.similar_by,
+            similar_scope: self.similar_scope,
+        }
+    }
+
+    /// The profile in use, if its General settings are its own.
+    fn custom_profile(app: &AppHandle) -> Option<String> {
+        let toasted = crate::settings::path(app).map(|p| crate::settings::load(&p)).unwrap_or_default();
+        crate::settings::custom_profile(app, &toasted)
+    }
+
+    fn for_profile(mut self, app: &AppHandle) -> Self {
+        let Some(own) = Self::custom_profile(app).and_then(|id| self.profile_general.get(&id).cloned()) else {
+            return self;
+        };
+        self.shared_general = Some(self.general());
+        self.page_size = own.page_size;
+        self.side_menu = own.side_menu;
+        self.genres = own.genres;
+        self.similar_by = own.similar_by;
+        self.similar_scope = own.similar_scope;
+        self
+    }
+
+    /// (only ever what `load_saved` gave, changed)
     fn save(&self, app: &AppHandle) {
         if let Some(p) = Self::path(app) {
             write_json(&p, self);
@@ -253,24 +316,72 @@ pub fn wrapped_settings_get(app: AppHandle) -> WrappedSettings {
     WrappedSettings::load(&app)
 }
 
-/// Changes one or more of Wrapped's settings (`{ lastfmKey: "..." }`);
-/// unknown names are refused. Returns the whole set.
+/// Makes a profile's General settings its own (Custom) or the shared ones
+/// again (Default). Its own start as a copy of the shared ones, colors
+/// included; going back to Default keeps them for the next time. Every
+/// window hears, since the settings to go by may just have changed.
 #[tauri::command]
-pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value) -> Result<WrappedSettings, String> {
+pub fn wrapped_profile_custom(app: AppHandle, id: String, custom: bool) -> Result<(), String> {
+    let path = crate::settings::path(&app).ok_or("Couldn't find the app data folder.")?;
+    let mut toasted = crate::settings::load(&path);
+    toasted.custom_profiles.retain(|p| p != &id);
+    if custom {
+        toasted.custom_profiles.push(id.clone());
+        toasted.profile_colors.entry(id.clone()).or_insert_with(|| crate::settings::ProfileColors {
+            colors: toasted.toaster_colors,
+            accent: toasted.toaster_accent.clone(),
+            background: toasted.toaster_background.clone(),
+        });
+        let mut saved = WrappedSettings::load_saved(&app);
+        if !saved.profile_general.contains_key(&id) {
+            let copy = saved.general();
+            saved.profile_general.insert(id.clone(), copy);
+            saved.save(&app);
+        }
+    }
+    crate::settings::save(&path, &toasted)?;
+    crate::settings::announce(&app);
+    let _ = app.emit("wrapped-settings-changed", WrappedSettings::load(&app));
+    Ok(())
+}
+
+/// Changes one or more of Wrapped's settings (`{ lastfmKey: "..." }`);
+/// unknown names are refused. Returns the whole set (as `load` gives it).
+///
+/// A General setting (`GENERAL_NAMES`) goes to the own copy of the profile
+/// in use while that profile is Custom, unless `shared` asks for the
+/// shared ones (the General page's Edit Default).
+#[tauri::command]
+pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value, shared: Option<bool>) -> Result<WrappedSettings, String> {
     let Some(changes) = changes.as_object() else {
         return Err("Settings changes must be an object.".into());
     };
     let current = WrappedSettings::load(&app);
-    let mut value = serde_json::to_value(&current).map_err(|e| e.to_string())?;
+    let saved = WrappedSettings::load_saved(&app);
+    let own = if shared == Some(true) { None } else { WrappedSettings::custom_profile(&app) };
+    let mut value = serde_json::to_value(&saved).map_err(|e| e.to_string())?;
     let fields = value.as_object_mut().expect("settings serialize to an object");
     for (name, new) in changes {
+        if name == "profileGeneral" || name == "sharedGeneral" {
+            return Err(format!("{name} isn't changed directly."));
+        }
         if !fields.contains_key(name) {
             return Err(format!("Unknown Wrapped setting: {name}"));
         }
-        fields.insert(name.clone(), new.clone());
+        match &own {
+            Some(id) if GENERAL_NAMES.contains(&name.as_str()) => {
+                let copy = serde_json::to_value(saved.profile_general.get(id).cloned().unwrap_or_else(|| saved.general())).map_err(|e| e.to_string())?;
+                let all = fields.get_mut("profileGeneral").and_then(|all| all.as_object_mut()).ok_or("The profiles' settings are damaged.")?;
+                all.entry(id.clone()).or_insert(copy)[name.as_str()] = new.clone();
+            }
+            _ => {
+                fields.insert(name.clone(), new.clone());
+            }
+        }
     }
     let next: WrappedSettings = serde_json::from_value(value).map_err(|e| format!("Bad value: {e}"))?;
     next.save(&app);
+    let next = next.for_profile(&app);
     crate::ollama::settings_changed(&app, &current, &next);
     crate::discover::set_enabled(next.discovery);
     // (Toasted's Settings window shows Wrapped Discovery too)

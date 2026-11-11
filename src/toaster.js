@@ -1834,18 +1834,20 @@ async function applyAlbumColors() {
 }
 
 // Follow the Colors setting, and Windows switching between light and dark
+// (the colors to show: the profile in use's own if it has any, else the
+// general ones; settings.rs works that out as shownColors and the rest)
 invoke("get_settings").then((settings) => {
-  colorsMode = settings.toasterColors;
-  customAccent = settings.toasterAccent;
-  customBackground = settings.toasterBackground;
+  colorsMode = settings.shownColors;
+  customAccent = settings.shownAccent;
+  customBackground = settings.shownBackground;
   applyAlbumColors();
 });
 listen("settings-changed", (event) => {
-  const { toasterColors, toasterAccent, toasterBackground } = event.payload;
-  if (toasterColors !== colorsMode || toasterAccent !== customAccent || toasterBackground !== customBackground) {
-    colorsMode = toasterColors;
-    customAccent = toasterAccent;
-    customBackground = toasterBackground;
+  const { shownColors, shownAccent, shownBackground } = event.payload;
+  if (shownColors !== colorsMode || shownAccent !== customAccent || shownBackground !== customBackground) {
+    colorsMode = shownColors;
+    customAccent = shownAccent;
+    customBackground = shownBackground;
     applyAlbumColors();
   }
 });

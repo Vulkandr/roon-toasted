@@ -38,6 +38,20 @@
          time (settings.js, "Pages") -->
     <div class="settings-body">
       <nav id="pages-nav" class="pages-nav" aria-label="Settings pages">
+        <!-- The Roon profile in use, at the very top (hearts, bans and
+             history go to it): its picture and name. With more than one
+             profile, a click opens the others under it (settings.js,
+             "Profile"). Hidden while Hearts & Library is off -->
+        <div id="nav-profile" class="nav-profile" hidden>
+          <button id="nav-profile-button" class="nav-profile-button" type="button">
+            <span id="nav-profile-pic" class="profile-pic"></span>
+            <span class="nav-profile-text">
+              <span id="nav-profile-name" class="nav-profile-name"></span>
+              <span id="nav-profile-note" class="nav-profile-note"></span>
+            </span>
+          </button>
+          <div id="nav-profile-list" class="nav-profile-list" hidden></div>
+        </div>
         <button class="page-link" data-page="general" type="button" title="General"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg><span>General</span></button>
         <button class="page-link" data-page="core" type="button" title="Roon Core"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg><span>Roon Core</span><i id="nav-core-dot" class="dot nav-dot"></i></button>
         <button class="page-link" data-page="keys" type="button" title="Hotkeys &amp; Media Keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg><span>Hotkeys &amp; Media Keys</span></button>
@@ -62,7 +76,7 @@
           <div class="setting setting-pills-cell">
             <span class="setting-name">Colors</span>
             <div class="seg-pills" id="colors-pills">
-              <button class="seg-pill" data-colors="default">Default</button>
+              <button class="seg-pill" data-colors="default">Toasted</button>
               <button class="seg-pill" data-colors="album">Album Art</button>
               <button class="seg-pill" data-colors="custom" title="Pick your own accent"><span class="seg-dot"></span>Custom</button>
             </div>
@@ -119,8 +133,10 @@
         <details class="legend">
           <summary>Legend</summary>
         <p>
-          <strong>Colors:</strong> Default keeps the Toaster's color scheme. Album Art takes its
-          colors from the album that's playing.
+          <strong>Colors:</strong> Toasted keeps Toasted's own color scheme. Album Art takes its
+          colors from the album that's playing. Custom uses an accent you pick. A Roon profile
+          can have settings of its own, colors included (Wrapped's Settings, the wrench by the
+          profile); while such a profile is in use, these are its colors.
         </p>
         <p>
           <strong>Artists:</strong> Main shows only a track's first artist; All shows every

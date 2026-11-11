@@ -256,7 +256,15 @@ async fn run(app: AppHandle, generation: u64, host: String, core_id: String) {
                     inner.client = Some(client.clone());
                 }
                 println!("[library {}] connected to the Core at {host} ({} objects)", clock(), client.object_count());
+                // The profile picked in Settings (the account's first if none
+                // was, or it's gone), before anything reads a heart
+                client.set_profile(crate::settings::get_settings(app.clone()).library_profile.as_deref());
                 library.set_status(LibraryState::Ready, None);
+                let _ = app.emit("library-profiles", profiles_now(&client));
+                // (the profile in use is known for sure now: its colors, and
+                // its own General settings if it has them)
+                crate::settings::announce(&app);
+                let _ = app.emit("wrapped-settings-changed", crate::wrapped::WrappedSettings::load(&app));
                 attempt = 0;
                 crate::wrapped::refresh_artists(app.clone(), client.clone());
 
@@ -304,6 +312,7 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
     let refresh = tokio::time::sleep(REFRESH_AFTER);
     tokio::pin!(refresh);
     let mut check = tokio::time::interval(Duration::from_secs(5));
+    let mut profiles = profiles_now(client);
     loop {
         tokio::select! {
             _ = &mut refresh => return None,
@@ -311,6 +320,12 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
             _ = check.tick() => {
                 if !client.is_connected() || app.state::<Library>().inner.lock().unwrap().generation != generation {
                     return Some("stopped".into());
+                }
+                // (a profile added, renamed or removed in Roon: the pages hear)
+                let now = profiles_now(client);
+                if now != profiles {
+                    let _ = app.emit("library-profiles", &now);
+                    profiles = now;
                 }
             }
             event = events.recv() => match event {
@@ -331,6 +346,56 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
 // ---------------------------------------------------------------------------
 // Commands the UI (and status.rs, for the Stream Deck plugin) can call
 // ---------------------------------------------------------------------------
+
+/// The Roon account's profiles and the one in use (`current`, its id).
+/// Hearts, bans and listening history are kept per profile; the library
+/// is shared. Empty while the library link is off or not connected.
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Profiles {
+    pub profiles: Vec<roon_library::ProfileInfo>,
+    pub current: Option<String>,
+}
+
+/// The id of the profile in use: the connected Core's word on it, or,
+/// while there's no link to it, the one picked last (so that profile's
+/// colors are there from the start).
+pub fn profile_id(app: &AppHandle, settings: &crate::settings::AppSettings) -> Option<String> {
+    match app.try_state::<Library>().and_then(|library| library.client()) {
+        Some(client) => client.profile().map(|p| p.id),
+        None => settings.library_profile.clone().filter(|_| settings.library_controls),
+    }
+}
+
+fn profiles_now(client: &LibraryClient) -> Profiles {
+    Profiles { profiles: client.profiles(), current: client.profile().map(|p| p.id) }
+}
+
+#[tauri::command]
+pub fn library_profiles(library: State<'_, Library>) -> Profiles {
+    library.client().map(|c| profiles_now(&c)).unwrap_or_default()
+}
+
+/// Picks the profile hearts, bans and history go to (saved, so it's the
+/// same one next time), and tells every page.
+/// (async, so it runs on the async runtime and not on the main thread)
+#[tauri::command]
+pub async fn library_set_profile(app: AppHandle, id: String) -> Result<Profiles, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    if !client.profiles().iter().any(|p| p.id == id) {
+        return Err("That profile isn't in this Roon account any more.".into());
+    }
+    // (the profile first: the settings then go out with its colors)
+    client.set_profile(Some(&id));
+    crate::settings::update_settings(app.clone(), serde_json::json!({ "libraryProfile": id }), None)?;
+    let now = profiles_now(&client);
+    println!("[library {}] profile: {}", clock(), client.profile().map(|p| p.name).unwrap_or_default());
+    // (Wrapped's General settings may be this profile's own)
+    let _ = app.emit("wrapped-settings-changed", crate::wrapped::WrappedSettings::load(&app));
+    let _ = app.emit("library-profiles", &now);
+    Ok(now)
+}
 
 /// Time of day (UTC, HH:MM:SS) for the log lines, to see how far apart events are.
 fn clock() -> String {

@@ -209,6 +209,77 @@ button:disabled {
   height: 100%;
 }
 
+/* The profile in use, before Return Roon: plain, like the zone in the
+   player (its picture, or its initial, and its name) */
+.titlebar-profile {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 8px 0 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.titlebar-profile:hover {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.titlebar-profile .profile-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A profile's picture: round, with its initial when it has none */
+.profile-pic {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.profile-pic img,
+.settings-profile-pic img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* The profiles to pick from (the zone menu's look), with a line under
+   them on what picking one does and doesn't change */
+.profile-menu {
+  width: 250px;
+  max-height: none;
+}
+
+.profile-option .profile-pic {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  font-size: 12px;
+}
+
+.profile-menu-note {
+  margin-top: 4px;
+  padding: 8px 10px 4px;
+  border-top: 1px solid var(--border);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
 /* Return Roon, on the right before Settings (the side Roon's own title
    bar has Enable Wrapper on) */
 .titlebar-action {
@@ -2913,6 +2984,26 @@ html.invert-colors {
   margin-top: 2px;
 }
 
+/* The line under this week's Discover lists, in the menu and on the
+   Playlists page */
+.wrapped-side-line {
+  flex: none;
+  height: 1px;
+  margin: 6px 4px;
+  background: var(--border);
+}
+
+.wrapped-side.through-filter .wrapped-side-line {
+  background: var(--roon-border);
+}
+
+.wrapped-playlists-line {
+  height: 1px;
+  margin: 18px 0 4px;
+  border: 0;
+  background: var(--border);
+}
+
 .wrapped-side-btn {
   display: flex;
   align-items: center;
@@ -4942,6 +5033,14 @@ body > .wrapped-toast {
   margin-bottom: 22px;
 }
 
+/* Settings' choices, lit like the ones in Toasted's own Settings: the
+   side that's picked is in the accent; only a picked "Off" stays plain
+   (wrapper.js marks those "off-side") */
+.wrapped-settings-pages .wrapped-tab.selected:not(.off-side) {
+  color: var(--on-accent);
+  background: var(--accent);
+}
+
 /* Settings in pages, like Toasted's own Settings: the list of pages on
    the left (it stays put while the page scrolls), the page that's picked
    beside it */
@@ -5031,14 +5130,60 @@ body > .wrapped-toast {
   }
 
   .settings-nav-profile {
-    padding: 6px 0 10px;
-    justify-content: center;
+    flex-direction: column;
+    padding: 2px 0 8px;
+  }
+
+  .settings-profile-pick {
+    flex: none;
+    padding: 2px;
   }
 
   .settings-profile-pic {
     width: 32px;
     height: 32px;
   }
+}
+
+/* The Profile page's Settings card: its choice, then the way to General */
+.settings-own-end {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+}
+
+/* General, for a Custom profile: whose settings these are, with the way
+   to the shared ones (and back) at its end */
+.settings-scope {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 640px;
+  box-sizing: border-box;
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.settings-scope-words {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-scope-title {
+  font-weight: 600;
+}
+
+.settings-scope button {
+  flex: none;
+}
+
+.settings-scope-note {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 /* General's groups: a small heading over the cards it holds */
@@ -5051,15 +5196,102 @@ body > .wrapped-toast {
   color: var(--muted);
 }
 
-/* The profile, at the top of the list: a taller entry, its picture (or a
-   plain figure) beside its name, with a line under it before the pages */
+/* The profile, at the top of the list: a taller entry in two parts, with
+   a line under it before the pages. Its picture (or initial) and name pick
+   another profile; the wrench beside them opens the Profile page */
 .settings-nav-profile {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 8px 14px;
+  gap: 4px;
+  padding: 4px 0 10px;
   margin-bottom: 8px;
   border-bottom: 1px solid var(--border);
+}
+
+.settings-profile-pick {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: default;
+}
+
+/* (more than one profile: a click picks another) */
+.settings-profile-pick.pickable {
+  cursor: pointer;
+}
+
+.settings-profile-pick.pickable:hover {
+  background: var(--hover);
+}
+
+.settings-profile-wrench {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.settings-profile-wrench svg {
+  width: 16px;
+  height: 16px;
+}
+
+.settings-profile-wrench:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.settings-profile-wrench.current {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--accent);
+}
+
+/* The Profile page: the profile, larger, with the way to pick another */
+.settings-profile-card-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.settings-profile-pic.big {
+  width: 56px;
+  height: 56px;
+  font-size: 24px;
+}
+
+.settings-profile-card-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.settings-lastfm-row .wrapped-search {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-lastfm-roon {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-lastfm-roon[hidden] {
+  display: none;
 }
 
 .settings-profile-pic {
@@ -5068,6 +5300,9 @@ body > .wrapped-toast {
   place-items: center;
   width: 40px;
   height: 40px;
+  overflow: hidden;
+  font-size: 17px;
+  font-weight: 700;
   border-radius: 50%;
   background: color-mix(in srgb, var(--accent) 16%, transparent);
   color: var(--accent);

@@ -175,7 +175,7 @@ fn on_menu(app: &AppHandle, event: MenuEvent) {
     };
     // Saves, tells Settings, and puts the check marks right (Windows also
     // flips a check mark by itself when clicked)
-    if settings::update_settings(app.clone(), change).is_err() {
+    if settings::update_settings(app.clone(), change, None).is_err() {
         sync(app, &saved);
     }
 }

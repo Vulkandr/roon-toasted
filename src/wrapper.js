@@ -42,6 +42,8 @@ const radioBtn = $("#radio");
 const zoneButton = $("#zone-button");
 const zoneName = $("#zone-name");
 const zoneMenu = $("#zone-menu");
+const profileMenu = $("#profile-menu");
+const profileButton = $("#profile-button");
 const muteBtn = $("#mute");
 const volume = $("#volume");
 const volumeValue = $("#volume-value");
@@ -190,7 +192,7 @@ function reportHole() {
   const rect = hole.getBoundingClientRect();
   const covers = [];
   const radii = []; // a cover's rounded corners are cut too, so Roon shows there
-  for (const element of [zoneMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedSide, wrapped]) {
+  for (const element of [zoneMenu, profileMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedSide, wrapped]) {
     if (element.hidden) continue;
     const r = element.getBoundingClientRect();
     // The cut-out has hard edges, so the buttons keep theirs square and paint
@@ -222,6 +224,7 @@ function reportHole() {
 const holeWatcher = new ResizeObserver(reportHole);
 holeWatcher.observe(hole);
 holeWatcher.observe(zoneMenu);
+holeWatcher.observe(profileMenu);
 holeWatcher.observe(queuePanel);
 holeWatcher.observe(stage);
 holeWatcher.observe(wrappedBtn);
@@ -415,12 +418,14 @@ function applySettings(settings) {
   bgHistory = Array.isArray(settings.backgroundImages) ? settings.backgroundImages : [];
   if (!bgFileList.hidden) fillBgFiles();
   const colorsChanged =
-    settings.toasterColors !== colorsMode ||
-    settings.toasterAccent !== customAccent ||
-    settings.toasterBackground !== customBackground;
-  colorsMode = settings.toasterColors;
-  customAccent = settings.toasterAccent;
-  customBackground = settings.toasterBackground;
+    settings.shownColors !== colorsMode ||
+    settings.shownAccent !== customAccent ||
+    settings.shownBackground !== customBackground;
+  // (the colors to show: the profile in use's own if it has any, else the
+  // general ones; settings.rs works that out)
+  colorsMode = settings.shownColors;
+  customAccent = settings.shownAccent;
+  customBackground = settings.shownBackground;
   addMode = settings.libraryAddMode;
   rememberPlayer = settings.wrapperRememberPlayer !== false;
   if (colorsChanged) applyColors();
@@ -4018,9 +4023,15 @@ barDiveBtn.addEventListener("click", (event) => {
 // menu follow, and an open Settings or Discover page redraws
 listen("wrapped-settings-changed", (event) => {
   const was = wrappedSettings?.discovery !== false;
+  const ownWas = !!wrappedSettings?.sharedGeneral;
   wrappedSettings = event.payload;
   paintPieceDive();
   applyPageSize();
+  // (the profile in use got, or lost, settings of its own: General shows whose)
+  if (!!wrappedSettings?.sharedGeneral !== ownWas && !wrapped.hidden && wrappedStack.at(-1)?.page === "settings") {
+    settingsEditShared = false;
+    redrawSettingsInPlace();
+  }
   if ((wrappedSettings?.discovery !== false) === was) return;
   loadDiscoverRatings();
   if (wrapped.hidden) return;
@@ -4644,6 +4655,7 @@ document.addEventListener("keydown", (event) => {
   if (dialogOpen()) cancelDialog();
   else if (bgWindowOpen()) leaveBgWindow();
   else if (!zoneMenu.hidden) closeZoneMenu();
+  else if (!profileMenu.hidden) closeProfileMenu();
   else if (!wrappedSide.hidden) setWrappedSide(false);
   else if (!queueSaveForm.hidden) hideQueueSave();
   else if (!queuePanel.hidden) setQueueOpen(false);
@@ -4651,6 +4663,159 @@ document.addEventListener("keydown", (event) => {
   else if (!stage.hidden) closeStage();
   else if (!wrapped.hidden) setWrappedOpen(false);
 });
+
+// ===== Profiles ============================================================
+//
+// A Roon account can have several profiles. The library is shared; hearts,
+// bans and listening history are kept per profile. Toasted uses one of
+// them (library.rs: the one picked here, saved; the account's first until
+// one is picked), shown in the title bar and at the top of Settings' list.
+// Picking another changes where Toasted's hearts go from then on. It does
+// not change the profile Roon's own app is on: that's Roon's own choice,
+// out of our reach, and the menu says so.
+
+let profileState = { profiles: [], current: null };
+const currentProfile = () => profileState.profiles.find((p) => p.id === profileState.current) ?? null;
+
+// A profile's picture in a round frame, or its initial without one
+function paintProfilePic(frame, profile, size = 48) {
+  frame.replaceChildren();
+  const initial = () => {
+    frame.replaceChildren();
+    frame.textContent = (profile?.name || "?").trim().charAt(0).toUpperCase();
+  };
+  if (!profile?.imageKey) return initial();
+  const img = document.createElement("img");
+  img.alt = "";
+  img.addEventListener("error", initial);
+  img.src = `${convertFileSrc(profile.imageKey, "roonimg")}?width=${size}&height=${size}&src=broker&square=1&v=2`;
+  frame.append(img);
+}
+
+// Settings' entry for the profile, at the top of its list (if Settings is
+// the page that's open)
+function paintSettingsProfile() {
+  const entry = document.querySelector(".settings-nav-profile");
+  if (!entry) return;
+  const profile = currentProfile();
+  const pic = entry.querySelector(".settings-profile-pic");
+  if (profile) paintProfilePic(pic, profile, 80);
+  else pic.innerHTML = WRAPPED_ICONS.artist;
+  entry.querySelector(".settings-profile-name").textContent = profile ? profile.name : "Profile";
+  entry.querySelector(".settings-profile-note").textContent = profile ? "Roon profile" : "Needs Hearts & Library";
+  const pick = entry.querySelector(".settings-profile-pick");
+  pick.classList.toggle("pickable", profileState.profiles.length > 1);
+  pick.title = profileState.profiles.length > 1 ? "Pick another profile" : "";
+  // (the Profile page, if it's the one open, shows this profile too)
+  settingsProfilePaint?.();
+}
+// The Profile page's own painting, while Settings is open
+let settingsProfilePaint = null;
+// A profile set to Custom (the Profile page) has General settings of its
+// own, and the General page then shows and changes those. "Edit Default"
+// there switches it to the shared ones instead, which this remembers until
+// it's switched back or another profile is picked
+let settingsEditShared = false;
+
+function showProfiles(state) {
+  const before = profileState.current;
+  profileState = state?.profiles ? state : { profiles: [], current: null };
+  if (profileState.current !== before) {
+    // (its settings may be its own: an open Settings shows them)
+    settingsEditShared = false;
+    if (before !== null && !wrapped.hidden && wrappedStack.at(-1)?.page === "settings") redrawSettingsInPlace();
+  }
+  const profile = currentProfile();
+  profileButton.hidden = !profile;
+  if (profile) {
+    paintProfilePic(profileButton.querySelector(".profile-pic"), profile);
+    profileButton.querySelector(".profile-name").textContent = profile.name;
+    profileButton.title =
+      profileState.profiles.length > 1
+        ? "The Roon profile Toasted uses: hearts, bans and history go to it. Click to pick another"
+        : "The Roon profile Toasted uses: hearts, bans and history go to it";
+  }
+  paintSettingsProfile();
+  if (!profileMenu.hidden) closeProfileMenu();
+}
+
+// The menu's anchor (the title bar's button, or Settings' entry), so a
+// click on it again closes the menu
+let profileAnchor = null;
+
+function openProfileMenu(anchor) {
+  if (profileState.profiles.length === 0) return;
+  profileMenu.replaceChildren();
+  for (const p of profileState.profiles) {
+    const option = document.createElement("button");
+    option.className = "zone-option profile-option";
+    const pic = document.createElement("span");
+    pic.className = "profile-pic";
+    paintProfilePic(pic, p);
+    const name = document.createElement("span");
+    name.className = "profile-option-name";
+    name.textContent = p.name;
+    option.append(pic, name);
+    if (p.id === profileState.current) {
+      option.classList.add("selected");
+      option.insertAdjacentHTML("beforeend", CHECK_ICON);
+    }
+    option.addEventListener("click", async () => {
+      closeProfileMenu();
+      if (p.id === profileState.current) return;
+      try {
+        showProfiles(await invoke("library_set_profile", { id: p.id }));
+      } catch (err) {
+        if (wrapped.hidden) console.error(err);
+        else wrappedToast(String(err));
+      }
+    });
+    profileMenu.append(option);
+  }
+  const note = document.createElement("div");
+  note.className = "profile-menu-note";
+  note.textContent = "Changes the profile Toasted uses. Roon's own app keeps the profile it's on.";
+  profileMenu.append(note);
+  profileMenu.hidden = false;
+  profileAnchor = anchor;
+  // Under its anchor: right-aligned with the title bar's button, left-
+  // aligned with Settings' entry
+  const rect = anchor.getBoundingClientRect();
+  const left = anchor === profileButton ? rect.right - profileMenu.offsetWidth : rect.left;
+  profileMenu.style.left = `${Math.max(12, Math.min(left, window.innerWidth - profileMenu.offsetWidth - 12))}px`;
+  profileMenu.style.top = `${rect.bottom + 6}px`;
+  reportHole();
+}
+
+function closeProfileMenu() {
+  if (profileMenu.hidden) return;
+  profileMenu.hidden = true;
+  profileAnchor = null;
+  reportHole();
+}
+
+function toggleProfileMenu(anchor) {
+  if (!profileMenu.hidden && profileAnchor === anchor) closeProfileMenu();
+  else if (profileState.profiles.length > 1) openProfileMenu(anchor);
+}
+
+profileButton.addEventListener("click", () => toggleProfileMenu(profileButton));
+document.addEventListener("pointerdown", (event) => {
+  if (profileMenu.hidden) return;
+  if (profileMenu.contains(event.target) || profileAnchor?.contains(event.target)) return;
+  closeProfileMenu();
+});
+window.addEventListener("resize", closeProfileMenu);
+window.addEventListener("blur", closeProfileMenu);
+
+const readProfiles = () =>
+  invoke("library_profiles")
+    .then(showProfiles)
+    .catch((err) => console.error(err));
+readProfiles();
+listen("library-profiles", (event) => showProfiles(event.payload));
+// (Hearts & Library switched off, or its link lost: no profile to show)
+listen("library-status", readProfiles);
 
 // ===== Wrapped =============================================================
 
@@ -4986,8 +5151,9 @@ function fillWrappedSide() {
       wrappedSide.append(option);
     }
   }
-  // Roon's playlists, like Roon's sidebar lists them (Wrapped's own first,
-  // as the Playlists page does); one plays on click
+  // Roon's playlists, like Roon's sidebar lists them: this week's Discover
+  // lists on top with a line under them, then all the rest, newest first;
+  // one opens on click
   const lists = document.createElement("div");
   lists.className = "wrapped-side-lists";
   wrappedSide.append(lists);
@@ -5000,7 +5166,8 @@ function fillWrappedSide() {
         head.className = "wrapped-side-caption";
         head.textContent = "Playlists";
         lists.append(head);
-        const sorted = [...list.filter(isWrappedPlaylist), ...list.filter((p) => !isWrappedPlaylist(p))];
+        const week = thisWeeksLists(list);
+        const sorted = [...week, ...newestPlaylistsFirst(list.filter((p) => !isThisWeeksList(p)))];
         for (const p of sorted) {
           const option = document.createElement("button");
           option.className = "wrapped-side-btn wrapped-side-list";
@@ -5012,6 +5179,11 @@ function fillWrappedSide() {
           if (current === "playlist" && wrappedStack.at(-1)?.handle === p.handle) option.classList.add("selected");
           option.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
           lists.append(option);
+          if (week.length && p === week.at(-1) && sorted.length > week.length) {
+            const line = document.createElement("div");
+            line.className = "wrapped-side-line";
+            lists.append(line);
+          }
         }
       })
       .catch(() => {});
@@ -5985,11 +6157,18 @@ const WRAPPED_PAGES = {
     }
     if (ticket !== wrappedTicket) return;
     wrappedBody.replaceChildren(wrappedCorner("Ban list", () => openWrappedPage({ page: "banlist" })));
-    const mine = list.filter(isWrappedPlaylist);
-    const others = list.filter((p) => !isWrappedPlaylist(p));
+    const week = thisWeeksLists(list);
+    const mine = newestPlaylistsFirst(list.filter((p) => isWrappedPlaylist(p) && !isThisWeeksList(p)));
+    const others = newestPlaylistsFirst(list.filter((p) => !isWrappedPlaylist(p)));
+    // (this week's Discover lists first, a line under them)
+    if (week.length) {
+      const line = document.createElement("hr");
+      line.className = "wrapped-playlists-line";
+      wrappedBody.append(wrappedSection("This week's Discover"), playlistRows(week, true), line);
+    }
     if (mine.length) {
       wrappedBody.append(wrappedSection("Made by Wrapped"), playlistRows(mine, true));
-    } else {
+    } else if (!week.length) {
       wrappedBody.append(wrappedNote("Wrapped hasn't made any playlists yet. On an album page, the list button saves the album as one."));
     }
     if (others.length) wrappedBody.append(wrappedSection("Your other playlists"), playlistRows(others, false));
@@ -10323,25 +10502,37 @@ WRAPPED_PAGES.settings = async function () {
     pageNav.append(link);
     return link;
   };
-  // The profile, at the very top of the list. Until profiles are built it
-  // says so (on hover too); it becomes the profile's picture and name, and
-  // the way to pick another
+  // The profile, at the very top of the list, as a split button: its
+  // picture and name (painted by paintSettingsProfile, and again whenever
+  // it changes) pick another profile when the account has more than one;
+  // the wrench beside them opens the Profile page, with what's set per
+  // profile
   const profileEntry = document.createElement("div");
   profileEntry.className = "settings-nav-profile";
+  const profilePick = document.createElement("button");
+  profilePick.className = "settings-profile-pick";
   const profilePic = document.createElement("span");
   profilePic.className = "settings-profile-pic";
-  profilePic.innerHTML = WRAPPED_ICONS.artist;
   const profileText = document.createElement("div");
   profileText.className = "settings-profile-text";
   const profileName = document.createElement("div");
   profileName.className = "settings-profile-name";
-  profileName.textContent = "Profile";
   const profileNote = document.createElement("div");
   profileNote.className = "settings-profile-note";
-  profileNote.textContent = "Coming in this version";
   profileText.append(profileName, profileNote);
-  profileEntry.append(profilePic, profileText);
-  hoverTip(profileEntry, "Coming in this version: pick which of your Roon profiles Wrapped uses. Hearts, bans, listening history and Wrapped Discovery follow it.");
+  profilePick.append(profilePic, profileText);
+  profilePick.addEventListener("click", () => toggleProfileMenu(profilePick));
+  const profileWrench = document.createElement("button");
+  profileWrench.className = `settings-profile-wrench${wrappedSettingsPage === "profile" ? " current" : ""}`;
+  profileWrench.dataset.page = "profile";
+  profileWrench.innerHTML = WRENCH_ICON;
+  profileWrench.title = "This profile's settings";
+  profileWrench.setAttribute("aria-label", "This profile's settings");
+  profileWrench.addEventListener("click", () => {
+    showWrappedSettingsPage("profile");
+    wrappedBody.scrollTop = 0;
+  });
+  profileEntry.append(profilePick, profileWrench);
   pageNav.append(profileEntry);
   const pageOf = {};
   const pageHolder = document.createElement("div");
@@ -10355,13 +10546,15 @@ WRAPPED_PAGES.settings = async function () {
       pageNav.append(sep);
     }
     followed = follows;
-    const link = navLink(label, icon);
-    link.dataset.page = name;
-    link.classList.toggle("current", name === wrappedSettingsPage);
-    link.addEventListener("click", () => {
-      showWrappedSettingsPage(name);
-      wrappedBody.scrollTop = 0;
-    });
+    if (icon) {
+      const link = navLink(label, icon);
+      link.dataset.page = name;
+      link.classList.toggle("current", name === wrappedSettingsPage);
+      link.addEventListener("click", () => {
+        showWrappedSettingsPage(name);
+        wrappedBody.scrollTop = 0;
+      });
+    }
     const column = document.createElement("div");
     column.className = "wrapped-settings-column settings-page";
     column.dataset.page = name;
@@ -10375,12 +10568,19 @@ WRAPPED_PAGES.settings = async function () {
   navLink("Toasted's Settings", "settings").addEventListener("click", () => send("open_window", { window: "settings" }));
   columns.append(pageNav, pageHolder);
   wrappedBody.append(columns);
+  paintSettingsProfile();
   const left = pageOf.general;
   // Each tier and whether it's working, for General's line of them
   const tierStates = [];
+  // The General settings the page shows and changes: the ones in use (a
+  // Custom profile's own, or the shared ones), or after "Edit Default" the
+  // shared ones behind a Custom profile's
+  const sharedMode = () => settingsEditShared && !!wrappedSettings?.sharedGeneral;
+  const gen = () => (sharedMode() ? { ...wrappedSettings, ...wrappedSettings.sharedGeneral } : wrappedSettings);
+  if (!wrappedSettings?.sharedGeneral) settingsEditShared = false;
   const save = async (changes) => {
     try {
-      wrappedSettings = await invoke("wrapped_settings_update", { changes });
+      wrappedSettings = await invoke("wrapped_settings_update", { changes, shared: sharedMode() });
       wrappedToast("Saved");
     } catch (err) {
       wrappedToast(String(err));
@@ -11378,38 +11578,19 @@ WRAPPED_PAGES.settings = async function () {
       startBusy(true);
     }
   });
-  // Your Last.fm account: its scrobbles reach back before Roon's history
-  // (folded to its title until opened)
-  const userBox = document.createElement("details");
-  userBox.className = "settings-card-sub";
-  const userTitle = document.createElement("summary");
-  userTitle.className = "settings-card-row-name";
-  userTitle.textContent = "Last.fm username (optional)";
-  const userNote = statusLine("If you scrobble to Last.fm, your plays from before Roon's history count too (Home, History's tops). Read once, then new ones daily.");
-  const userRow = document.createElement("div");
-  userRow.className = "wrapped-setting-row";
-  const userInput = document.createElement("input");
-  userInput.className = "wrapped-search";
-  userInput.placeholder = "Your Last.fm username";
-  userInput.value = wrappedSettings.lastfmUser || "";
-  userInput.autocomplete = "off";
-  const saveUser = button("Save", async () => {
-    await save({ lastfmUser: userInput.value.trim() });
-    if (userInput.value.trim()) paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: false }).catch(() => null));
-    else userState.textContent = "";
-  });
-  userInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") saveUser.click();
-  });
+  // Your Last.fm scrobbles reach back before Roon's history. Whose they
+  // are is set on the Profile page (it goes with the profile); reading
+  // them again stays here, with the rest of what Wrapped reads
+  const userState = statusLine();
   // (a read that stopped, or one to do over)
   const again = button("Rescan", async () => {
-    if (!userInput.value.trim()) return;
+    if (!wrappedSettings.lastfmUser?.trim()) return;
     paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: true }).catch(() => null));
   });
   again.title = "Read the whole history from Last.fm again";
-  const userState = statusLine();
   const paintScrobbles = (st) => {
-    if (!st || !st.user) return (userState.textContent = "");
+    again.disabled = !wrappedSettings.lastfmUser?.trim();
+    if (!st || !st.user) return (userState.textContent = "No Last.fm username yet: it's set on the Profile page (the wrench by your profile).");
     const count = st.plays.toLocaleString();
     const from = st.oldest ? ` back to ${new Date(st.oldest).toLocaleDateString()}` : "";
     userState.textContent = st.error
@@ -11417,14 +11598,78 @@ WRAPPED_PAGES.settings = async function () {
       : st.syncing
         ? `Reading ${st.user}'s scrobbles... ${count} so far${from}`
         : st.plays
-          ? `${count} scrobbles of ${st.user}${from}${st.complete ? "" : " (not all read yet: it goes on by itself, or Save reads now)"}`
+          ? `${count} scrobbles of ${st.user}${from}${st.complete ? "" : " (not all read yet: it goes on by itself, or Rescan reads now)"}`
           : `Nothing read from ${st.user} yet.`;
   };
-  userRow.append(userInput, saveUser, again);
-  userBox.append(userTitle, userNote, userRow, userState);
-  music.append(userBox);
+  cardRow(music, "Last.fm scrobbles", userState, again);
+  paintScrobbles(null);
   invoke("wrapped_scrobbles_status").then(paintScrobbles).catch(() => {});
   scrobblesPaint = paintScrobbles;
+
+  // ----- The Profile page (the wrench by the profile): the profile in
+  // use, and what's set per profile. So far that's its Last.fm username
+  // (one for every profile until each has its own listening history) -----
+  const whoCard = card("Profile", "The Roon profile Wrapped uses. Hearts, bans and listening history are kept per profile; the library and the playlists are shared. Picking another here doesn't change the profile Roon's own app is on.", pageOf.profile);
+  whoCard.classList.add("settings-profile-card");
+  const whoPic = document.createElement("span");
+  whoPic.className = "settings-profile-pic big";
+  const whoName = document.createElement("div");
+  whoName.className = "settings-profile-card-name";
+  const whoChange = button("Change", () => toggleProfileMenu(whoChange));
+  const whoRow = document.createElement("div");
+  whoRow.className = "settings-profile-card-row";
+  whoRow.append(whoPic, whoName, whoChange);
+  whoCard.append(whoRow);
+
+  const fmCard = card("Last.fm", "If you scrobble to Last.fm, your plays from before Roon's history count too (Home, History's tops). They're read once after you save a username, then new ones daily; Your Music has the read and Rescan.", pageOf.profile);
+  const userRow = document.createElement("div");
+  userRow.className = "wrapped-setting-row settings-lastfm-row";
+  const userInput = document.createElement("input");
+  userInput.className = "wrapped-search";
+  userInput.placeholder = "Your Last.fm username";
+  userInput.value = wrappedSettings.lastfmUser || "";
+  userInput.autocomplete = "off";
+  const saveUser = button("Save", async () => {
+    await save({ lastfmUser: userInput.value.trim() });
+    paintRoonFm();
+    if (userInput.value.trim()) paintScrobbles(await invoke("wrapped_scrobbles_sync", { again: false }).catch(() => null));
+    else paintScrobbles(null);
+  });
+  userInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") saveUser.click();
+  });
+  userRow.append(userInput, saveUser);
+  // What Roon has for this profile, and a way to take it over
+  const roonFm = statusLine();
+  const useRoonFm = button("Use it", () => {
+    userInput.value = currentProfile()?.lastfmUser || "";
+    saveUser.click();
+  });
+  const roonFmRow = document.createElement("div");
+  roonFmRow.className = "settings-lastfm-roon";
+  roonFmRow.append(roonFm, useRoonFm);
+  const paintRoonFm = () => {
+    const theirs = currentProfile()?.lastfmUser || "";
+    const ours = (wrappedSettings.lastfmUser || "").trim();
+    roonFmRow.hidden = !currentProfile();
+    roonFm.textContent = theirs ? `In Roon, this profile is on Last.fm as ${theirs}.` : "In Roon, this profile isn't signed in to Last.fm.";
+    useRoonFm.hidden = !theirs || theirs.toLowerCase() === ours.toLowerCase();
+  };
+  fmCard.append(userRow, roonFmRow, statusLine("For now one username serves every profile. Each profile gets its own once listening history is kept per profile."));
+  // (the Colors card further down, once it's there)
+  let paintOwnColors = null;
+  settingsProfilePaint = () => {
+    if (ticket !== wrappedTicket) return (settingsProfilePaint = null);
+    paintOwnColors?.();
+    const profile = currentProfile();
+    if (profile) paintProfilePic(whoPic, profile, 120);
+    else whoPic.innerHTML = WRAPPED_ICONS.artist;
+    whoName.textContent = profile ? profile.name : "No profile: Hearts & Library is off or not connected";
+    whoChange.hidden = profileState.profiles.length < 2;
+    paintRoonFm();
+  };
+  settingsProfilePaint();
+
   // Library
   const libText = statusLine("...");
   const libButton = button("Read the library", async () => {
@@ -11564,20 +11809,20 @@ WRAPPED_PAGES.settings = async function () {
     }
     return row;
   };
-  cardRow(similarCard, "Matched by", statusLine("Roon's own picks, or artists sharing the tags"), pillRow(SIMILAR_BY, wrappedSettings.similarBy, "similarBy"), true);
-  cardRow(similarCard, "Which it shows", statusLine("Artists you have, or ones you don't"), pillRow(SIMILAR_SCOPES, wrappedSettings.similarScope || "library", "similarScope"), true);
+  cardRow(similarCard, "Matched by", statusLine("Roon's own picks, or artists sharing the tags"), pillRow(SIMILAR_BY, gen().similarBy, "similarBy"), true);
+  cardRow(similarCard, "Which it shows", statusLine("Artists you have, or ones you don't"), pillRow(SIMILAR_SCOPES, gen().similarScope || "library", "similarScope"), true);
 
   // Page size: Wrapped's pages bigger or smaller, or with the window
   const sizeCard = card("Page size", "How big Wrapped's pages are, wider too; the top bar, side menu and player keep Roon's size. Scale with window follows the window's width, down to 90%.");
   const sizeRow = document.createElement("div");
   sizeRow.className = "wrapped-tabs small page-size";
-  const sizeNow = PAGE_SIZES.includes(wrappedSettings.pageSize) ? wrappedSettings.pageSize : "100";
+  const sizeNow = PAGE_SIZES.includes(gen().pageSize) ? gen().pageSize : "100";
   for (const value of PAGE_SIZES) {
     const pill = document.createElement("button");
     pill.className = `wrapped-tab${sizeNow === value ? " selected" : ""}`;
     pill.textContent = value === "auto" ? "Scale with window" : `${value}%`;
     pill.addEventListener("click", async () => {
-      if ((PAGE_SIZES.includes(wrappedSettings.pageSize) ? wrappedSettings.pageSize : "100") === value) return;
+      if ((PAGE_SIZES.includes(gen().pageSize) ? gen().pageSize : "100") === value) return;
       await save({ pageSize: value });
       applyPageSize();
       sizeRow.querySelectorAll(".wrapped-tab").forEach((t) => t.classList.toggle("selected", t === pill));
@@ -11600,7 +11845,7 @@ WRAPPED_PAGES.settings = async function () {
       pill.addEventListener("click", async () => {
         if (pill.classList.contains("selected")) return;
         try {
-          await invoke("update_settings", { changes: change(value) });
+          await invoke("update_settings", { changes: change(value), shared: sharedMode() });
           for (const other of row.children) other.classList.toggle("selected", other === pill);
           wrappedToast("Saved");
           after?.(value);
@@ -11614,16 +11859,20 @@ WRAPPED_PAGES.settings = async function () {
   };
   const colorsCard = card(
     "Colors",
-    "Default keeps Wrapped's own colors; Album art takes them from the album that's playing; Custom uses an accent you pick. The Toaster, the widget and the toasts follow it too.",
+    "Toasted keeps Toasted's own colors; Album art takes them from the album that's playing; Custom uses an accent you pick. The Toaster, the widget and the toasts follow it too.",
   );
-  const colorsNow = ["album", "custom"].includes(toastedNow.toasterColors) ? toastedNow.toasterColors : "default";
+  // (the colors in use, or after Edit Default the shared ones)
+  const colorsOf = sharedMode()
+    ? { colors: toastedNow.toasterColors, accent: toastedNow.toasterAccent, background: toastedNow.toasterBackground }
+    : { colors: toastedNow.shownColors ?? toastedNow.toasterColors, accent: toastedNow.shownAccent ?? toastedNow.toasterAccent, background: toastedNow.shownColors ? toastedNow.shownBackground : toastedNow.toasterBackground };
+  const colorsNow = ["album", "custom"].includes(colorsOf.colors) ? colorsOf.colors : "default";
   // Custom's accent: a swatch with its hex, beside the pills; clicked, the
   // color picker. The page shows the color while it's dragged, and it's
   // saved when let go.
   // The swatch is split: the accent, and the background (its own, or the
   // one tinted from the accent).
-  let accentNow = toastedNow.toasterAccent || APP_ACCENT;
-  let backgroundNow = toastedNow.toasterBackground ?? null;
+  let accentNow = colorsOf.accent || APP_ACCENT;
+  let backgroundNow = colorsOf.background ?? null;
   const tintedBackground = () => cssToHex(customPalette(accentNow, null, darkScheme.matches)["--bg"]);
   const accentBtn = document.createElement("button");
   accentBtn.className = "settings-accent";
@@ -11653,13 +11902,14 @@ WRAPPED_PAGES.settings = async function () {
         if (key === "accent") accentNow = hex;
         else backgroundNow = hex;
         showAccent();
-        paintColors(document.documentElement, customPalette(accentNow, backgroundNow, darkScheme.matches));
+        // (shown while it's dragged, unless these aren't the colors in use)
+        if (!sharedMode()) paintColors(document.documentElement, customPalette(accentNow, backgroundNow, darkScheme.matches));
       },
       onChange: async (hex, key) => {
         if (key === "background") backgroundNow = hex;
         showAccent();
         try {
-          await invoke("update_settings", { changes: key === "accent" ? { toasterAccent: hex } : { toasterBackground: hex } });
+          await invoke("update_settings", { changes: key === "accent" ? { toasterAccent: hex } : { toasterBackground: hex }, shared: sharedMode() });
         } catch (err) {
           wrappedToast(String(err));
         }
@@ -11671,7 +11921,7 @@ WRAPPED_PAGES.settings = async function () {
   colorsControls.append(
     toastedPills(
       [
-        ["default", "Default"],
+        ["default", "Toasted"],
         ["album", "Album art"],
         ["custom", "Custom"],
       ],
@@ -11687,6 +11937,56 @@ WRAPPED_PAGES.settings = async function () {
   );
   colorsCard.head.append(colorsControls);
 
+  // ----- The profile's settings, on the Profile page: Default (the shared
+  // General settings; every profile starts there) or Custom (its own copy
+  // of them, colors included, which the General page then shows and
+  // changes). wrapped.rs: wrapped_profile_custom -----
+  const ownCard = card(
+    "Settings",
+    "Default uses the shared settings on the General page. Custom gives this profile its own: they start as a copy of the shared ones, and the General page then shows and changes this profile's. Going back to Default keeps them for the next time.",
+    pageOf.profile,
+  );
+  fmCard.before(ownCard);
+  let customIds = [...(toastedNow.customProfiles || [])];
+  const ownPills = document.createElement("div");
+  ownPills.className = "wrapped-tabs small";
+  const paintOwn = () => {
+    const custom = !!profileState.current && customIds.includes(profileState.current);
+    for (const pill of ownPills.children) pill.classList.toggle("selected", (pill.dataset.value === "custom") === custom);
+    ownPills.hidden = !profileState.current;
+  };
+  for (const [value, label] of [
+    ["default", "Default"],
+    ["custom", "Custom"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.value = value;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      const id = profileState.current;
+      if (!id || pill.classList.contains("selected")) return;
+      try {
+        await invoke("wrapped_profile_custom", { id, custom: value === "custom" });
+        wrappedToast(value === "custom" ? "This profile has its own settings now: see General" : "Back on the shared settings");
+        settingsEditShared = false;
+        redrawSettingsInPlace();
+      } catch (err) {
+        wrappedToast(String(err));
+      }
+    });
+    ownPills.append(pill);
+  }
+  // (and the way to those settings: the General page, which shows this
+  // profile's own or the shared ones, whichever it's on)
+  const ownEnd = document.createElement("div");
+  ownEnd.className = "settings-own-end";
+  ownEnd.append(ownPills, button("Open Settings", () => showWrappedSettingsPage("general")));
+  ownCard.head.append(ownEnd);
+  // (another profile picked: its choice shows here)
+  paintOwnColors = paintOwn;
+  paintOwn();
+
   // Default Menu: what shows when Wrapped opens (see applyDefaultMenu),
   // and which side menu comes with a Wrapped page
   const sideCard = card("Default Menu", "What shows when Wrapped opens: Wrapped's side menu and Home page, or Roon's own sidebar and page. Opening a Wrapped page brings this side menu with it too. The arrow next to the Wrapped button switches menus any time.");
@@ -11695,7 +11995,7 @@ WRAPPED_PAGES.settings = async function () {
       ["wrapped", "Wrapped"],
       ["roon", "Roon"],
     ],
-    wrappedSettings.sideMenu === "wrapped" ? "wrapped" : "roon",
+    gen().sideMenu === "wrapped" ? "wrapped" : "roon",
     "sideMenu",
   ));
 
@@ -11706,7 +12006,7 @@ WRAPPED_PAGES.settings = async function () {
       ["wrapped", "Wrapped"],
       ["roon", "Roon"],
     ],
-    wrappedSettings.genres === "roon" ? "roon" : "wrapped",
+    gen().genres === "roon" ? "roon" : "wrapped",
     "genres",
   ));
 
@@ -11845,6 +12145,30 @@ WRAPPED_PAGES.settings = async function () {
     h.textContent = title;
     return h;
   };
+  // A Custom profile: a line on top says whose settings these are, with
+  // the way to the shared ones behind them (and back)
+  if (wrappedSettings?.sharedGeneral) {
+    const who = currentProfile()?.name || "this profile";
+    const banner = document.createElement("div");
+    banner.className = "settings-scope";
+    const words = document.createElement("div");
+    words.className = "settings-scope-words";
+    const title = document.createElement("div");
+    title.className = "settings-scope-title";
+    title.textContent = sharedMode() ? "Default settings" : `Settings for ${who}`;
+    const note = document.createElement("div");
+    note.className = "settings-scope-note";
+    note.textContent = sharedMode()
+      ? `Shared by every profile set to Default. ${who} has its own, so changes here don't show while it's in use.`
+      : "Look and Behavior below are this profile's own.";
+    words.append(title, note);
+    const swap = button(sharedMode() ? `Back to ${who}'s` : "Edit Default", () => {
+      settingsEditShared = !sharedMode();
+      redrawSettingsInPlace();
+    });
+    banner.append(words, swap);
+    left.append(banner);
+  }
   left.append(
     tiersCard,
     group("Look"),
@@ -11856,6 +12180,18 @@ WRAPPED_PAGES.settings = async function () {
     similarCard,
     onboardCard,
   );
+
+  // The choices are lit like the ones in Toasted's own Settings: whichever
+  // side is picked is in the accent, and only a picked "Off" stays plain.
+  // An "Off" is known by its word (here, and on any pill a card adds
+  // later)
+  const markOffs = (root) => {
+    for (const tab of root.querySelectorAll?.(".wrapped-tab") ?? []) tab.classList.toggle("off-side", tab.textContent.trim().toLowerCase() === "off");
+  };
+  markOffs(columns);
+  new MutationObserver((changes) => {
+    for (const change of changes) for (const node of change.addedNodes) if (node.nodeType === 1) markOffs(node.matches?.(".wrapped-tab") ? node.parentNode : node);
+  }).observe(columns, { childList: true, subtree: true });
 };
 
 // A genre (Roon's): what of yours is in it (its sub-genres' too, as Roon
@@ -12171,6 +12507,16 @@ const WRAPPED_PREFIX = "Wrapped: ";
 // The weekly ones (discover.rs) carry their own names, dated copies too
 const WEEKLY_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover", "🧠 "];
 const isWrappedPlaylist = (p) => p.name.startsWith(WRAPPED_PREFIX) || WEEKLY_NAMES.some((n) => p.name.startsWith(n));
+// This week's Discover lists: the two with the bare names (an older week's
+// copy has its date after the name). Always first wherever playlists are
+// listed, in this order, with a line under them
+const THIS_WEEK_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover"];
+const isThisWeeksList = (p) => THIS_WEEK_NAMES.includes(p.name.trim());
+const thisWeeksLists = (list) => THIS_WEEK_NAMES.map((name) => list.find((p) => p.name.trim() === name)).filter(Boolean);
+// Newest first, as Roon lists them (by when each was last changed: the
+// only date a playlist carries; ones without a date keep their place at
+// the end)
+const newestPlaylistsFirst = (list) => [...list].sort((a, b) => (b.modifiedAt ?? -Infinity) - (a.modifiedAt ?? -Infinity));
 const PLAYLIST_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>';
 const TRASH_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
 
@@ -12874,7 +13220,9 @@ const settingsFolds = {};
 // left (the same as Toasted's own Settings); the one that was open comes
 // back (kept in this window's own storage: only a convenience)
 // (the pages that follow the profile come first, right under it)
+// ("profile" has no entry of its own: the wrench by the profile opens it)
 const WRAPPED_SETTINGS_PAGES = [
+  ["profile", "Profile", null, true],
   ["music", "Your Music", "track", true],
   ["discovery", "Wrapped Discovery", "discover", true],
   ["general", "General", "settings", false],
@@ -12896,7 +13244,7 @@ function showWrappedSettingsPage(name) {
     // (kept for this run only)
   }
   for (const page of document.querySelectorAll(".settings-page")) page.hidden = page.dataset.page !== name;
-  for (const link of document.querySelectorAll(".settings-nav-link[data-page]")) link.classList.toggle("current", link.dataset.page === name);
+  for (const link of document.querySelectorAll(".settings-nav-link[data-page], .settings-profile-wrench")) link.classList.toggle("current", link.dataset.page === name);
 }
 
 // Tier 3's setup (sound.rs): whether the models are here, the download
@@ -13422,7 +13770,7 @@ const ONBOARDING_TOURS = {
     { find: () => settingsCard("Your music"), open: () => showWrappedSettingsPage("music"), text: "Your music shows what Wrapped has read: your listening history, your library, and the tags for your artists (genres, styles and scenes from Last.fm and MusicBrainz, filled in by themselves in the background). They keep up as you listen; read them again here after big changes." },
     // (Last.fm: only while no username is saved; the box opens, Save
     // flashes, and Save also starts the read of the scrobbles)
-    { find: () => (wrappedSettings?.lastfmUser?.trim() ? null : document.querySelector(".settings-card-sub")), open: () => (showWrappedSettingsPage("music"), (document.querySelector(".settings-card-sub").open = true)), click: () => [...document.querySelectorAll(".settings-card-sub button")].find((b) => b.textContent === "Save"), ready: () => !!document.querySelector(".settings-card-sub input")?.value.trim(), text: "Roon's history only reaches back to when you started using Roon. If you scrobble to Last.fm, type your username and click Save: everything from before comes in (Save starts the read), so your all-time favorites and History's tops cover your whole listening life, not just the Roon years. No Last.fm? Next step." },
+    { find: () => (wrappedSettings?.lastfmUser?.trim() ? null : settingsCard("Last.fm")), open: () => showWrappedSettingsPage("profile"), click: () => [...(settingsCard("Last.fm")?.querySelectorAll("button") ?? [])].find((b) => b.textContent === "Save"), ready: () => !!settingsCard("Last.fm")?.querySelector("input")?.value.trim(), text: "Roon's history only reaches back to when you started using Roon. If you scrobble to Last.fm, type your username and click Save: everything from before comes in (Save starts the read), so your all-time favorites and History's tops cover your whole listening life, not just the Roon years. No Last.fm? Next step." },
     { find: () => document.querySelector('.settings-page[data-page="discovery"]'), open: () => showWrappedSettingsPage("discovery"), text: "Wrapped Discovery builds your weekly playlists. Its tiers add up: tier 1 works from listeners and tags, tier 2 reads up on each pick with a language model, tier 3 listens to the songs. Each one is optional and set up here." },
     { find: () => settingsCard("Page size"), open: () => showWrappedSettingsPage("general"), text: "Page size makes Wrapped's pages bigger or smaller, or scales them with the window. The top bar, side menu and player keep Roon's size." },
   ],

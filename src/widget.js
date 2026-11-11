@@ -106,12 +106,14 @@ async function applyColors() {
 
 function applySettings(settings) {
   const colorsChanged =
-    settings.toasterColors !== colorsMode ||
-    settings.toasterAccent !== customAccent ||
-    settings.toasterBackground !== customBackground;
-  colorsMode = settings.toasterColors;
-  customAccent = settings.toasterAccent;
-  customBackground = settings.toasterBackground;
+    settings.shownColors !== colorsMode ||
+    settings.shownAccent !== customAccent ||
+    settings.shownBackground !== customBackground;
+  // (the colors to show: the profile in use's own if it has any, else the
+  // general ones; settings.rs works that out)
+  colorsMode = settings.shownColors;
+  customAccent = settings.shownAccent;
+  customBackground = settings.shownBackground;
   lines = settings.widgetLines;
   layoutText();
   if (colorsChanged) applyColors();

@@ -254,7 +254,7 @@ pub fn wrapped_music_folder_status(app: AppHandle) -> FolderStatus {
 
 fn set(app: &AppHandle, folder: String) -> Result<FolderStatus, String> {
     // (through the settings' own update, so the pages hear of it)
-    crate::wrapped::wrapped_settings_update(app.clone(), serde_json::json!({ "musicFolder": folder }))?;
+    crate::wrapped::wrapped_settings_update(app.clone(), serde_json::json!({ "musicFolder": folder }), None)?;
     *INDEX.lock().unwrap() = None;
     read_in_background(app);
     Ok(status(app))

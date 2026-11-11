@@ -62,6 +62,7 @@ fn change_history(app: &AppHandle, change: impl FnOnce(&[String]) -> Vec<String>
     let mut current = settings::load(&path);
     current.background_images = change(&current.background_images);
     settings::save(&path, &current)?;
+    let current = settings::with_shown(app, current);
     let _ = app.emit("settings-changed", &current);
     Ok(current)
 }

@@ -166,6 +166,20 @@ pub enum AddMode {
     Album,
 }
 
+/// One of the Roon account's profiles (hearts, bans and listening history
+/// are kept per profile; the library is shared).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProfileInfo {
+    /// Its id, as hex (stable: this is what gets saved as the one in use).
+    pub id: String,
+    pub name: String,
+    /// Its picture, if it has one.
+    pub image_key: Option<String>,
+    /// The Last.fm account it's signed in to in Roon, if any.
+    pub lastfm_user: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AlbumInfo {
@@ -719,6 +733,10 @@ pub struct PlaylistCard {
     pub length_seconds: Option<i32>,
     pub image_key: Option<String>,
     pub read_only: bool,
+    /// When it was last changed (made, renamed, songs added or removed),
+    /// Unix ms: the only date a playlist carries, and what "newest first"
+    /// goes by.
+    pub modified_at: Option<i64>,
 }
 
 /// What `search` found: Roon's top hits first in each list.
@@ -814,6 +832,9 @@ struct Inner {
     /// Performer object id -> its discography, once browsed.
     discographies: Mutex<HashMap<u64, Vec<DiscoEntry>>>,
     recompute_pending: AtomicBool,
+    /// The profile in use (its ProfileId), picked with `set_profile`; None
+    /// uses the account's first.
+    profile: Mutex<Option<Vec<u8>>>,
     /// Zone id -> which track the zone's current waveform belongs to. Roon
     /// leaves a zone's last waveform in place when the next track has none
     /// (streaming), so a waveform only counts for the track it arrived with.
@@ -893,6 +914,7 @@ impl LibraryClient {
                 last_reported: Mutex::new(HashMap::new()),
                 discographies: Mutex::new(HashMap::new()),
                 recompute_pending: AtomicBool::new(false),
+                profile: Mutex::new(None),
                 waveform_owners: Mutex::new(HashMap::new()),
                 events,
                 changed: Arc::clone(&changed),
@@ -1104,8 +1126,78 @@ impl LibraryClient {
         }
     }
 
+    /// The account's profiles, in the account's own order (the order of
+    /// its Profiles list; any the list doesn't name after those, by id, so
+    /// the order never depends on how the Core happened to send them).
+    fn profile_objects<'g>(&self, g: &'g ObjectGraph) -> Vec<&'g RoonObject> {
+        let has_id = |p: &&RoonObject| p.field("ProfileId").and_then(Value::as_bytes).is_some();
+        let mut rest: Vec<&RoonObject> = g.find_by_type("Profile").filter(has_id).collect();
+        rest.sort_by_key(|p| p.oid);
+        let listed: Vec<u64> = g
+            .find_by_type_prefix("DataList<")
+            .filter(|l| l.type_name.ends_with("Api.Profile>"))
+            .filter_map(|l| l.items.clone())
+            .max_by_key(Vec::len)
+            .unwrap_or_default();
+        let mut ordered: Vec<&RoonObject> = listed.iter().filter_map(|oid| rest.iter().find(|p| p.oid == *oid).copied()).collect();
+        for p in rest {
+            if !ordered.iter().any(|o| o.oid == p.oid) {
+                ordered.push(p);
+            }
+        }
+        ordered
+    }
+
+    /// The profile in use: the one picked (`set_profile`) if the account
+    /// still has it, else the account's first. Hearts, bans and everything
+    /// else kept per profile are read and written for this one.
     fn profile_object<'g>(&self, g: &'g ObjectGraph) -> Option<&'g RoonObject> {
-        g.find_by_type("Profile").find(|p| p.field("ProfileId").and_then(Value::as_bytes).is_some())
+        let all = self.profile_objects(g);
+        let picked = self.inner.profile.lock().unwrap().clone();
+        picked
+            .and_then(|id| all.iter().find(|p| p.field("ProfileId").and_then(Value::as_bytes) == Some(id.as_slice())).copied())
+            .or_else(|| all.first().copied())
+    }
+
+    fn profile_info(g: &ObjectGraph, p: &RoonObject) -> Option<ProfileInfo> {
+        Some(ProfileInfo {
+            id: p.field("ProfileId")?.as_bytes()?.iter().map(|b| format!("{b:02x}")).collect(),
+            name: p.str_field("Name").unwrap_or("").to_string(),
+            image_key: image_key(g, p, "Image"),
+            lastfm_user: p.str_field("LastFmUsername").map(str::to_string).filter(|u| !u.is_empty()),
+        })
+    }
+
+    /// The account's profiles, in the account's order.
+    pub fn profiles(&self) -> Vec<ProfileInfo> {
+        let g = self.inner.graph.lock().unwrap();
+        self.profile_objects(&g).into_iter().filter_map(|p| Self::profile_info(&g, p)).collect()
+    }
+
+    /// The profile in use.
+    pub fn profile(&self) -> Option<ProfileInfo> {
+        let g = self.inner.graph.lock().unwrap();
+        self.profile_object(&g).and_then(|p| Self::profile_info(&g, p))
+    }
+
+    /// Picks the profile to use, by its id in hex (None, or an id that
+    /// isn't hex: the account's first). Each zone's song is reported again,
+    /// since its heart is that profile's now.
+    pub fn set_profile(&self, id: Option<&str>) {
+        let bytes = id.and_then(|hex| {
+            (hex.len() % 2 == 0 && !hex.is_empty())
+                .then(|| (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()).collect::<Option<Vec<u8>>>())
+                .flatten()
+        });
+        {
+            let mut picked = self.inner.profile.lock().unwrap();
+            if *picked == bytes {
+                return;
+            }
+            *picked = bytes;
+        }
+        self.inner.last_reported.lock().unwrap().clear();
+        self.schedule_recompute();
     }
 
     fn profile_sooid(&self, g: &ObjectGraph) -> Option<Vec<u8>> {
@@ -1131,11 +1223,16 @@ impl LibraryClient {
 
     /// Asks the Core for the library's track object; the answer lands in the graph and triggers a Track event.
     fn resolve_library_track(&self, library_track_id: u64) {
+        // (outside the async runtime there's nowhere to ask from: the next
+        // look from inside it asks)
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            return;
+        };
         if !self.is_connected() || !self.inner.resolving.lock().unwrap().insert(library_track_id) {
             return;
         }
         let client = self.clone();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             let library = client.inner.graph.lock().unwrap().first_of_type("Library").map(|o| o.oid);
             if let Some(library) = library {
                 let mut args = Writer::new();
@@ -4429,11 +4526,21 @@ impl LibraryClient {
     }
 
     fn schedule_recompute(&self) {
-        if !self.is_connected() || self.inner.recompute_pending.swap(true, Ordering::SeqCst) {
+        if !self.is_connected() {
+            return;
+        }
+        // Called from outside the async runtime (a plain thread: Toasted's
+        // main thread did, picking a profile, and tokio::spawn panics
+        // there): there's nothing to wait on, so it's done right here
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            self.recompute();
+            return;
+        };
+        if self.inner.recompute_pending.swap(true, Ordering::SeqCst) {
             return;
         }
         let client = self.clone();
-        tokio::spawn(async move {
+        runtime.spawn(async move {
             tokio::time::sleep(RECOMPUTE_DELAY).await;
             client.inner.recompute_pending.store(false, Ordering::SeqCst);
             client.recompute();
@@ -4898,6 +5005,7 @@ fn describe_playlist(g: &ObjectGraph, p: &RoonObject) -> PlaylistCard {
         length_seconds: p.field("LengthSeconds").and_then(Value::as_int),
         image_key,
         read_only: p.field("IsReadOnly").and_then(Value::as_bool) == Some(true),
+        modified_at: p.field("ModificationTime").and_then(ticks_to_ms),
     }
 }
 
