@@ -10302,16 +10302,82 @@ WRAPPED_PAGES.settings = async function () {
     }
   }
   wrappedBody.replaceChildren();
-  // Two columns: general on the left; Wrapped Discovery, the keys and the
-  // picking tiers on the right
+  // Pages, one showing at a time, picked from a list on the left (it
+  // stays put while the page scrolls). The list opens with the profile (a
+  // taller entry), then the pages that follow the profile (Your Music,
+  // Wrapped Discovery with its keys and picking tiers), then General, and
+  // at its end the way to Toasted's own settings (`pageOf`: each page's
+  // column, for the cards below)
   const columns = document.createElement("div");
-  columns.className = "wrapped-settings-columns";
-  const left = document.createElement("div");
-  left.className = "wrapped-settings-column";
-  const right = document.createElement("div");
-  right.className = "wrapped-settings-column";
-  columns.append(left, right);
+  columns.className = "wrapped-settings-pages";
+  const pageNav = document.createElement("nav");
+  pageNav.className = "settings-nav";
+  const navLink = (label, icon) => {
+    const link = document.createElement("button");
+    link.className = "settings-nav-link";
+    link.innerHTML = WRAPPED_ICONS[icon] ?? "";
+    const name = document.createElement("span");
+    name.textContent = label;
+    link.append(name);
+    link.title = label;
+    pageNav.append(link);
+    return link;
+  };
+  // The profile, at the very top of the list. Until profiles are built it
+  // says so (on hover too); it becomes the profile's picture and name, and
+  // the way to pick another
+  const profileEntry = document.createElement("div");
+  profileEntry.className = "settings-nav-profile";
+  const profilePic = document.createElement("span");
+  profilePic.className = "settings-profile-pic";
+  profilePic.innerHTML = WRAPPED_ICONS.artist;
+  const profileText = document.createElement("div");
+  profileText.className = "settings-profile-text";
+  const profileName = document.createElement("div");
+  profileName.className = "settings-profile-name";
+  profileName.textContent = "Profile";
+  const profileNote = document.createElement("div");
+  profileNote.className = "settings-profile-note";
+  profileNote.textContent = "Coming in this version";
+  profileText.append(profileName, profileNote);
+  profileEntry.append(profilePic, profileText);
+  hoverTip(profileEntry, "Coming in this version: pick which of your Roon profiles Wrapped uses. Hearts, bans, listening history and Wrapped Discovery follow it.");
+  pageNav.append(profileEntry);
+  const pageOf = {};
+  const pageHolder = document.createElement("div");
+  pageHolder.className = "settings-pages-holder";
+  let followed = true;
+  for (const [name, label, icon, follows] of WRAPPED_SETTINGS_PAGES) {
+    // (a line between the pages that follow the profile and the rest)
+    if (followed && !follows) {
+      const sep = document.createElement("span");
+      sep.className = "settings-nav-sep";
+      pageNav.append(sep);
+    }
+    followed = follows;
+    const link = navLink(label, icon);
+    link.dataset.page = name;
+    link.classList.toggle("current", name === wrappedSettingsPage);
+    link.addEventListener("click", () => {
+      showWrappedSettingsPage(name);
+      wrappedBody.scrollTop = 0;
+    });
+    const column = document.createElement("div");
+    column.className = "wrapped-settings-column settings-page";
+    column.dataset.page = name;
+    column.hidden = name !== wrappedSettingsPage;
+    pageOf[name] = column;
+    pageHolder.append(column);
+  }
+  const navSep = document.createElement("span");
+  navSep.className = "settings-nav-sep";
+  pageNav.append(navSep);
+  navLink("Toasted's Settings", "settings").addEventListener("click", () => send("open_window", { window: "settings" }));
+  columns.append(pageNav, pageHolder);
   wrappedBody.append(columns);
+  const left = pageOf.general;
+  // Each tier and whether it's working, for General's line of them
+  const tierStates = [];
   const save = async (changes) => {
     try {
       wrappedSettings = await invoke("wrapped_settings_update", { changes });
@@ -10353,7 +10419,7 @@ WRAPPED_PAGES.settings = async function () {
   const discovery = field(
     "Wrapped Discovery",
     "Discover Weekly and Library Rediscover, rating their songs, and \"Suggested because\" in the player. Off, none of it shows or runs; your ratings and the lists in Roon are kept.",
-    right,
+    pageOf.discovery,
   );
   const onOff = document.createElement("div");
   onOff.className = "wrapped-tabs small";
@@ -10444,7 +10510,7 @@ WRAPPED_PAGES.settings = async function () {
   });
   lastfmRow.append(input, show, saveKey);
   if (!discoveryOn) {
-    const key = field("Last.fm API key", keyWords(), right);
+    const key = field("Last.fm API key", keyWords(), pageOf.discovery);
     // No key yet: the same slow glow as Toasted's Core card without a Core
     key.classList.toggle("attention", !wrappedSettings.lastfmKey);
     key.append(lastfmRow);
@@ -10482,7 +10548,7 @@ WRAPPED_PAGES.settings = async function () {
     // (right under Discovery's Off / On, no heading of their own)
     const tiers = document.createElement("div");
     tiers.className = "wrapped-setting tiers-close";
-    right.append(tiers);
+    pageOf.discovery.append(tiers);
     const tierCards = document.createElement("div");
     tierCards.className = "picking-tiers";
     // Each tier is a section; the ones switched on, from tier 1 down, share
@@ -10492,6 +10558,7 @@ WRAPPED_PAGES.settings = async function () {
       const card = document.createElement("div");
       card.className = `picking-tier-section ${stateClass}`;
       sections.push({ el: card, on: stateClass === "on" });
+      tierStates.push({ level, title, state, on: stateClass === "on" });
       const head = document.createElement("div");
       head.className = "picking-tier-head";
       const name = document.createElement("span");
@@ -11197,21 +11264,21 @@ WRAPPED_PAGES.settings = async function () {
     tiers.append(tierCards);
   }
 
-  // ----- The left column: cards, in the order they matter when setting
-  // up: what Wrapped reads from Roon (everything builds on it), the
-  // Similar rows, the page size, the colors and Hearts & Library (Toasted's
-  // settings, shared). Onboarding and the rest of Toasted's settings go
-  // on the right, under the tiers -----
-  // (on the left, compact: the title's line has the title, an i with the
-  // words on hover, and room on the right for the card's control, as
-  // box.head; on the right, the words stay under the title)
-  const card = (title, text, where = left) => {
+  // ----- The cards, each onto its page (General unless it says another):
+  // what Wrapped reads from Roon and Hearts & Library (Toasted's setting,
+  // shared) on Your Music, and the page size, the colors, the menu, the
+  // genres, the Similar rows and Onboarding on General (put in order at
+  // the end of this function) -----
+  // (compact: the title's line has the title, an i with the words on
+  // hover, and room on the right for the card's control, as box.head;
+  // `plain`: the words stay under the title)
+  const card = (title, text, where = left, plain = false) => {
     const box = document.createElement("section");
     box.className = "settings-card";
     const h = document.createElement("div");
     h.className = "settings-card-title";
     h.textContent = title;
-    if (where === left) {
+    if (!plain) {
       const head = document.createElement("div");
       head.className = "settings-card-head";
       const name = document.createElement("div");
@@ -11278,7 +11345,7 @@ WRAPPED_PAGES.settings = async function () {
   const n = (x) => (x ?? 0).toLocaleString();
 
   // Your music: the history, the library and the artists' tags
-  const music = card("Your music", "What Wrapped reads from Roon (and Last.fm) to work from. It's kept up to date as you listen; read it again after big changes.");
+  const music = card("Your music", "What Wrapped reads from Roon (and Last.fm) to work from. It's kept up to date as you listen; read it again after big changes.", pageOf.music);
   // History, with its progress while it's read (from here, the banner or
   // the History page)
   const historyText = statusLine();
@@ -11646,7 +11713,7 @@ WRAPPED_PAGES.settings = async function () {
   // Hearts & Library: the link to Roon's library that the hearts, Add to
   // library, the quality light and Wrapped's pages run on; and what Add to
   // library adds
-  const heartsCard = card("Hearts & Library", "The link to Roon's library that hearts, Add to library, the quality light and Wrapped's own pages run on. It uses a part of Roon that isn't open to apps, so a Roon update can stop it for a while.");
+  const heartsCard = card("Hearts & Library", "The link to Roon's library that hearts, Add to library, the quality light and Wrapped's own pages run on. It uses a part of Roon that isn't open to apps, so a Roon update can stop it for a while.", pageOf.music);
   const heartsState = statusLine();
   const LINK_WORDS = {
     off: "Off: Wrapped's pages can't read your library.",
@@ -11697,9 +11764,9 @@ WRAPPED_PAGES.settings = async function () {
   });
 
   // Onboarding on or off (off by itself once every page's walkthrough
-  // has been seen; on again shows them all once more), and Toasted's own
-  // settings: under the tiers, on the right
-  const onboardCard = card("Onboarding", "A walkthrough of each page the first time you open it: one part lit at a time, with a word about it. It switches itself off once you've seen every page.", right);
+  // has been seen; on again shows them all once more): at the end of
+  // General (Toasted's own settings open from the list on the left)
+  const onboardCard = card("Onboarding", "A walkthrough of each page the first time you open it: one part lit at a time, with a word about it. It switches itself off once you've seen every page.");
   const onboardRow = document.createElement("div");
   onboardRow.className = "wrapped-tabs small";
   for (const [value, label] of [
@@ -11716,12 +11783,79 @@ WRAPPED_PAGES.settings = async function () {
     });
     onboardRow.append(pill);
   }
-  onboardCard.append(onboardRow);
+  onboardCard.head.append(onboardRow);
 
-  // (one line: its title and Open)
-  const toastedCard = card("Toasted's settings", "", right);
-  toastedCard.classList.add("single");
-  toastedCard.append(button("Open", () => send("open_window", { window: "settings" })));
+  // General opens with the tiers that are working, at a glance (each
+  // one's own words on hover; a click goes to their page)
+  const tiersCard = card("Wrapped Discovery", "The tiers that pick your Discover lists. Each adds to the one before it; set them up on the Wrapped Discovery page.");
+  // (the same strip as Deep Dive's: a light, the tier and what it does;
+  // green with everything it uses, yellow with a part missing, dark while
+  // it isn't set up, which its words then say)
+  const chips = document.createElement("div");
+  chips.className = "tier-strip compact settings-tier-strip";
+  const toDiscovery = () => {
+    showWrappedSettingsPage("discovery");
+    wrappedBody.scrollTop = 0;
+  };
+  if (discoveryOn) {
+    for (const t of tierStates) {
+      const missing = t.on ? tierMissing(t.level, "weekly") : null;
+      const seg = document.createElement("button");
+      seg.className = `tier-seg${t.on ? " on fixed" : " off unready"}`;
+      const head = document.createElement("span");
+      head.className = "tier-seg-title";
+      const light = document.createElement("span");
+      light.className = `tier-light${t.on ? (missing ? " part" : " full") : ""}`;
+      if (missing) hoverTip(light, missing);
+      const label = document.createElement("span");
+      label.textContent = `Tier ${t.level}`;
+      head.append(light, label);
+      const words = document.createElement("span");
+      words.className = "tier-seg-words";
+      words.textContent = t.on ? TIER_WORDS.dive[t.level - 1] : t.state;
+      seg.append(head, words);
+      seg.title = `${t.title}: ${t.state}. Click for its setup`;
+      seg.addEventListener("click", toDiscovery);
+      chips.append(seg);
+    }
+  } else {
+    const seg = document.createElement("button");
+    seg.className = "tier-seg off unready";
+    const head = document.createElement("span");
+    head.className = "tier-seg-title";
+    const light = document.createElement("span");
+    light.className = "tier-light";
+    const label = document.createElement("span");
+    label.textContent = "Off";
+    head.append(light, label);
+    const words = document.createElement("span");
+    words.className = "tier-seg-words";
+    words.textContent = "Wrapped Discovery is switched off";
+    seg.append(head, words);
+    seg.addEventListener("click", toDiscovery);
+    chips.append(seg);
+  }
+  tiersCard.head.append(chips);
+
+  // General, in order: the tiers at a glance, how Wrapped looks, how it
+  // works
+  const group = (title) => {
+    const h = document.createElement("div");
+    h.className = "settings-group-title";
+    h.textContent = title;
+    return h;
+  };
+  left.append(
+    tiersCard,
+    group("Look"),
+    sizeCard,
+    colorsCard,
+    group("Behavior"),
+    sideCard,
+    genresCard,
+    similarCard,
+    onboardCard,
+  );
 };
 
 // A genre (Roon's): what of yours is in it (its sub-genres' too, as Roon
@@ -12736,6 +12870,35 @@ async function wrappedScanStep(event, start, done) {
 // decided by whether the tier is working yet)
 const settingsFolds = {};
 
+// Settings is in pages, one showing at a time, picked from the list on its
+// left (the same as Toasted's own Settings); the one that was open comes
+// back (kept in this window's own storage: only a convenience)
+// (the pages that follow the profile come first, right under it)
+const WRAPPED_SETTINGS_PAGES = [
+  ["music", "Your Music", "track", true],
+  ["discovery", "Wrapped Discovery", "discover", true],
+  ["general", "General", "settings", false],
+];
+let wrappedSettingsPage = "general";
+try {
+  const saved = localStorage.getItem("wrapped-settings-page");
+  if (WRAPPED_SETTINGS_PAGES.some(([name]) => name === saved)) wrappedSettingsPage = saved;
+} catch {
+  // (no storage)
+}
+// Shows one of Settings' pages (while Settings is open)
+function showWrappedSettingsPage(name) {
+  if (!WRAPPED_SETTINGS_PAGES.some(([n]) => n === name)) return;
+  wrappedSettingsPage = name;
+  try {
+    localStorage.setItem("wrapped-settings-page", name);
+  } catch {
+    // (kept for this run only)
+  }
+  for (const page of document.querySelectorAll(".settings-page")) page.hidden = page.dataset.page !== name;
+  for (const link of document.querySelectorAll(".settings-nav-link[data-page]")) link.classList.toggle("current", link.dataset.page === name);
+}
+
 // Tier 3's setup (sound.rs): whether the models are here, the download
 // running or just ended (its "sound-download" events), and its bar on the
 // Settings page, updated in place while it runs
@@ -13256,12 +13419,12 @@ const ONBOARDING_TOURS = {
     // (a fresh setup: the Start here banner reads both at once; set up
     // already, Your music is only explained, so nothing is read again)
     { find: () => shown(document.querySelector(".settings-start:not([hidden])")), click: () => document.querySelector(".settings-start .wrapped-play"), text: "New here? Start with this: it reads your listening history and your library from Roon in one go, a few minutes in the background. Everything else in Wrapped works from them. Click Read my history and library." },
-    { find: () => settingsCard("Your music"), text: "Your music shows what Wrapped has read: your listening history, your library, and the tags for your artists (genres, styles and scenes from Last.fm and MusicBrainz, filled in by themselves in the background). They keep up as you listen; read them again here after big changes." },
+    { find: () => settingsCard("Your music"), open: () => showWrappedSettingsPage("music"), text: "Your music shows what Wrapped has read: your listening history, your library, and the tags for your artists (genres, styles and scenes from Last.fm and MusicBrainz, filled in by themselves in the background). They keep up as you listen; read them again here after big changes." },
     // (Last.fm: only while no username is saved; the box opens, Save
     // flashes, and Save also starts the read of the scrobbles)
-    { find: () => (wrappedSettings?.lastfmUser?.trim() ? null : document.querySelector(".settings-card-sub")), open: () => (document.querySelector(".settings-card-sub").open = true), click: () => [...document.querySelectorAll(".settings-card-sub button")].find((b) => b.textContent === "Save"), ready: () => !!document.querySelector(".settings-card-sub input")?.value.trim(), text: "Roon's history only reaches back to when you started using Roon. If you scrobble to Last.fm, type your username and click Save: everything from before comes in (Save starts the read), so your all-time favorites and History's tops cover your whole listening life, not just the Roon years. No Last.fm? Next step." },
-    { find: () => document.querySelectorAll(".wrapped-settings-column")[1], text: "Wrapped Discovery builds your weekly playlists. Its tiers add up: tier 1 works from listeners and tags, tier 2 reads up on each pick with a language model, tier 3 listens to the songs. Each one is optional and set up here." },
-    { find: () => settingsCard("Page size"), text: "Page size makes Wrapped's pages bigger or smaller, or scales them with the window. The top bar, side menu and player keep Roon's size." },
+    { find: () => (wrappedSettings?.lastfmUser?.trim() ? null : document.querySelector(".settings-card-sub")), open: () => (showWrappedSettingsPage("music"), (document.querySelector(".settings-card-sub").open = true)), click: () => [...document.querySelectorAll(".settings-card-sub button")].find((b) => b.textContent === "Save"), ready: () => !!document.querySelector(".settings-card-sub input")?.value.trim(), text: "Roon's history only reaches back to when you started using Roon. If you scrobble to Last.fm, type your username and click Save: everything from before comes in (Save starts the read), so your all-time favorites and History's tops cover your whole listening life, not just the Roon years. No Last.fm? Next step." },
+    { find: () => document.querySelector('.settings-page[data-page="discovery"]'), open: () => showWrappedSettingsPage("discovery"), text: "Wrapped Discovery builds your weekly playlists. Its tiers add up: tier 1 works from listeners and tags, tier 2 reads up on each pick with a language model, tier 3 listens to the songs. Each one is optional and set up here." },
+    { find: () => settingsCard("Page size"), open: () => showWrappedSettingsPage("general"), text: "Page size makes Wrapped's pages bigger or smaller, or scales them with the window. The top bar, side menu and player keep Roon's size." },
   ],
 };
 let onboarding = { on: true, done: {} };

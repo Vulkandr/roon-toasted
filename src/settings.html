@@ -33,66 +33,26 @@
       </button>
     </div>
 
-    <!-- Everything below the bar scrolls; the bar stays put -->
+    <!-- Below the bar: the pages' list on the left (it stays put), and the
+         page that's picked on the right (it scrolls). One page shows at a
+         time (settings.js, "Pages") -->
+    <div class="settings-body">
+      <nav id="pages-nav" class="pages-nav" aria-label="Settings pages">
+        <button class="page-link" data-page="general" type="button" title="General"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg><span>General</span></button>
+        <button class="page-link" data-page="core" type="button" title="Roon Core"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg><span>Roon Core</span><i id="nav-core-dot" class="dot nav-dot"></i></button>
+        <button class="page-link" data-page="keys" type="button" title="Hotkeys &amp; Media Keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg><span>Hotkeys &amp; Media Keys</span></button>
+        <span class="pages-sep"></span>
+        <button class="page-link" data-page="toaster" type="button" title="Toaster"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg><span>Toaster</span></button>
+        <button class="page-link" data-page="wrapper" type="button" title="The Wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/></svg><span>The Wrapper</span></button>
+        <button class="page-link" data-page="toasts" type="button" title="Toasts"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Toasts</span></button>
+        <button class="page-link" data-page="widget" type="button" title="Taskbar Widget"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 8h20"/><rect width="20" height="16" x="2" y="4" rx="2"/><path d="M6 16h12"/></svg><span>Taskbar Widget</span></button>
+      </nav>
     <div class="page-scroll">
     <!-- No "Settings" heading: the title bar already says it -->
     <main>
-      <!-- Left column -->
-      <div class="column">
-      <section class="card core-card">
-        <h2>Roon Core</h2>
-
-        <div class="current">
-          <span id="status-dot" class="dot"></span>
-          <div>
-            <div id="core-name">Looking for your Roon Core...</div>
-            <div id="core-detail" class="muted"></div>
-          </div>
-          <div class="core-actions">
-            <button id="core-manual" class="small" type="button" aria-expanded="false" aria-controls="manual-panel">Manual</button>
-            <button id="core-search" class="small" type="button" title="Look for Cores on the network again">Search</button>
-          </div>
-        </div>
-
-        <!-- Manual: type in the Core's address, for when the search can't find it -->
-        <div id="manual-panel" class="drop" inert>
-          <div class="drop-inner">
-            <div class="manual-box">
-              <div class="manual-labels">
-                <label class="muted" for="manual-address">Core address (IPv4)</label>
-                <label class="muted" for="manual-port">Port</label>
-              </div>
-              <div class="manual-row">
-                <input id="manual-address" type="text" inputmode="decimal" placeholder="192.168.1.20" spellcheck="false" autocomplete="off" />
-                <input id="manual-port" type="text" inputmode="numeric" placeholder="9330" spellcheck="false" autocomplete="off" title="The Core's port, 9330 unless you changed it in Roon" />
-                <button id="manual-save" class="small" type="button">Save</button>
-                <button id="manual-clear" class="small" type="button">Clear</button>
-              </div>
-              <p id="manual-note" class="muted"></p>
-              <p id="manual-error" class="error"></p>
-            </div>
-          </div>
-        </div>
-
-        <h3>Available Cores</h3>
-        <ul id="core-list"></ul>
-        <p id="core-error" class="error"></p>
-
-        <!-- Diagnostics: what the search is doing, for when a Core can't be found -->
-        <div class="diag-bar">
-          <button id="diag-toggle" class="small" type="button" aria-expanded="false" aria-controls="diag-panel">Diagnostics</button>
-        </div>
-        <div id="diag-panel" class="drop" inert>
-          <div class="drop-inner">
-            <div class="diag-box">
-              <pre id="diag-text" class="diag-text">Loading...</pre>
-              <button id="diag-copy" class="small" type="button">Copy</button>
-            </div>
-          </div>
-        </div>
-      </section>
+      <div class="page" data-page="general">
       <!-- Settings for the whole app: colors, Auto-Hide, starting with
-           Windows, and every hotkey -->
+           Windows -->
       <section class="card general-card" data-new="general-card">
         <h2>General</h2>
 
@@ -155,11 +115,180 @@
             </div>
           </div>
         </div>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Colors:</strong> Default keeps the Toaster's color scheme. Album Art takes its
+          colors from the album that's playing.
+        </p>
+        <p>
+          <strong>Artists:</strong> Main shows only a track's first artist; All shows every
+          artist Roon lists for it, everywhere in Toasted.
+        </p>
+        <p>
+          <strong>Auto-Hide:</strong> When on, clicking anywhere outside the Toaster
+          sends it back to the tray, like pressing &times;, along with Settings if open. When
+          off, both get taskbar buttons. It starts working once a Roon Core is connected.
+        </p>
+        <p>
+          <strong>Start with Windows:</strong> Puts Roon: Toasted in the tray when you sign in,
+          so hotkeys, toasts and the widget are always ready.
+        </p>
+        <p>
+          <strong>Skip Stuck Songs:</strong> Roon sometimes stops at the end of a song and never
+          starts the next one. With this on, Toasted moves on to the next song after a few
+          seconds stuck there.
+        </p>
+        </details>
+      </section>
 
-        <!-- The Hotkeys switch sits on its heading, next to what it
-             turns on and off -->
-        <div class="hotkeys-head" id="hotkeys-heading">
-          <h3>Hotkeys</h3>
+      <section class="card updates-card">
+        <h2>Updates</h2>
+
+        <div class="setting-row">
+          <div class="setting">
+            <span class="setting-name">Check for Updates</span>
+            <div class="switch-group" id="updates-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="updates-enabled" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
+          </div>
+          <div class="setting update-action-row">
+            <button id="open-changelog" title="What's new in each version">Changelog</button>
+            <button id="update-action">Check now</button>
+          </div>
+        </div>
+
+        <!-- What the last check found, in plain words -->
+        <p id="update-detail" class="muted update-detail"></p>
+        <div id="update-progress" class="update-progress" hidden><div class="bar"></div></div>
+        <pre id="update-notes" class="update-notes" hidden></pre>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Updates:</strong> Looks on GitHub for a newer Roon: Toasted (a minute after it
+          starts, then every 6 hours) and shows it here and in the tray menu. Nothing downloads
+          or installs until you press Install; the update installs the same way as the first
+          install, then the app restarts.
+        </p>
+        </details>
+      </section>
+      </div>
+
+      <div class="page" data-page="core" hidden>
+      <section class="card core-card">
+        <h2>Roon Core</h2>
+
+        <div class="current">
+          <span id="status-dot" class="dot"></span>
+          <div>
+            <div id="core-name">Looking for your Roon Core...</div>
+            <div id="core-detail" class="muted"></div>
+          </div>
+          <div class="core-actions">
+            <button id="core-manual" class="small" type="button" aria-expanded="false" aria-controls="manual-panel">Manual</button>
+            <button id="core-search" class="small" type="button" title="Look for Cores on the network again">Search</button>
+          </div>
+        </div>
+
+        <!-- Manual: type in the Core's address, for when the search can't find it -->
+        <div id="manual-panel" class="drop" inert>
+          <div class="drop-inner">
+            <div class="manual-box">
+              <div class="manual-labels">
+                <label class="muted" for="manual-address">Core address (IPv4)</label>
+                <label class="muted" for="manual-port">Port</label>
+              </div>
+              <div class="manual-row">
+                <input id="manual-address" type="text" inputmode="decimal" placeholder="192.168.1.20" spellcheck="false" autocomplete="off" />
+                <input id="manual-port" type="text" inputmode="numeric" placeholder="9330" spellcheck="false" autocomplete="off" title="The Core's port, 9330 unless you changed it in Roon" />
+                <button id="manual-save" class="small" type="button">Save</button>
+                <button id="manual-clear" class="small" type="button">Clear</button>
+              </div>
+              <p id="manual-note" class="muted"></p>
+              <p id="manual-error" class="error"></p>
+            </div>
+          </div>
+        </div>
+
+        <h3>Available Cores</h3>
+        <ul id="core-list"></ul>
+        <p id="core-error" class="error"></p>
+
+        <!-- Diagnostics: what the search is doing, for when a Core can't be found -->
+        <div class="diag-bar">
+          <button id="diag-toggle" class="small" type="button" aria-expanded="false" aria-controls="diag-panel">Diagnostics</button>
+        </div>
+        <div id="diag-panel" class="drop" inert>
+          <div class="drop-inner">
+            <div class="diag-box">
+              <pre id="diag-text" class="diag-text">Loading...</pre>
+              <button id="diag-copy" class="small" type="button">Copy</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Hearts and add-to-library over Roon's internal protocol (see library.rs) -->
+      <section class="card library-card">
+        <!-- The card's own switch sits next to its title -->
+        <div class="card-head">
+          <span class="badge">Experimental</span>
+          <h2>Hearts &amp; Library</h2>
+          <div class="switch-group" id="library-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="library-enabled" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
+
+        <div class="setting-row">
+          <div class="setting library-option">
+            <span class="setting-name">Add to Library</span>
+            <div class="switch-group" id="library-mode-group">
+              <span class="switch-label label-off">Single Song</span>
+              <label class="switch">
+                <input type="checkbox" id="library-mode" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Whole Album</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Whether the Core accepts us, in plain words -->
+        <p id="library-detail" class="muted library-detail">Off</p>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts
+          the track in your library (the Add to Library switch decides whether that's just the
+          song or its whole album), then a heart. The same buttons show on album pages by the
+          playing artist. A light next to the zone shows what's playing: Low Quality, CD Quality
+          or Hi-Res (hover for the name). It uses a part of Roon that isn't officially open to apps, so a Roon
+          update may break it until I'm able to repair it.
+        </p>
+        </details>
+      </section>
+      </div>
+
+      <div class="page" data-page="keys" hidden>
+      <!-- Key combinations that work anywhere in Windows (hotkeys.rs). The
+           Hotkeys switch sits on the card's title, next to what it turns
+           on and off -->
+      <section class="card hotkeys-card">
+        <div class="card-head" id="hotkeys-heading">
+          <h2>Hotkeys</h2>
           <div class="switch-group" id="hotkeys-group">
             <span class="switch-label label-off">Off</span>
             <label class="switch">
@@ -169,6 +298,9 @@
             <span class="switch-label label-on">On</span>
           </div>
         </div>
+        <!-- With the Toaster and the Wrapper both off there's nothing for
+             a hotkey to open -->
+        <p id="hotkeys-none" class="muted hotkeys-none" hidden>Switch on the Toaster or the Wrapper to use hotkeys.</p>
         <div id="hotkey-list">
         <!-- Only while the Toaster is on (Settings > Toaster) -->
         <div class="hotkey-row toaster-hotkey-row">
@@ -199,77 +331,116 @@
         </div>
         </div>
         <p id="hotkey-error" class="error"></p>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Hotkeys:</strong> Work anywhere in Windows, even when the Toaster is closed.
+          Open Toaster opens it, or hides it if it's currently open. Search opens it on the
+          Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
+          up the Toaster.
+        </p>
+        </details>
+      </section>
 
-        <!-- The keyboard's playback keys and its volume keys control the
-             selected Roon zone instead of other apps and Windows, each
-             with a switch of its own (mediakeys.rs) -->
-        <div class="hotkeys-head media-keys-head" id="media-keys-heading" data-new="media-keys">
-          <h3>Media Keys</h3>
-          <div class="switch-group media-keys-set" id="media-playback-group" title="Your keyboard's Play/Pause, Stop, Next and Previous keys control the selected Roon zone, in any app. Other apps no longer get those keys while this is on and Roon is connected.">
-            <span class="media-keys-name">Playback</span>
-            <span class="switch-label label-off">Off</span>
-            <label class="switch">
-              <input type="checkbox" id="media-keys-playback" />
-              <span class="slider"></span>
-            </label>
-            <span class="switch-label label-on">On</span>
+      <!-- The keyboard's playback keys and its volume keys control the
+           selected Roon zone instead of other apps and Windows, each
+           with a switch of its own (mediakeys.rs) -->
+      <section class="card media-keys-card" data-new="media-keys">
+        <h2>Media Keys</h2>
+        <div class="setting-row">
+          <div class="setting" title="Your keyboard's Play/Pause, Stop, Next and Previous keys control the selected Roon zone, in any app. Other apps no longer get those keys while this is on and Roon is connected.">
+            <span class="setting-name">Playback</span>
+            <div class="switch-group" id="media-playback-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="media-keys-playback" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
           </div>
-          <div class="switch-group media-keys-set" id="media-volume-group" title="Your keyboard's Volume Up, Volume Down and Mute keys change the volume of the selected Roon zone instead of the Windows volume, in any app. Hold a key to keep going.">
-            <span class="media-keys-name">Volume</span>
-            <span class="switch-label label-off">Off</span>
-            <label class="switch">
-              <input type="checkbox" id="media-keys-volume" />
-              <span class="slider"></span>
-            </label>
-            <span class="switch-label label-on">On</span>
+          <div class="setting" title="Your keyboard's Volume Up, Volume Down and Mute keys change the volume of the selected Roon zone instead of the Windows volume, in any app. Hold a key to keep going.">
+            <span class="setting-name">Volume</span>
+            <div class="switch-group" id="media-volume-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="media-keys-volume" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
           </div>
         </div>
         <p id="media-keys-note" class="muted media-keys-note"></p>
         <p id="media-keys-error" class="error media-keys-note"></p>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Media Keys:</strong> Playback sends your keyboard's Play/Pause, Stop, Next
+          and Previous keys to the selected Roon zone, whatever app you're in; other apps no
+          longer get them while Roon is connected. Volume does the same with Volume Up,
+          Volume Down and Mute, instead of the Windows volume; hold a key to keep going. A
+          zone with a fixed volume leaves the volume keys with Windows.
+        </p>
+        </details>
       </section>
-      <section class="card toasts-card">
+      </div>
+
+      <div class="page" data-page="toaster" hidden>
+      <section class="card toaster-card">
         <!-- The card's own switch sits next to its title -->
         <div class="card-head">
-          <h2>Toasts</h2>
-          <div class="switch-group" id="toasts-group">
+          <h2>Toaster</h2>
+          <div class="switch-group" id="toaster-group" data-new="toaster-switch">
             <span class="switch-label label-off">Off</span>
             <label class="switch">
-              <input type="checkbox" id="toasts-enabled" />
+              <input type="checkbox" id="toaster-enabled" />
               <span class="slider"></span>
             </label>
             <span class="switch-label label-on">On</span>
           </div>
         </div>
 
-        <!-- Dimmed and locked while toasts are off -->
-        <div id="toast-options" class="toast-options">
-          <div class="toast-option">
-            <span class="option-name">Position</span>
-            <!-- A little screen: click the corner the toast should appear in -->
-            <div class="screen">
-              <button class="corner" data-corner="top-left" title="Top left"></button>
-              <button class="corner" data-corner="top-right" title="Top right"></button>
-              <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
-              <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
+        <div class="setting-row">
+          <div class="setting toaster-option" data-new="toaster-launch">
+            <span class="setting-name">Open at Launch</span>
+            <div class="switch-group" id="toaster-launch-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="toaster-at-launch" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
             </div>
           </div>
-          <div class="toast-option">
-            <span class="option-name">Time on Screen</span>
-            <div class="time-row">
-              <input type="range" id="toast-seconds" min="2" max="30" step="1" />
-              <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
+          <div class="setting toaster-option">
+            <span class="setting-name">Window Size</span>
+            <div class="switch-group" id="window-group">
+              <span class="switch-label label-off">Default</span>
+              <label class="switch">
+                <input type="checkbox" id="toaster-window" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">Last Position</span>
             </div>
-            <button id="toast-test">Test</button>
           </div>
-          <!-- Which screen (names as Windows shows them in Display settings) -->
-          <div id="monitor-row" class="toast-option monitor-row">
-            <span class="option-name">Monitor</span>
-            <select id="toast-monitor"></select>
+          <div class="setting toaster-option">
+            <span class="setting-name">Zoom</span>
+            <div class="switch-group" id="zoom-group">
+              <span class="switch-label label-off">Off</span>
+              <label class="switch">
+                <input type="checkbox" id="zoom-hotkeys" />
+                <span class="slider"></span>
+              </label>
+              <span class="switch-label label-on">On</span>
+            </div>
           </div>
         </div>
-      </section>
-      <details class="card legend">
-        <summary><h2>Legend</h2></summary>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
         <p>
           <strong>Toaster:</strong> The compact Roon player. Switch it off if you only use the
           Wrapper; its hotkeys and links then open the Wrapper instead. Open at Launch opens it
@@ -286,103 +457,11 @@
           at <span id="zoom-now">100%</span>
           <button id="zoom-reset">Reset to 100%</button>
         </p>
-        <p>
-          <strong>Auto-Hide:</strong> When on, clicking anywhere outside the Toaster
-          sends it back to the tray, like pressing &times;, along with Settings if open. When
-          off, both get taskbar buttons. It starts working once a Roon Core is connected.
-        </p>
-        <p>
-          <strong>Colors:</strong> Default keeps the Toaster's color scheme. Album Art takes its
-          colors from the album that's playing.
-        </p>
-        <p>
-          <strong>Hotkeys:</strong> Work anywhere in Windows, even when the Toaster is closed.
-          Open Toaster opens it, or hides it if it's currently open. Search opens it on the
-          Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
-          up the Toaster.
-        </p>
-        <p>
-          <strong>Media Keys:</strong> Playback sends your keyboard's Play/Pause, Stop, Next
-          and Previous keys to the selected Roon zone, whatever app you're in; other apps no
-          longer get them while Roon is connected. Volume does the same with Volume Up,
-          Volume Down and Mute, instead of the Windows volume; hold a key to keep going. A
-          zone with a fixed volume leaves the volume keys with Windows.
-        </p>
-        <p>
-          <strong>Start with Windows:</strong> Puts Roon: Toasted in the tray when you sign in,
-          so hotkeys, toasts and the widget are always ready.
-        </p>
-        <p>
-          <strong>The Wrapper:</strong> Shows the Roon app inside a Roon: Toasted window
-          (Roon: Wrapped), with Toasted's player along the bottom, so everything Roon can do,
-          its settings included, is right there. Open it from the tray menu, its hotkey or the
-          button above; it starts Roon if needed. Closing it keeps Roon running out of sight,
-          so it reopens instantly. Return Roon gives Roon its own window again, with an
-          Enable Wrapper button in its title bar to wrap it back up. Open at Launch opens it
-          whenever Roon: Toasted starts, at sign-in (with Start with Windows on) or by hand.
-          Remember Player brings Now Playing back as you left it, even after a restart; off,
-          the Wrapper always opens on Roon's page, as Roon does.
-        </p>
-        <p>
-          <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
-          then slide Position and Width until it sits in a free spot; One Line suits small
-          taskbars. Windows doesn't officially allow this, so it may misbehave.
-        </p>
-        <p>
-          <strong>Hearts &amp; Library:</strong> Adds a button to the Playing tab: a "+" that puts
-          the track in your library (the Add to Library switch decides whether that's just the
-          song or its whole album), then a heart. The same buttons show on album pages by the
-          playing artist. A light next to the zone shows what's playing: Low Quality, CD Quality
-          or Hi-Res (hover for the name). It uses a part of Roon that isn't officially open to apps, so a Roon
-          update may break it until I'm able to repair it.
-        </p>
-        <p>
-          <strong>Updates:</strong> Looks on GitHub for a newer Roon: Toasted (a minute after it
-          starts, then every 6 hours) and shows it here and in the tray menu. Nothing downloads
-          or installs until you press Install; the update installs the same way as the first
-          install, then the app restarts.
-        </p>
-        <p>
-          <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
-          on the monitor you pick, in the Toaster's colors. Primary Monitor follows whichever
-          one Windows has as main. Clicking the toast opens the Toaster. Mousing over it pauses
-          the timer.
-        </p>
-      </details>
-
-      <!-- What each setting does -->
+        </details>
+      </section>
       </div>
 
-      <!-- Right column -->
-      <div class="column">
-
-      <section class="card updates-card">
-        <h2>Updates</h2>
-
-        <div class="setting-row">
-          <div class="setting">
-            <span class="setting-name">Check for Updates</span>
-            <div class="switch-group" id="updates-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="updates-enabled" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
-          </div>
-          <div class="setting update-action-row">
-            <button id="open-changelog" title="What's new in each version">Changelog</button>
-            <button id="update-action">Check now</button>
-          </div>
-        </div>
-
-        <!-- What the last check found, in plain words -->
-        <p id="update-detail" class="muted update-detail"></p>
-        <div id="update-progress" class="update-progress" hidden><div class="bar"></div></div>
-        <pre id="update-notes" class="update-notes" hidden></pre>
-      </section>
-
+      <div class="page" data-page="wrapper" hidden>
       <!-- Roon desktop inside a Toasted window (see wrapper.rs) -->
       <section class="card wrapper-card" data-new="wrapper-card">
         <!-- The card's own switch sits next to its title -->
@@ -439,59 +518,79 @@
         <p class="muted wrapper-detail">
           Roon: Wrapped runs your Roon app inside a wrapper, so you can use it with a custom look.
         </p>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>The Wrapper:</strong> Shows the Roon app inside a Roon: Toasted window
+          (Roon: Wrapped), with Toasted's player along the bottom, so everything Roon can do,
+          its settings included, is right there. Open it from the tray menu, its hotkey or the
+          Open button above; it starts Roon if needed. Closing it keeps Roon running out of sight,
+          so it reopens instantly. Return Roon gives Roon its own window again, with an
+          Enable Wrapper button in its title bar to wrap it back up. Open at Launch opens it
+          whenever Roon: Toasted starts, at sign-in (with Start with Windows on) or by hand.
+          Remember Player brings Now Playing back as you left it, even after a restart; off,
+          the Wrapper always opens on Roon's page, as Roon does.
+        </p>
+        </details>
       </section>
+      </div>
 
-      <section class="card toaster-card">
+      <div class="page" data-page="toasts" hidden>
+      <section class="card toasts-card">
         <!-- The card's own switch sits next to its title -->
         <div class="card-head">
-          <h2>Toaster</h2>
-          <div class="switch-group" id="toaster-group" data-new="toaster-switch">
+          <h2>Toasts</h2>
+          <div class="switch-group" id="toasts-group">
             <span class="switch-label label-off">Off</span>
             <label class="switch">
-              <input type="checkbox" id="toaster-enabled" />
+              <input type="checkbox" id="toasts-enabled" />
               <span class="slider"></span>
             </label>
             <span class="switch-label label-on">On</span>
           </div>
         </div>
 
-        <div class="setting-row">
-          <div class="setting toaster-option" data-new="toaster-launch">
-            <span class="setting-name">Open at Launch</span>
-            <div class="switch-group" id="toaster-launch-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="toaster-at-launch" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
+        <!-- Dimmed and locked while toasts are off -->
+        <div id="toast-options" class="toast-options">
+          <div class="toast-option">
+            <span class="option-name">Position</span>
+            <!-- A little screen: click the corner the toast should appear in -->
+            <div class="screen">
+              <button class="corner" data-corner="top-left" title="Top left"></button>
+              <button class="corner" data-corner="top-right" title="Top right"></button>
+              <button class="corner" data-corner="bottom-left" title="Bottom left"></button>
+              <button class="corner" data-corner="bottom-right" title="Bottom right"></button>
             </div>
           </div>
-          <div class="setting toaster-option">
-            <span class="setting-name">Window Size</span>
-            <div class="switch-group" id="window-group">
-              <span class="switch-label label-off">Default</span>
-              <label class="switch">
-                <input type="checkbox" id="toaster-window" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">Last Position</span>
+          <div class="toast-option">
+            <span class="option-name">Time on Screen</span>
+            <div class="time-row">
+              <input type="range" id="toast-seconds" min="2" max="30" step="1" />
+              <button id="toast-seconds-value" class="reset-value" data-slider="#toast-seconds" data-setting="toastSeconds" data-default="8" data-unit="s">8 s</button>
             </div>
+            <button id="toast-test">Test</button>
           </div>
-          <div class="setting toaster-option">
-            <span class="setting-name">Zoom</span>
-            <div class="switch-group" id="zoom-group">
-              <span class="switch-label label-off">Off</span>
-              <label class="switch">
-                <input type="checkbox" id="zoom-hotkeys" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">On</span>
-            </div>
+          <!-- Which screen (names as Windows shows them in Display settings) -->
+          <div id="monitor-row" class="toast-option monitor-row">
+            <span class="option-name">Monitor</span>
+            <select id="toast-monitor"></select>
           </div>
         </div>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Toasts:</strong> A small card shows what's currently playing in the corner and
+          on the monitor you pick, in the Toaster's colors. Primary Monitor follows whichever
+          one Windows has as main. Clicking the toast opens the Toaster. Mousing over it pauses
+          the timer.
+        </p>
+        </details>
       </section>
+      </div>
 
+      <div class="page" data-page="widget" hidden>
       <section class="card widget-card">
         <!-- The card's own switch sits next to its title -->
         <div class="card-head">
@@ -545,40 +644,15 @@
             <button id="widget-width-value" class="range-value reset-value" data-slider="#widget-width" data-setting="widgetWidth" data-default="320" data-unit="px"></button>
           </div>
         </div>
-      </section>
-
-      <!-- Hearts and add-to-library over Roon's internal protocol (see library.rs) -->
-      <section class="card library-card">
-        <!-- The card's own switch sits next to its title -->
-        <div class="card-head">
-          <span class="badge">Experimental</span>
-          <h2>Hearts &amp; Library</h2>
-          <div class="switch-group" id="library-group">
-            <span class="switch-label label-off">Off</span>
-            <label class="switch">
-              <input type="checkbox" id="library-enabled" />
-              <span class="slider"></span>
-            </label>
-            <span class="switch-label label-on">On</span>
-          </div>
-        </div>
-
-        <div class="setting-row">
-          <div class="setting library-option">
-            <span class="setting-name">Add to Library</span>
-            <div class="switch-group" id="library-mode-group">
-              <span class="switch-label label-off">Single Song</span>
-              <label class="switch">
-                <input type="checkbox" id="library-mode" />
-                <span class="slider"></span>
-              </label>
-              <span class="switch-label label-on">Whole Album</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Whether the Core accepts us, in plain words -->
-        <p id="library-detail" class="muted library-detail">Off</p>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Taskbar Widget:</strong> A small player on your main taskbar. Pick a side,
+          then slide Position and Width until it sits in a free spot; One Line suits small
+          taskbars. Windows doesn't officially allow this, so it may misbehave.
+        </p>
+        </details>
       </section>
       </div>
     </main>
@@ -591,6 +665,7 @@
         >Do you have a Stream Deck? Use my plugin called Roon: Dialed Up to control Roon</a
       >
     </footer>
+    </div>
     </div>
   </body>
 </html>

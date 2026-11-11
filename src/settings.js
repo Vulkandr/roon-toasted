@@ -3,7 +3,7 @@
 // file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
 // Tauri's JavaScript API (available because withGlobalTauri is on in tauri.conf.json)
-import { customPalette, paintColors } from "./album-colors.js";
+import { albumHue, albumPalette, customPalette, paintColors } from "./album-colors.js";
 import { closeColorPopover, cssToHex, openColorPopover } from "./color-picker.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -39,6 +39,10 @@ function pillSwitch(group) {
   const on = pill(group.querySelector(".label-on"), true);
   // (the "on" side, in the accent when it's chosen, as the switch was)
   on.classList.add("on-side");
+  // A choice between two things (Left or Right, Single Song or Whole
+  // Album: anything whose first side isn't "Off") has no off side, so
+  // whichever is chosen is in the accent
+  if (off.textContent.trim().toLowerCase() !== "off") off.classList.add("on-side");
   const show = () => {
     off.classList.toggle("selected", !input.checked);
     on.classList.toggle("selected", input.checked);
@@ -66,7 +70,62 @@ const dot = document.querySelector("#status-dot");
 const coreName = document.querySelector("#core-name");
 const coreDetail = document.querySelector("#core-detail");
 const coreList = document.querySelector("#core-list");
+// ===== Pages ===============================================================
+//
+// One page shows at a time, picked from the list on the left. The page
+// that was open comes back the next time Settings opens (kept in this
+// window's own storage: it's only a convenience). Another window can ask
+// for a page with a "settings-page" event (its name: "general", "core",
+// "keys", "toaster", "wrapper", "toasts" or "widget"; "library" is on the
+// Roon Core page).
+
+const pageLinks = [...document.querySelectorAll(".page-link")];
+const pages = [...document.querySelectorAll(".page")];
+const PAGE_KEY = "settings-page";
+// The user picked a page themselves (so a Core that isn't paired yet no
+// longer pulls them to its page)
+let pagePicked = false;
+
+function showPage(name, picked = false) {
+  if (name === "library") name = "core";
+  if (!pages.some((page) => page.dataset.page === name)) name = "general";
+  if (picked) pagePicked = true;
+  for (const page of pages) page.hidden = page.dataset.page !== name;
+  for (const link of pageLinks) link.classList.toggle("current", link.dataset.page === name);
+  document.querySelector(".page-scroll").scrollTop = 0;
+  try {
+    localStorage.setItem(PAGE_KEY, name);
+  } catch {
+    // (no storage: the page just isn't remembered)
+  }
+}
+
+for (const link of pageLinks) {
+  link.addEventListener("click", () => showPage(link.dataset.page, true));
+}
+
+{
+  let last = null;
+  try {
+    last = localStorage.getItem(PAGE_KEY);
+  } catch {
+    // (no storage)
+  }
+  showPage(last || "general");
+}
+listen("settings-page", (event) => showPage(String(event.payload), true));
+
+// A page's entry in the list glows while something on that page does
+// (something new since an update, or the Roon Core card waiting for a Core)
+function showPageGlows() {
+  for (const link of pageLinks) {
+    const page = pages.find((p) => p.dataset.page === link.dataset.page);
+    link.classList.toggle("is-new", !!page?.querySelector(".is-new, .card.attention"));
+  }
+}
+
 const coreCard = document.querySelector(".core-card");
+const navCoreDot = document.querySelector("#nav-core-dot");
 const coreError = document.querySelector("#core-error");
 
 // Friendly wording for each connection state
@@ -81,11 +140,18 @@ function render(status) {
   lastStatus = status;
   // Dot color comes from the .connected / .searching / .reconnecting CSS classes
   dot.className = `dot ${status.state}`;
+  // (the same light on the Roon Core page's entry in the list, with the
+  // state in words as its tooltip)
+  navCoreDot.className = `dot nav-dot ${status.state}`;
+  navCoreDot.title = STATE_TEXT[status.state] ?? "";
 
   // No Core paired yet: the card glows slowly, to say "start here"
   // (the "Enable ..." line glows in step with it)
   coreCard.classList.toggle("attention", !status.pairedCoreId);
   coreDetail.classList.toggle("attention", !status.pairedCoreId);
+  // (and Settings opens on its page, unless a page was picked by hand)
+  showPageGlows();
+  if (!status.pairedCoreId && !pagePicked) showPage("core");
 
   // The paired Core's details, if it's been seen on the network
   const paired =
@@ -385,7 +451,8 @@ function showToaster(settings) {
   });
   // No hotkeys left to show (the Toaster and the Wrapper both off)
   const none = !settings.toasterEnabled && !settings.wrapperEnabled;
-  document.querySelector("#hotkeys-heading").hidden = none;
+  document.querySelector("#hotkeys-group").hidden = none;
+  document.querySelector("#hotkeys-none").hidden = !none;
   document.querySelector("#hotkey-list").hidden = none;
   document.querySelector("#search-hotkey-row").hidden = none;
   showSearchOpens(settings);
@@ -589,12 +656,38 @@ let colorsNow = "default";
 let accentNow = "#7b5fc7";
 let backgroundNow = null; // Custom's background (null: tinted from the accent)
 
-// Settings takes Custom's colors too (Album art stays on the app's own: it
-// has no album playing in it)
-function paintSettings() {
-  paintColors(document.documentElement, colorsNow === "custom" ? customPalette(accentNow, backgroundNow, darkScheme.matches) : {});
+// Settings takes the same colors as the Toaster: Custom's, or with Album
+// Art the colors of the album playing in the selected zone (the app's own
+// while nothing is playing there)
+let artKey = null; // the selected zone's album art
+async function paintSettings() {
+  const key = artKey;
+  let hue = null;
+  if (colorsNow === "album" && key) {
+    try {
+      hue = await albumHue(key);
+    } catch (err) {
+      console.warn("album colors", err);
+    }
+    // (the art or the setting changed meanwhile: that call wins)
+    if (key !== artKey || colorsNow !== "album") return;
+  }
+  paintColors(
+    document.documentElement,
+    hue ? albumPalette(hue, darkScheme.matches) : colorsNow === "custom" ? customPalette(accentNow, backgroundNow, darkScheme.matches) : {},
+  );
 }
 darkScheme.addEventListener("change", paintSettings);
+
+function showZoneArt(payload) {
+  const zone = payload?.zones?.find((z) => z.zoneId === payload.selectedZoneId);
+  const key = zone?.nowPlaying?.imageKey ?? null;
+  if (key === artKey) return;
+  artKey = key;
+  paintSettings();
+}
+invoke("roon_zones").then(showZoneArt).catch((err) => console.error(err));
+listen("roon-zones", (event) => showZoneArt(event.payload));
 
 function showColors(settings) {
   for (const pill of colorsPills.children) pill.classList.toggle("selected", pill.dataset.colors === settings.toasterColors);
@@ -1277,6 +1370,8 @@ function showTitlebarUpdate(status) {
 }
 
 titlebarUpdate.addEventListener("click", () => {
+  // (the Updates card is on the General page)
+  showPage("general", true);
   if (titlebarUpdate.classList.contains("available")) updateAction.click();
 });
 invoke("update_status").then(showTitlebarUpdate);
@@ -1380,6 +1475,7 @@ function showNew(settings) {
   document.querySelectorAll("[data-new]").forEach((node) => {
     node.classList.toggle("is-new", !seen.has(node.dataset.new));
   });
+  showPageGlows();
 }
 
 async function markSeen(name) {
@@ -1398,6 +1494,7 @@ document.querySelectorAll("[data-new]").forEach((node) => {
   node.addEventListener("mouseenter", () => {
     if (!node.classList.contains("is-new")) return;
     node.classList.remove("is-new");
+    showPageGlows();
     markSeen(node.dataset.new);
   });
 });

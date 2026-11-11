@@ -44,27 +44,124 @@ body {
   overflow: hidden;
 }
 
-.page-scroll {
+/* Below the title bar: the list of pages on the left, the page that's
+   picked on the right */
+.settings-body {
   flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+/* The list of pages: stays put while the page scrolls */
+.pages-nav {
+  flex: none;
+  width: 212px;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border) transparent;
 }
 
-/* Two columns: Roon Core and Toaster on the left, Toasts and the Legend on
-   the right (one column when the window is narrow) */
+.page-link,
+.page-link:hover {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.page-link svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.page-link:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.page-link.current,
+.page-link.current:hover {
+  background: var(--card);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.page-link.current svg {
+  color: var(--accent);
+}
+
+/* Something on that page is new, or waiting (the same slow glow) */
+.page-link.is-new {
+  border-color: var(--border);
+}
+
+/* The Roon Core page's light: connected or not, at a glance (at the end
+   of its entry; on its icon's corner when the list is icons only) */
+.page-link .nav-dot {
+  width: 8px;
+  height: 8px;
+  margin-left: auto;
+}
+
+.pages-sep {
+  /* (never squeezed away in a short window: the list scrolls instead) */
+  flex: none;
+  height: 1px;
+  margin: 6px 6px;
+  background: var(--border);
+}
+
+.page-scroll {
+  flex: 1;
+  min-width: 0;
+  /* (a column, so the footer's note sits at the bottom of a short page) */
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+/* One page at a time: its cards in a single column */
 main {
-  max-width: 1040px;
+  width: 100%;
+  max-width: 660px;
   margin: 0 auto;
   padding: 16px 24px 12px;
-  display: grid;
-  grid-template-columns: 1fr 1fr;
+}
+
+.page {
+  display: flex;
+  flex-direction: column;
   gap: 16px;
-  align-items: start;
+}
+
+.page[hidden] {
+  display: none;
+}
+
+.page > .card + .card {
+  margin-top: 0;
 }
 
 /* The note at the bottom of the page */
 .footer {
+  margin-top: auto;
   text-align: center;
   font-size: 12px;
   padding: 0 24px 12px;
@@ -81,26 +178,26 @@ main {
   text-decoration: underline;
 }
 
-main > h1 {
-  grid-column: 1 / -1;
-  margin: 0;
-}
+/* A narrow window: the list keeps its icons and drops its names */
+@media (max-width: 640px) {
+  .pages-nav {
+    width: 50px;
+  }
 
-.column {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-  min-width: 0;
-}
+  .page-link span {
+    display: none;
+  }
 
-.column > .card + .card {
-  margin-top: 0;
-}
+  .page-link {
+    position: relative;
+  }
 
-@media (max-width: 900px) {
-  main {
-    grid-template-columns: 1fr;
-    max-width: 640px;
+  .page-link .nav-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 7px;
+    height: 7px;
   }
 }
 
@@ -153,45 +250,15 @@ h3 {
   gap: 10px;
 }
 
-/* The Hotkeys heading with its switch beside it */
-.hotkeys-head {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  margin: 20px 0 8px;
+/* The Hotkeys card's switch goes away with nothing for a hotkey to open
+   (the Toaster and the Wrapper both off); a line says so instead */
+.card-head #hotkeys-group[hidden] {
+  display: none;
 }
 
-.hotkeys-head h3 {
+.hotkeys-none {
   margin: 0;
-  /* Stands out from the small grey labels: it heads the whole list */
-  color: var(--text);
-  font-size: 13px;
-}
-
-.hotkeys-head .switch-group {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-/* Media Keys: a named switch each for Playback and Volume, on one line */
-.media-keys-head {
-  flex-wrap: wrap;
-  row-gap: 8px;
-}
-
-.media-keys-head .media-keys-set + .media-keys-set {
-  margin-left: 16px;
-}
-
-.media-keys-name {
-  color: var(--muted);
-  font-size: 12px;
-  margin-right: 4px;
-}
-
-.media-keys-head.is-new {
-  border-radius: 8px;
+  text-align: center;
 }
 
 .media-keys-note {
@@ -246,13 +313,25 @@ h3 {
   flex-shrink: 0;
 }
 
+/* Connected, searching or reconnecting: lit, and glowing like the quality
+   light in the Wrapper's player (a bright middle, a halo in its color).
+   Anything else is a plain grey dot */
 .dot.connected {
-  background: var(--ok);
+  --q: var(--ok);
 }
 
 .dot.searching,
 .dot.reconnecting {
-  background: var(--warn);
+  --q: var(--warn);
+}
+
+.dot.connected,
+.dot.searching,
+.dot.reconnecting {
+  background: radial-gradient(circle, #fff 0 18%, var(--q) 60%);
+  box-shadow:
+    0 0 3px 1px color-mix(in srgb, var(--q) 75%, transparent),
+    0 0 9px 2px color-mix(in srgb, var(--q) 35%, transparent);
 }
 
 /* Search and Manual sit at the right end of the "current Core" row */
@@ -527,6 +606,8 @@ button:disabled {
 .setting-row {
   display: flex;
   flex-wrap: wrap;
+  /* (centered under the card's centered title) */
+  justify-content: center;
   gap: 16px 40px;
 }
 
@@ -641,10 +722,19 @@ button:disabled {
 }
 
 /* A switch's "on" side, chosen: in the accent (Default, Album art or
-   Custom's), as the switch's slider was */
-.seg-pill.on-side.selected {
+   Custom's), as the switch's slider was. A choice between things has no
+   off side (settings.js gives both of its sides "on-side"; Colors is one
+   too), so whichever is chosen is in the accent; only a chosen "Off"
+   stays plain */
+.seg-pill.on-side.selected,
+#colors-pills .seg-pill.selected {
   color: var(--on-accent, #fff);
   background: var(--accent);
+}
+
+/* (Custom's dot is the accent itself: a ring keeps it visible on it) */
+#colors-pills .seg-pill.selected .seg-dot {
+  box-shadow: 0 0 0 1.5px var(--on-accent, #fff);
 }
 
 /* Custom's accent, as a dot in its pill */
@@ -736,8 +826,16 @@ button:disabled {
   outline-offset: 2px;
 }
 
-/* Legend: one short paragraph per setting ("Zoom: what it does") */
-/* The Legend folds away (closed by default); its heading is the handle */
+/* Legend: one short paragraph per setting ("Zoom: what it does"), at the
+   bottom of the card whose settings it explains */
+.legend {
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+/* Closed until its "Legend" line is clicked: a small label with an arrow
+   that turns down when it's open */
 .legend summary {
   list-style: none;
   cursor: pointer;
@@ -745,6 +843,9 @@ button:disabled {
   align-items: center;
   justify-content: center;
   gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+  user-select: none;
 }
 
 .legend summary::-webkit-details-marker {
@@ -753,25 +854,24 @@ button:disabled {
 
 .legend summary::before {
   content: "";
-  width: 7px;
-  height: 7px;
-  border-right: 2px solid var(--muted);
-  border-bottom: 2px solid var(--muted);
+  width: 6px;
+  height: 6px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
   transform: rotate(-45deg);
   transition: transform 0.15s;
-  margin-right: 2px;
+}
+
+.legend summary:hover {
+  color: var(--text);
 }
 
 .legend[open] summary::before {
   transform: rotate(45deg);
 }
 
-.legend summary h2 {
-  margin: 0;
-}
-
 .legend[open] summary {
-  margin-bottom: 12px;
+  margin-bottom: 10px;
 }
 
 .legend p {
@@ -914,7 +1014,6 @@ button:disabled {
 }
 
 .hotkey-row[hidden],
-#hotkeys-heading[hidden],
 #hotkey-list[hidden] {
   display: none;
 }
@@ -1138,12 +1237,12 @@ button:disabled {
   margin: 8px 0 0;
 }
 
-/* General: the hotkey error line only takes room when there's an error */
-.general-card #hotkey-error {
+/* Hotkeys: the error line only takes room when there's an error */
+.hotkeys-card #hotkey-error {
   margin-top: 4px;
 }
 
-.general-card #hotkey-error:empty {
+.hotkeys-card #hotkey-error:empty {
   display: none;
 }
 
