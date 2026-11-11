@@ -542,7 +542,13 @@ pub struct LibraryTrack {
     pub image_key: Option<String>,
     pub length_seconds: Option<i32>,
     pub year: Option<u32>,
+    /// Hearted by the profile in use.
     pub favorite: bool,
+    /// Every profile that has hearted it (their ids in hex): Roon keeps a
+    /// track's hearts for all the account's profiles on the track, so one
+    /// read of the library has each profile's.
+    #[serde(default)]
+    pub hearted_by: Vec<String>,
     /// "local", "qobuz", "tidal", "streaming" or "other".
     pub source: String,
     /// When it came into the library (Roon's import date), Unix ms.
@@ -1942,10 +1948,32 @@ impl LibraryClient {
         stop_at: Option<i64>,
         progress: &(dyn Fn(usize, usize) + Sync),
     ) -> Result<History, LibraryError> {
+        self.history_of(None, limit, stop_at, progress).await
+    }
+
+    /// `history_since` for one of the account's profiles, by its id in hex
+    /// (None: the one in use). Roon's history query is asked per profile,
+    /// so any profile's plays can be read without switching to it.
+    pub async fn history_of(
+        &self,
+        profile: Option<&str>,
+        limit: usize,
+        stop_at: Option<i64>,
+        progress: &(dyn Fn(usize, usize) + Sync),
+    ) -> Result<History, LibraryError> {
         const PAGE: usize = 100;
         let (library, profile) = {
             let g = self.inner.graph.lock().unwrap();
-            (g.first_of_type("Library").map(|o| o.oid), self.profile_sooid(&g))
+            let sooid = match profile {
+                None => self.profile_sooid(&g),
+                Some(hex) => self
+                    .profile_objects(&g)
+                    .into_iter()
+                    .filter_map(|p| p.field("ProfileId").and_then(Value::as_bytes))
+                    .find(|id| id.iter().map(|b| format!("{b:02x}")).collect::<String>() == hex)
+                    .map(<[u8]>::to_vec),
+            };
+            (g.first_of_type("Library").map(|o| o.oid), sooid)
         };
         let (Some(library), Some(profile)) = (library, profile) else {
             return Err(LibraryError::UnsupportedCore("no Library service or Profile in the graph".into()));
@@ -4887,6 +4915,7 @@ fn describe_library_track(g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]
         length_seconds: t.field("LengthSeconds").and_then(Value::as_int),
         year: album.and_then(|a| year_of(a.field("OriginalReleaseDate")).or_else(|| year_of(a.field("ReleaseDate")))),
         favorite: read_state(t.field("IsFavorite"), profile),
+        hearted_by: state_profiles(t.field("IsFavorite")),
         source: source_name(t.field("Source").and_then(Value::as_int)),
         added_at: ["ImportDate", "DateAdded", "AddedDate", "ImportTime"]
             .iter()
@@ -5390,6 +5419,22 @@ pub fn read_state(raw: Option<&Value>, profile: Option<&[u8]>) -> bool {
         }
     }
     profile.is_none() && anyone
+}
+
+/// The profiles a per-profile map (see `read_state`) is set for, as their
+/// ids in hex.
+fn state_profiles(raw: Option<&Value>) -> Vec<String> {
+    let Some(bytes) = raw.and_then(Value::as_bytes).filter(|b| !b.is_empty()) else { return Vec::new() };
+    let mut r = Reader::new(bytes);
+    let Ok(count) = r.flex_int() else { return Vec::new() };
+    let mut out = Vec::new();
+    for _ in 0..count {
+        let (Ok(who), Ok(state)) = (r.sooid(), r.flex_int()) else { break };
+        if state == 1 {
+            out.push(who.iter().map(|b| format!("{b:02x}")).collect());
+        }
+    }
+    out
 }
 
 #[cfg(test)]

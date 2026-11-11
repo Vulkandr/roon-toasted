@@ -7,6 +7,11 @@
 //! page shows the progress); later syncs read the newest pages until they
 //! meet a play the copy already holds. Plays are kept newest first, one
 //! line each, told apart by their time and track.
+//!
+//! Listening is a Roon profile's own, so each profile has its copy
+//! (`wrapped-history-<profile id>.json`). The one in memory is the copy of
+//! the profile in use (`use_profile` swaps it); a sync reads every
+//! profile's in one pass, the others' straight to their files.
 
 use std::collections::HashMap;
 use std::fs;
@@ -37,7 +42,13 @@ struct Store {
 
 #[derive(Default)]
 pub struct Wrapped {
+    /// The copy of the profile in use.
     store: Mutex<Store>,
+    /// The file `store` was read from, and is saved to.
+    at: Mutex<Option<PathBuf>>,
+    /// Another profile's copy, while a Discover list is built for it in
+    /// the background (`with_plays`), with its file.
+    side: Mutex<Option<(PathBuf, Store)>>,
     loaded: AtomicBool,
     syncing: AtomicBool,
 }
@@ -69,6 +80,9 @@ struct Progress {
     added: Option<usize>,
     error: Option<String>,
     status: Option<HistoryStatus>,
+    /// Whose plays are being read (a profile's name), while a sync goes
+    /// over more profiles than one.
+    profile: Option<String>,
 }
 
 /// A most-played row (see `wrapped_history_top`).
@@ -85,8 +99,30 @@ pub struct TopRow {
     pub image_key: Option<String>,
 }
 
-fn path(app: &AppHandle) -> Option<PathBuf> {
+/// The one copy from before profiles had their own (1.5 and earlier): it
+/// becomes the account's first profile's, the one those versions read
+/// (`use_profile`).
+fn old_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|dir| dir.join("wrapped-history.json"))
+}
+
+/// A profile's copy, by the profile's id.
+fn path_of(app: &AppHandle, profile: &str) -> Option<PathBuf> {
+    app.path().app_data_dir().ok().map(|dir| dir.join(format!("wrapped-history-{profile}.json")))
+}
+
+/// The copy to go by before the Core has said which profile is in use: the
+/// one of the profile last in use, or the old single copy.
+fn path(app: &AppHandle) -> Option<PathBuf> {
+    match WrappedSettings::load_saved(app).history_profile {
+        Some(id) => path_of(app, &id),
+        None => old_path(app),
+    }
+}
+
+/// A copy read from its file (none there: an empty one).
+fn read_store(path: &std::path::Path) -> Store {
+    if path.exists() { read_json(path).unwrap_or_default() } else { Store::default() }
 }
 
 /// A JSON file in the app's data folder, if it is there and readable.
@@ -166,9 +202,19 @@ pub struct WrappedSettings {
     /// The user's own Last.fm API key (last.fm/api/account/create); without
     /// it only MusicBrainz is asked for tags.
     pub lastfm_key: String,
-    /// The user's Last.fm username, optional: their scrobbles fill in the
-    /// listening from before Roon's history (scrobbles.rs).
+    /// The Last.fm username of the profile in use, optional: its scrobbles
+    /// fill in the listening from before Roon's history (scrobbles.rs).
+    /// As `load` gives it, this is worked out from the two maps below;
+    /// what's saved here is only the one username of 1.5 and earlier,
+    /// until it's handed to the first profile (`profile_in_use`).
     pub lastfm_user: String,
+    /// A Last.fm username typed for a profile (the Profile page), by
+    /// profile id; empty for "none", whatever Roon has.
+    pub lastfm_users: HashMap<String, String>,
+    /// The Last.fm username each profile is signed in with in Roon (empty
+    /// for none), by profile id, as the Core last gave them: what a
+    /// profile goes by when nothing was typed for it.
+    pub lastfm_roon: HashMap<String, String>,
     /// Tier 3's own folder of music files (sound.rs "Manually choose music
     /// folder"), for songs Roon can't hand over; empty for none.
     pub music_folder: String,
@@ -220,6 +266,29 @@ pub struct WrappedSettings {
     /// A Custom profile's own General settings, by profile id (kept when
     /// it goes back to Default, for the next time).
     pub profile_general: HashMap<String, GeneralSet>,
+    /// The account's profiles as the Core last gave them (id to name), and
+    /// which one comes first. Kept by `profile_in_use`.
+    pub profile_names: HashMap<String, String>,
+    pub first_profile: Option<String>,
+    /// Discover's weekly lists switched on or off for a profile (the
+    /// Profile page), by profile id. A profile not in here: on for the
+    /// account's first profile, off for the others (`discover_on`).
+    pub discover_profiles: HashMap<String, bool>,
+    /// Whether the profile in use gets Discover's lists (worked out by
+    /// `load`, never saved).
+    pub discover_here: bool,
+    /// "Rescan daily" switched off (or back on) for a profile, by profile
+    /// id; a profile not in here is rescanned.
+    pub rescan_profiles: HashMap<String, bool>,
+    /// Whether the profile in use is rescanned daily (worked out by
+    /// `load`, never saved).
+    pub rescan_here: bool,
+    /// When the daily rescan last ran (Unix ms).
+    pub rescanned_at: i64,
+    /// The profile whose listening history is the one in use (its id),
+    /// for reading its copy before the Core is reached. Kept by
+    /// `Wrapped::use_profile`, not a setting to change.
+    pub history_profile: Option<String>,
     /// The shared General settings, when the ones above are a Custom
     /// profile's own (`load`): for the General page's Edit Default. Never
     /// saved.
@@ -231,6 +300,8 @@ impl Default for WrappedSettings {
         WrappedSettings {
             lastfm_key: String::new(),
             lastfm_user: String::new(),
+            lastfm_users: HashMap::new(),
+            lastfm_roon: HashMap::new(),
             music_folder: String::new(),
             similar_by: SimilarBy::default(),
             similar_scope: SimilarScope::default(),
@@ -251,6 +322,14 @@ impl Default for WrappedSettings {
             live_albums: false,
             genres: "wrapped".into(),
             profile_general: HashMap::new(),
+            profile_names: HashMap::new(),
+            first_profile: None,
+            discover_profiles: HashMap::new(),
+            discover_here: true,
+            rescan_profiles: HashMap::new(),
+            rescan_here: true,
+            rescanned_at: 0,
+            history_profile: None,
             shared_general: None,
         }
     }
@@ -262,7 +341,7 @@ impl WrappedSettings {
     }
 
     /// The settings as saved: the General ones are the shared ones.
-    fn load_saved(app: &AppHandle) -> Self {
+    pub fn load_saved(app: &AppHandle) -> Self {
         let mut saved: Self = Self::path(app).and_then(|p| read_json(&p)).unwrap_or_default();
         saved.shared_general = None;
         saved
@@ -290,7 +369,49 @@ impl WrappedSettings {
         crate::settings::custom_profile(app, &toasted)
     }
 
+    /// A profile's Last.fm username: the one typed for it, else the one
+    /// it's signed in with in Roon, else none. No profile shares another's
+    /// unless both come to the same name.
+    fn lastfm_of(&self, profile: &str) -> String {
+        self.lastfm_users.get(profile).or_else(|| self.lastfm_roon.get(profile)).map(|u| u.trim().to_string()).unwrap_or_default()
+    }
+
+    /// Every Last.fm username in use, each once (two profiles on the same
+    /// account share one read of it).
+    pub fn lastfm_all(app: &AppHandle) -> Vec<String> {
+        let saved = Self::load_saved(app);
+        let mut users: Vec<String> = Vec::new();
+        let ids: std::collections::BTreeSet<&String> = saved.lastfm_roon.keys().chain(saved.lastfm_users.keys()).collect();
+        for user in ids.into_iter().map(|id| saved.lastfm_of(id)).chain([saved.lastfm_user.trim().to_string()]) {
+            if !user.is_empty() && !users.iter().any(|u| u.eq_ignore_ascii_case(&user)) {
+                users.push(user);
+            }
+        }
+        users
+    }
+
+    /// Whether a profile gets Discover's weekly lists: as switched on its
+    /// Profile page, else only the account's first profile does.
+    pub fn discover_on(&self, profile: &str) -> bool {
+        self.discover_profiles.get(profile).copied().unwrap_or(self.first_profile.as_deref().is_none_or(|first| first == profile))
+    }
+
+    /// The profiles that get Discover's lists, the first profile first
+    /// and the rest by name.
+    pub fn discover_owners(&self) -> Vec<String> {
+        let mut ids: Vec<&String> = self.profile_names.keys().filter(|id| self.discover_on(id)).collect();
+        ids.sort_by_key(|id| (Some(*id) != self.first_profile.as_ref(), self.profile_names[*id].to_lowercase()));
+        ids.into_iter().cloned().collect()
+    }
+
     fn for_profile(mut self, app: &AppHandle) -> Self {
+        // (the profile in use, as the history copy has it: known before
+        // the Core is reached too)
+        if let Some(id) = self.history_profile.clone() {
+            self.lastfm_user = self.lastfm_of(&id);
+            self.discover_here = self.discover_on(&id);
+            self.rescan_here = self.rescan_profiles.get(&id).copied().unwrap_or(true);
+        }
         let Some(own) = Self::custom_profile(app).and_then(|id| self.profile_general.get(&id).cloned()) else {
             return self;
         };
@@ -362,11 +483,18 @@ pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value, share
     let mut value = serde_json::to_value(&saved).map_err(|e| e.to_string())?;
     let fields = value.as_object_mut().expect("settings serialize to an object");
     for (name, new) in changes {
-        if name == "profileGeneral" || name == "sharedGeneral" {
+        if ["profileGeneral", "sharedGeneral", "historyProfile", "lastfmUsers", "lastfmRoon", "profileNames", "firstProfile", "discoverProfiles", "discoverHere", "rescanProfiles", "rescanHere", "rescannedAt"].contains(&name.as_str()) {
             return Err(format!("{name} isn't changed directly."));
         }
         if !fields.contains_key(name) {
             return Err(format!("Unknown Wrapped setting: {name}"));
+        }
+        // (a Last.fm username is the profile in use's own)
+        if let ("lastfmUser", Some(id)) = (name.as_str(), &saved.history_profile) {
+            if let Some(all) = fields.get_mut("lastfmUsers").and_then(|all| all.as_object_mut()) {
+                all.insert(id.clone(), new.clone());
+            }
+            continue;
         }
         match &own {
             Some(id) if GENERAL_NAMES.contains(&name.as_str()) => {
@@ -384,6 +512,9 @@ pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value, share
     let next = next.for_profile(&app);
     crate::ollama::settings_changed(&app, &current, &next);
     crate::discover::set_enabled(next.discovery);
+    if next.lastfm_user != current.lastfm_user {
+        crate::scrobbles::user_changed(&app);
+    }
     // (Toasted's Settings window shows Wrapped Discovery too)
     let _ = app.emit("wrapped-settings-changed", &next);
     Ok(next)
@@ -415,22 +546,82 @@ impl Wrapped {
             return;
         }
         let Some(path) = path(app) else { return };
-        match fs::read(&path) {
-            Ok(bytes) => match serde_json::from_slice::<Store>(&bytes) {
-                Ok(store) => {
-                    println!("[wrapped] history copy: {} plays", store.plays.len());
-                    *self.store.lock().unwrap() = store;
-                }
-                Err(e) => println!("[wrapped] history copy unreadable ({e}); starting over"),
-            },
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => println!("[wrapped] history copy: {e}"),
-        }
+        let store = read_store(&path);
+        println!("[wrapped] history copy: {} plays", store.plays.len());
+        *self.store.lock().unwrap() = store;
+        *self.at.lock().unwrap() = Some(path);
     }
 
     fn save(&self, app: &AppHandle) {
-        let Some(path) = path(app) else { return };
+        let Some(path) = self.at.lock().unwrap().clone().or_else(|| path(app)) else { return };
         write_json(&path, &*self.store.lock().unwrap());
+    }
+
+    /// The profile in use, as the Core has it (`first`: the account's
+    /// first profile): its copy becomes the one in memory, if it wasn't.
+    /// The single copy of 1.5 and earlier is handed to the first profile
+    /// the first time through. Returns whether the copy changed.
+    pub fn use_profile(&self, app: &AppHandle, first: &str, id: &str) -> bool {
+        self.ensure_loaded(app);
+        if let (Some(old), Some(firsts)) = (old_path(app), path_of(app, first)) {
+            if old.exists() && !firsts.exists() {
+                match fs::rename(&old, &firsts) {
+                    Ok(()) => {
+                        println!("[wrapped] the history copy is the first profile's now");
+                        let mut at = self.at.lock().unwrap();
+                        if at.as_deref() == Some(old.as_path()) {
+                            *at = Some(firsts);
+                        }
+                    }
+                    Err(e) => println!("[wrapped] could not hand the history copy to the first profile: {e}"),
+                }
+            }
+        }
+        let Some(target) = path_of(app, id) else { return false };
+        let mut saved = WrappedSettings::load_saved(app);
+        if saved.history_profile.as_deref() != Some(id) {
+            saved.history_profile = Some(id.to_string());
+            saved.save(app);
+        }
+        let mut at = self.at.lock().unwrap();
+        if at.as_deref() == Some(target.as_path()) {
+            return false;
+        }
+        let store = read_store(&target);
+        println!("[wrapped] history copy of the profile in use: {} plays", store.plays.len());
+        *self.store.lock().unwrap() = store;
+        *at = Some(target);
+        true
+    }
+
+    /// Looks at a profile's copy (in memory if that profile is in use,
+    /// otherwise from its file) without saving anything.
+    fn read_copy<R>(&self, app: &AppHandle, profile: &str, look: impl FnOnce(&Store) -> R) -> Option<R> {
+        let path = path_of(app, profile)?;
+        if self.at.lock().unwrap().as_deref() == Some(path.as_path()) {
+            return Some(look(&self.store.lock().unwrap()));
+        }
+        Some(look(&read_store(&path)))
+    }
+
+    /// Changes a profile's copy: the one in memory if that profile is in
+    /// use (saved after), otherwise its file.
+    fn with_copy<R>(&self, app: &AppHandle, profile: &str, change: impl FnOnce(&mut Store) -> R) -> Option<R> {
+        let path = path_of(app, profile)?;
+        if self.at.lock().unwrap().as_deref() == Some(path.as_path()) {
+            let out = change(&mut self.store.lock().unwrap());
+            self.save(app);
+            return Some(out);
+        }
+        let mut store = read_store(&path);
+        let out = change(&mut store);
+        write_json(&path, &store);
+        // (a copy of it kept for a build is read again when next wanted)
+        let mut side = self.side.lock().unwrap();
+        if side.as_ref().is_some_and(|(at, _)| *at == path) {
+            *side = None;
+        }
+        Some(out)
     }
 
     fn status(&self, app: &AppHandle) -> HistoryStatus {
@@ -485,9 +676,221 @@ fn chrono_like_now() -> String {
     format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02} UTC", rest / 3600, rest % 3600 / 60, rest % 60)
 }
 
-/// Brings the copy up to date in the background: everything when it is
-/// empty (or `full`), otherwise only what is newer than it. Progress goes
-/// out as "wrapped-history" events; the result is the status when done.
+/// Discover's weekly lists switched on or off for a profile (the Profile
+/// page).
+#[tauri::command]
+pub fn wrapped_profile_discover(app: AppHandle, id: String, on: bool) -> WrappedSettings {
+    let mut saved = WrappedSettings::load_saved(&app);
+    saved.discover_profiles.insert(id, on);
+    saved.save(&app);
+    let now = WrappedSettings::load(&app);
+    let _ = app.emit("wrapped-settings-changed", &now);
+    now
+}
+
+/// "Rescan daily" switched on or off for a profile (the Profile page).
+#[tauri::command]
+pub fn wrapped_profile_rescan_daily(app: AppHandle, id: String, on: bool) -> WrappedSettings {
+    let mut saved = WrappedSettings::load_saved(&app);
+    saved.rescan_profiles.insert(id, on);
+    saved.save(&app);
+    let now = WrappedSettings::load(&app);
+    let _ = app.emit("wrapped-settings-changed", &now);
+    now
+}
+
+/// Rescans the profile in use now (the Profile page's Rescan): its new
+/// plays and scrobbles, then the library with its hearts, and the tags of
+/// artists new to either.
+#[tauri::command]
+pub async fn wrapped_rescan(app: AppHandle) -> Result<(), String> {
+    let client = app.state::<Library>().client().ok_or("Not connected to the Roon Core's library yet.")?;
+    let profile = client.profile().ok_or("Roon hasn't said which profile is in use yet.")?;
+    rescan(&app, &client, vec![profile.id]).await;
+    Ok(())
+}
+
+/// One rescan: these profiles' new plays (each into its own copy) and
+/// their Last.fm scrobbles, then what every profile shares, the library
+/// with its hearts (the tags of new artists follow it, tags.rs). The
+/// pages hear of each part as they do of a read started by hand.
+async fn rescan(app: &AppHandle, client: &roon_library::LibraryClient, ids: Vec<String>) {
+    let wrapped = app.state::<Wrapped>();
+    wrapped.ensure_loaded(app);
+    let profiles: Vec<roon_library::ProfileInfo> = client.profiles().into_iter().filter(|p| ids.contains(&p.id)).collect();
+    if !wrapped.syncing.swap(true, Ordering::SeqCst) {
+        for profile in &profiles {
+            let name = profile.name.clone();
+            let progress = |loaded: usize, wanted: usize| {
+                let _ = app.emit("wrapped-history", Progress { loaded, wanted, done: false, added: None, error: None, status: None, profile: Some(name.clone()) });
+            };
+            match sync_profile(app, client, profile, false, &progress).await {
+                Ok(n) => println!("[wrapped] rescan, {}: {n} new plays", profile.name),
+                Err(e) => println!("[wrapped] rescan, {}: {e}", profile.name),
+            }
+        }
+        wrapped.syncing.store(false, Ordering::SeqCst);
+        let status = wrapped.status(app);
+        let _ = app.emit("wrapped-history", Progress { loaded: status.plays, wanted: status.plays, done: true, added: None, error: None, status: Some(status), profile: None });
+    }
+    let saved = WrappedSettings::load_saved(app);
+    let mut users: Vec<String> = Vec::new();
+    for user in profiles.iter().map(|p| saved.lastfm_of(&p.id)) {
+        if !user.is_empty() && !users.iter().any(|u| u.eq_ignore_ascii_case(&user)) {
+            users.push(user);
+        }
+    }
+    crate::scrobbles::rescan(app, users);
+    let _ = wrapped_library_sync(app.clone());
+}
+
+/// The daily rescan: once a day, every profile that has "Rescan daily" on
+/// (they all do until it's switched off on a Profile page) gets its new
+/// plays and scrobbles read, and the library is read again, so nobody has
+/// to come back and press the buttons. Looks a few minutes after start,
+/// then every hour; not without the library link.
+pub fn schedule_rescan(app: &AppHandle) {
+    const DAY: i64 = 24 * 3_600_000;
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(180)).await;
+        loop {
+            let saved = WrappedSettings::load_saved(&app);
+            if now_ms() - saved.rescanned_at >= DAY {
+                if let Some(client) = app.state::<Library>().client() {
+                    let ids: Vec<String> = client.profiles().into_iter().map(|p| p.id).filter(|id| saved.rescan_profiles.get(id).copied().unwrap_or(true)).collect();
+                    if !ids.is_empty() {
+                        println!("[wrapped] daily rescan: {} profiles", ids.len());
+                        rescan(&app, &client, ids).await;
+                        let mut saved = WrappedSettings::load_saved(&app);
+                        saved.rescanned_at = now_ms();
+                        saved.save(&app);
+                    }
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(3_600)).await;
+        }
+    });
+}
+
+/// A read of Roon's history put into a copy: a full one (`stop_at` None)
+/// replaces the copy with every play read (one that came back short keeps
+/// the copy's other plays too), otherwise the new plays join it. Returns
+/// how many plays are new.
+fn merge(store: &mut Store, history: roon_library::History, stop_at: Option<i64>) -> usize {
+    let known: std::collections::HashSet<_> = store.plays.iter().map(play_key).collect();
+    let read: Vec<Play> = history.plays.into_iter().filter(|p| stop_at.is_none_or(|at| p.played_at > at)).collect();
+    let added = read.iter().filter(|p| !known.contains(&play_key(p))).count();
+    // (whether a full read came back short of what Roon said it has: by
+    // the plays read, before the ones Roon lists twice are dropped)
+    let short = read.len() as u32 + 50 < history.total;
+    if stop_at.is_none() {
+        let mut seen = std::collections::HashSet::new();
+        let mut plays: Vec<Play> = read.into_iter().filter(|p| seen.insert(play_key(p))).collect();
+        if short {
+            plays.extend(store.plays.drain(..).filter(|p| seen.insert(play_key(p))));
+        }
+        store.plays = plays;
+    } else {
+        let mut fresh: Vec<Play> = read.into_iter().filter(|p| !known.contains(&play_key(p))).collect();
+        fresh.append(&mut store.plays);
+        store.plays = fresh;
+    }
+    store.plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
+    store.total = history.total;
+    store.synced_at = Some(now_ms());
+    store.complete = stop_at.is_some() || !short;
+    added
+}
+
+/// The Core's word on which profile is in use, taken up by the history
+/// copy (library.rs: on connect, on a switch, and when the account's
+/// profiles change). The pages hear when the copy is another one now.
+pub fn profile_in_use(app: &AppHandle, client: &roon_library::LibraryClient) {
+    let profiles = client.profiles();
+    let (Some(first), Some(now)) = (profiles.first(), client.profile()) else { return };
+    let wrapped = app.state::<Wrapped>();
+    let swapped = wrapped.use_profile(app, &first.id, &now.id);
+    // Last.fm: who each profile is in Roon, and the one username of 1.5
+    // and earlier handed to the first profile, like its history
+    let mut saved = WrappedSettings::load_saved(app);
+    let roon: HashMap<String, String> = profiles.iter().map(|p| (p.id.clone(), p.lastfm_user.clone().unwrap_or_default())).collect();
+    let names: HashMap<String, String> = profiles.iter().map(|p| (p.id.clone(), p.name.clone())).collect();
+    let old = saved.lastfm_user.trim().to_string();
+    if roon != saved.lastfm_roon || !old.is_empty() || names != saved.profile_names || saved.first_profile.as_ref() != Some(&first.id) {
+        saved.lastfm_roon = roon;
+        saved.profile_names = names;
+        saved.first_profile = Some(first.id.clone());
+        if !old.is_empty() {
+            saved.lastfm_users.entry(first.id.clone()).or_insert(old);
+            saved.lastfm_user.clear();
+        }
+        saved.save(app);
+    }
+    crate::scrobbles::user_changed(app);
+    // (Discover's ratings and lists are the profile's own too)
+    crate::discover::use_profile(app, &first.id, &now.id);
+    // The hearts in the library copy are this profile's now. A copy from
+    // before they were kept per profile is read again, once another
+    // profile than the one it was read for is in use
+    if !app.state::<LibraryCopy>().use_profile(app, &now.id) && swapped {
+        println!("[wrapped] library copy: read again for the hearts of each profile");
+        // (until it's read, the pages show the scan and not the copy)
+        if wrapped_library_sync(app.clone()).is_ok() {
+            set_stale(app, true);
+        }
+    }
+    if swapped {
+        let status = wrapped.status(app);
+        let _ = app.emit("wrapped-history", Progress { loaded: status.plays, wanted: status.plays, done: true, added: None, error: None, status: Some(status), profile: None });
+    }
+}
+
+/// One profile's plays read from the Core into its copy: everything when
+/// the copy isn't complete (or `full`), otherwise what is newer than it.
+/// Returns how many plays are new.
+async fn sync_profile(
+    app: &AppHandle,
+    client: &roon_library::LibraryClient,
+    profile: &roon_library::ProfileInfo,
+    full: bool,
+    progress: &(dyn Fn(usize, usize) + Sync),
+) -> Result<usize, String> {
+    let wrapped = app.state::<Wrapped>();
+    let stop_at = wrapped
+        .read_copy(app, &profile.id, |store| if full || !store.complete { None } else { store.plays.first().map(|p| p.played_at) })
+        .flatten();
+    let checking = stop_at.is_some();
+    let report = |loaded: usize, wanted: usize| progress(loaded, if checking { 0 } else { wanted });
+    let result = client.history_of(Some(&profile.id), 200_000, stop_at, &report).await;
+    // A profile that has played nothing yet: Roon gives its history no
+    // count at all. With no plays in its copy either, that's an empty
+    // history read in full (a copy that has plays is left as it is)
+    let unread = wrapped.read_copy(app, &profile.id, |store| store.plays.is_empty()).unwrap_or(false);
+    let result = match result {
+        Err(roon_library::LibraryError::Unconfirmed(why)) if unread && why.contains("how many plays") => {
+            Ok(roon_library::History { total: 0, plays: Vec::new(), debug: "no count from Roon: nothing played yet".into() })
+        }
+        other => other,
+    };
+    // (what the read saw, kept in history-log.txt next to the copies)
+    history_log(app, &match &result {
+        Ok(h) => format!("{}, {} read: {} plays back; {}", profile.name, if checking { "new plays" } else { "full" }, h.plays.len(), h.debug),
+        Err(e) => format!("{}, read failed: {e}", profile.name),
+    });
+    let history = result.map_err(|e| format!("Reading the history failed: {e}"))?;
+    // (Roon said it has plays but none came back: the copy is kept as it
+    // is, rather than emptied)
+    if history.plays.is_empty() && history.total > 0 && !checking {
+        return Err(format!("Reading the history failed: Roon has {} plays but none came back", history.total));
+    }
+    wrapped.with_copy(app, &profile.id, |store| merge(store, history, stop_at)).ok_or_else(|| "Couldn't find the app data folder.".to_string())
+}
+
+/// Brings the copies up to date in the background, every profile's in one
+/// pass (the one in use first): everything for a copy that is empty (or
+/// `full`), otherwise only what is newer than it. Progress goes out as
+/// "wrapped-history" events; the result is the status when done.
 #[tauri::command]
 pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<HistoryStatus, String> {
     let wrapped = app.state::<Wrapped>();
@@ -501,78 +904,43 @@ pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<Histor
         return Err("Not connected to the Roon Core's library yet.".into());
     };
     let full = full.unwrap_or(false);
-    let stop_at = {
-        let store = wrapped.store.lock().unwrap();
-        if full || !store.complete {
-            None
-        } else {
-            store.plays.first().map(|p| p.played_at)
-        }
-    };
     let app2 = app.clone();
     tauri::async_runtime::spawn(async move {
         let wrapped = app2.state::<Wrapped>();
-        let checking = stop_at.is_some();
-        let emit = |loaded: usize, wanted: usize, done: bool, added: Option<usize>, error: Option<String>, status: Option<HistoryStatus>| {
-            let _ = app2.emit("wrapped-history", Progress { loaded, wanted, done, added, error, status });
+        let emit = |loaded: usize, wanted: usize, done: bool, added: Option<usize>, error: Option<String>, status: Option<HistoryStatus>, profile: Option<String>| {
+            let _ = app2.emit("wrapped-history", Progress { loaded, wanted, done, added, error, status, profile });
         };
-        let progress = |loaded: usize, wanted: usize| emit(loaded, if checking { 0 } else { wanted }, false, None, None, None);
-        let result = client.history_since(200_000, stop_at, &progress).await;
-        // (what the read saw, kept in history-log.txt next to the copy)
-        history_log(&app2, &match &result {
-            Ok(h) => format!("{} read: {} plays back; {}", if stop_at.is_some() { "new plays" } else { "full" }, h.plays.len(), h.debug),
-            Err(e) => format!("read failed: {e}"),
-        });
-        // (Roon said it has plays but none came back: the copy is kept as
-        // it is, rather than emptied)
-        let result = result.and_then(|h| {
-            if h.plays.is_empty() && h.total > 0 && stop_at.is_none() {
-                Err(roon_library::LibraryError::Unconfirmed(format!("Roon has {} plays but none came back", h.total)))
-            } else {
-                Ok(h)
-            }
-        });
-        match result {
-            Ok(history) => {
-                let added = {
-                    let mut store = wrapped.store.lock().unwrap();
-                    let known: std::collections::HashSet<_> = store.plays.iter().map(play_key).collect();
-                    let read: Vec<Play> = history.plays.into_iter().filter(|p| stop_at.is_none_or(|at| p.played_at > at)).collect();
-                    let added = read.iter().filter(|p| !known.contains(&play_key(p))).count();
-                    if stop_at.is_none() {
-                        // A full read replaces the copy with every play it
-                        // read; one that came back short keeps the copy's
-                        // other plays too
-                        let short = read.len() as u32 + 50 < history.total;
-                        let mut seen = std::collections::HashSet::new();
-                        let mut plays: Vec<Play> = read.into_iter().filter(|p| seen.insert(play_key(p))).collect();
-                        if short {
-                            plays.extend(store.plays.drain(..).filter(|p| seen.insert(play_key(p))));
-                        }
-                        store.plays = plays;
-                    } else {
-                        let mut fresh: Vec<Play> = read.into_iter().filter(|p| !known.contains(&play_key(p))).collect();
-                        fresh.append(&mut store.plays);
-                        store.plays = fresh;
+        // (the profile in use first: its plays are the ones on the pages)
+        let mut profiles = client.profiles();
+        let using = client.profile().map(|p| p.id);
+        profiles.sort_by_key(|p| Some(&p.id) != using.as_ref());
+        let several = profiles.len() > 1;
+        let (mut added, mut error) = (None, None);
+        for profile in &profiles {
+            let mine = Some(&profile.id) == using.as_ref();
+            let name = several.then(|| profile.name.clone());
+            let progress = |loaded: usize, wanted: usize| emit(loaded, wanted, false, None, None, None, name.clone());
+            match sync_profile(&app2, &client, profile, full, &progress).await {
+                Ok(n) => {
+                    println!("[wrapped] history synced, {}: {n} new plays", profile.name);
+                    if mine {
+                        added = Some(n);
                     }
-                    store.plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
-                    store.total = history.total;
-                    store.synced_at = Some(now_ms());
-                    store.complete = stop_at.is_some() || store.plays.len() as u32 + 50 >= history.total;
-                    added
-                };
-                wrapped.save(&app2);
-                println!("[wrapped] history synced: {added} new plays");
-                wrapped.syncing.store(false, Ordering::SeqCst);
-                let status = wrapped.status(&app2);
-                emit(status.plays, status.plays, true, Some(added), None, Some(status));
-            }
-            Err(e) => {
-                wrapped.syncing.store(false, Ordering::SeqCst);
-                let status = wrapped.status(&app2);
-                emit(status.plays, status.plays, true, None, Some(format!("Reading the history failed: {e}")), Some(status));
+                }
+                // (the page says what went wrong with the profile in use;
+                // another profile's read is tried again with the next sync)
+                Err(e) if mine => error = Some(e),
+                Err(e) => println!("[wrapped] history, {}: {e}", profile.name),
             }
         }
+        if profiles.is_empty() {
+            error = Some("Roon hasn't said which profiles this account has yet.".into());
+        }
+        wrapped.syncing.store(false, Ordering::SeqCst);
+        let status = wrapped.status(&app2);
+        emit(status.plays, status.plays, true, if error.is_some() { None } else { added }, error, Some(status), None);
+        // (artists new to the history get their tags)
+        crate::tags::fill_missing(&app2);
     });
     Ok(wrapped.status(&app))
 }
@@ -583,43 +951,26 @@ pub fn wrapped_history_sync(app: AppHandle, full: Option<bool>) -> Result<Histor
 pub async fn history_catch_up(app: &AppHandle) -> Result<usize, String> {
     let wrapped = app.state::<Wrapped>();
     wrapped.ensure_loaded(app);
-    let stop_at = {
-        let store = wrapped.store.lock().unwrap();
-        if !store.complete {
-            return Ok(0);
-        }
-        store.plays.first().map(|p| p.played_at)
+    let Some(client) = app.state::<Library>().client() else {
+        return Err("Not connected to the Roon Core's library yet.".into());
     };
+    // (the profile a list is being built for, else the one in use; its
+    // own copy, even if another profile is picked meanwhile)
+    let profile = match crate::discover::acting() {
+        Some(id) => client.profiles().into_iter().find(|p| p.id == id),
+        None => client.profile(),
+    };
+    let Some(profile) = profile else { return Ok(0) };
+    if !wrapped.read_copy(app, &profile.id, |store| store.complete).unwrap_or(false) {
+        return Ok(0);
+    }
     if wrapped.syncing.swap(true, Ordering::SeqCst) {
         return Ok(0);
     }
-    let Some(client) = app.state::<Library>().client() else {
-        wrapped.syncing.store(false, Ordering::SeqCst);
-        return Err("Not connected to the Roon Core's library yet.".into());
-    };
-    let quiet = |_: usize, _: usize| {};
-    let result = client.history_since(200_000, stop_at, &quiet).await;
+    let result = sync_profile(app, &client, &profile, false, &|_, _| {}).await;
     wrapped.syncing.store(false, Ordering::SeqCst);
-    let history = result.map_err(|e| format!("Reading the history failed: {e}"))?;
-    let added = {
-        let mut store = wrapped.store.lock().unwrap();
-        let known: std::collections::HashSet<_> = store.plays.iter().map(play_key).collect();
-        let mut fresh: Vec<Play> = history
-            .plays
-            .into_iter()
-            .filter(|p| stop_at.is_none_or(|at| p.played_at > at))
-            .filter(|p| !known.contains(&play_key(p)))
-            .collect();
-        let added = fresh.len();
-        fresh.append(&mut store.plays);
-        store.plays = fresh;
-        store.plays.sort_by(|a, b| b.played_at.cmp(&a.played_at));
-        store.total = history.total;
-        store.synced_at = Some(now_ms());
-        added
-    };
-    wrapped.save(app);
-    println!("[wrapped] history caught up: {added} new plays");
+    let added = result?;
+    println!("[wrapped] history caught up, {}: {added} new plays", profile.name);
     Ok(added)
 }
 
@@ -670,11 +1021,19 @@ pub struct PlayRow {
 #[tauri::command]
 pub fn wrapped_library_favorite(app: AppHandle, track_id: u64, favorite: bool) {
     let copy = app.state::<LibraryCopy>();
+    // (the profile in use: the heart is its own)
+    let profile = WrappedSettings::load_saved(&app).history_profile;
     let changed = copy.with_store(&app, |s| {
         let mut changed = false;
         for t in s.tracks.iter_mut().filter(|t| t.track_id == Some(track_id)) {
             changed |= t.favorite != favorite;
             t.favorite = favorite;
+            if let Some(id) = &profile {
+                t.hearted_by.retain(|by| by != id);
+                if favorite {
+                    t.hearted_by.push(id.clone());
+                }
+            }
         }
         changed
     });
@@ -804,6 +1163,10 @@ pub struct LibraryAlbum {
 #[serde(rename_all = "camelCase", default)]
 struct LibraryStore {
     synced_at: Option<i64>,
+    /// The tracks say which profiles hearted them (`hearted_by`; a copy
+    /// read before 1.6 only has the hearts of the profile it was read
+    /// for).
+    hearts_known: bool,
     artists: Vec<LibraryArtist>,
     albums: Vec<LibraryAlbum>,
     tracks: Vec<LibraryTrack>,
@@ -823,6 +1186,20 @@ pub struct LibraryStatus {
     pub tracks: usize,
     pub synced_at: Option<i64>,
     pub syncing: bool,
+    /// The copy is being read again because what it holds isn't right for
+    /// the profile in use (its hearts are another profile's): the pages
+    /// show a scan in progress instead of it.
+    pub stale: bool,
+}
+
+/// See `LibraryStatus::stale`; the pages hear a change as
+/// "wrapped-library-stale".
+static STALE: AtomicBool = AtomicBool::new(false);
+
+fn set_stale(app: &AppHandle, stale: bool) {
+    if STALE.swap(stale, Ordering::SeqCst) != stale {
+        let _ = app.emit("wrapped-library-stale", stale);
+    }
 }
 
 impl LibraryCopy {
@@ -840,6 +1217,21 @@ impl LibraryCopy {
         self.with_store(app, |s| s.artists.clone())
     }
 
+    /// The hearts on the tracks become those of this profile (they are
+    /// kept for every profile, `hearted_by`). Returns false for a copy
+    /// that doesn't know them per profile yet: it wants reading again.
+    fn use_profile(&self, app: &AppHandle, profile: &str) -> bool {
+        self.with_store(app, |s| {
+            if !s.hearts_known {
+                return s.tracks.is_empty();
+            }
+            for t in &mut s.tracks {
+                t.favorite = t.hearted_by.iter().any(|id| id == profile);
+            }
+            true
+        })
+    }
+
     /// The library's artist names, lower-cased, for "is this in the library".
     pub fn names(&self, app: &AppHandle) -> std::collections::HashSet<String> {
         self.with_store(app, |s| s.artists.iter().map(|a| a.name.to_lowercase()).collect())
@@ -855,7 +1247,7 @@ impl LibraryCopy {
 
     fn status(&self, app: &AppHandle) -> LibraryStatus {
         let (artists, albums, tracks, synced_at) = self.with_store(app, |s| (s.artists.len(), s.albums.len(), s.tracks.len(), s.synced_at));
-        LibraryStatus { artists, albums, tracks, synced_at, syncing: self.syncing.load(Ordering::SeqCst) }
+        LibraryStatus { artists, albums, tracks, synced_at, syncing: self.syncing.load(Ordering::SeqCst), stale: STALE.load(Ordering::SeqCst) }
     }
 }
 
@@ -1137,6 +1529,7 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
                     }
                     if let Some(tracks) = tracks {
                         s.tracks = tracks;
+                        s.hearts_known = true;
                     }
                     s.synced_at = Some(now_ms());
                 });
@@ -1167,10 +1560,14 @@ pub fn wrapped_library_sync(app: AppHandle) -> Result<LibraryStatus, String> {
                     "[wrapped] library copy: tracks with a number {numbered}, composer {composed}, format {formatted}, dynamic range {ranged}, path {pathed}"
                 );
                 copy.syncing.store(false, Ordering::SeqCst);
+                set_stale(&app2, false);
                 let _ = app2.emit("wrapped-library", serde_json::json!({ "read": n, "total": n, "what": "artists", "done": true }));
+                // (artists new to the library get their tags)
+                crate::tags::fill_missing(&app2);
             }
             Err(e) => {
                 copy.syncing.store(false, Ordering::SeqCst);
+                set_stale(&app2, false);
                 let _ = app2.emit("wrapped-library", serde_json::json!({ "read": 0, "total": 0, "done": true, "error": format!("Reading the library failed: {e}") }));
             }
         }
@@ -1195,6 +1592,17 @@ impl Wrapped {
     /// Runs `f` over the copy's plays (newest first).
     pub fn with_plays<T>(&self, app: &AppHandle, f: impl FnOnce(&[Play]) -> T) -> T {
         self.ensure_loaded(app);
+        // A Discover list being built for another profile than the one in
+        // use reads that profile's plays, from its file
+        if let Some(path) = crate::discover::acting().and_then(|id| path_of(app, &id)) {
+            if self.at.lock().unwrap().as_deref() != Some(path.as_path()) {
+                let mut side = self.side.lock().unwrap();
+                if !side.as_ref().is_some_and(|(at, _)| *at == path) {
+                    *side = Some((path.clone(), read_store(&path)));
+                }
+                return f(&side.as_ref().unwrap().1.plays);
+            }
+        }
         let store = self.store.lock().unwrap();
         f(&store.plays)
     }

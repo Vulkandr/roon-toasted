@@ -284,27 +284,149 @@ impl Store {
 
 #[derive(Default)]
 pub struct Discover {
-    store: Mutex<Option<Store>>,
+    /// Each Roon profile has its own lists, ratings and requests
+    /// (`wrapped-discover-<profile id>.json`): the ones read so far, by
+    /// their file. Everything here works on the profile in use, or on the
+    /// one a list is being built for (`ACTING`).
+    stores: Mutex<HashMap<PathBuf, Store>>,
     building: Mutex<Option<Which>>,
-    /// Why the last build of each failed, until one works.
+    /// Whose list that is (a profile's id; None: the one file of 1.5 and
+    /// earlier).
+    building_for: Mutex<Option<String>>,
+    /// Why the last build of each failed, until one works (by profile and
+    /// list: `fail_key`).
     failed: Mutex<HashMap<String, String>>,
 }
 
+tokio::task_local! {
+    /// The profile a list is being built for (its id): the build keeps to
+    /// it, whichever profile is picked meanwhile.
+    static ACTING: String;
+}
+
+/// The profile in use (its id), once known: asked from the settings the
+/// first time, then kept by `use_profile`.
+static ACTIVE: Mutex<Option<Option<String>>> = Mutex::new(None);
+
+/// The profile to work on: the one a build is for, else the one in use
+/// (None before any profile was ever known: the one file of 1.5 and
+/// earlier).
+fn profile(app: &AppHandle) -> Option<String> {
+    if let Ok(id) = ACTING.try_with(|id| id.clone()) {
+        return Some(id);
+    }
+    ACTIVE.lock().unwrap().get_or_insert_with(|| WrappedSettings::load_saved(app).history_profile).clone()
+}
+
+/// The profile a list is being built for in this task, if it is one (the
+/// history that build reads is that profile's: wrapped.rs).
+pub fn acting() -> Option<String> {
+    ACTING.try_with(|id| id.clone()).ok()
+}
+
+/// Whether what this task does is for the profile in use (a list built in
+/// the background for another profile says nothing to the pages).
+fn for_profile_in_use(app: &AppHandle) -> bool {
+    let in_use = ACTIVE.lock().unwrap().get_or_insert_with(|| WrappedSettings::load_saved(app).history_profile).clone();
+    acting().is_none_or(|id| Some(id) == in_use)
+}
+
+/// A build's progress, to the pages of the profile it's for.
+fn say(app: &AppHandle, what: serde_json::Value) {
+    if for_profile_in_use(app) {
+        let _ = app.emit("wrapped-discover", what);
+    }
+}
+
+/// Where a list's last failure is kept: by profile and list.
+fn fail_key(app: &AppHandle, slot: &str) -> String {
+    format!("{}:{slot}", profile(app).unwrap_or_default())
+}
+
+/// The Core's word on which profile is in use (wrapped.rs). The one file
+/// of 1.5 and earlier is handed to the account's first profile the first
+/// time through.
+pub fn use_profile(app: &AppHandle, first: &str, id: &str) {
+    if let Ok(dir) = app.path().app_data_dir() {
+        let (old, firsts) = (dir.join("wrapped-discover.json"), dir.join(format!("wrapped-discover-{first}.json")));
+        // (only a copy of it already in memory is moved here; one not read
+        // yet is taken over when the first profile's is read, `read`)
+        if old.exists() && !firsts.exists() && app.state::<Discover>().stores.lock().unwrap().contains_key(&old) {
+            let discover = app.state::<Discover>();
+            let mut stores = discover.stores.lock().unwrap();
+            match std::fs::rename(&old, &firsts) {
+                Ok(()) => {
+                    println!("[discover] the lists and ratings are the first profile's now");
+                    if let Some(store) = stores.remove(&old) {
+                        stores.insert(firsts, store);
+                    }
+                }
+                Err(e) => println!("[discover] could not hand the lists to the first profile: {e}"),
+            }
+        }
+    }
+    *ACTIVE.lock().unwrap() = Some(Some(id.to_string()));
+}
+
+/// Whether the profile in use gets the weekly lists (Wrapped Discovery
+/// on, and the lists on for the profile: its Profile page).
+pub fn on_here(app: &AppHandle) -> bool {
+    enabled(app) && profile(app).is_none_or(|id| WrappedSettings::load_saved(app).discover_on(&id))
+}
+
+/// A list's name in Roon. Playlists are shared by every profile and no
+/// two can have one name, so once more than one profile gets the lists,
+/// each list carries whose it is ("🌟 Discover Weekly: Vulkandr").
+fn list_name(app: &AppHandle, which: Which) -> String {
+    let saved = WrappedSettings::load_saved(app);
+    match profile(app).and_then(|id| saved.profile_names.get(&id).cloned()) {
+        Some(name) if saved.discover_owners().len() > 1 => format!("{}: {name}", which.name()),
+        _ => which.name().to_string(),
+    }
+}
+
 impl Discover {
-    fn path(app: &AppHandle) -> Option<PathBuf> {
-        app.path().app_data_dir().ok().map(|dir| dir.join("wrapped-discover.json"))
+    fn path(app: &AppHandle) -> PathBuf {
+        let dir = app.path().app_data_dir().unwrap_or_default();
+        match profile(app) {
+            Some(id) => dir.join(format!("wrapped-discover-{id}.json")),
+            None => dir.join("wrapped-discover.json"),
+        }
     }
 
     fn with_store<T>(&self, app: &AppHandle, f: impl FnOnce(&mut Store) -> T) -> T {
-        let mut guard = self.store.lock().unwrap();
-        let store = guard.get_or_insert_with(|| Self::path(app).and_then(|p| read_json(&p)).unwrap_or_default());
+        let path = Self::path(app);
+        let mut stores = self.stores.lock().unwrap();
+        let store = stores.entry(path).or_insert_with_key(|path| Self::read(app, path));
         f(store)
     }
 
+    /// A profile's lists and ratings from its file. The account's first
+    /// profile with nothing of its own yet takes over the one file of 1.5
+    /// and earlier (which is then kept aside under another name), also
+    /// when its own file was started empty before that could happen.
+    fn read(app: &AppHandle, path: &PathBuf) -> Store {
+        let own: Option<Store> = read_json(path);
+        let blank = own.as_ref().is_none_or(|s| s.weekly.is_empty() && s.rediscover.is_empty() && s.votes.is_empty() && s.past.is_empty() && s.requests.is_empty());
+        if blank {
+            let dir = app.path().app_data_dir().unwrap_or_default();
+            let old = dir.join("wrapped-discover.json");
+            let (mine, first) = (profile(app), WrappedSettings::load_saved(app).first_profile);
+            if old != *path && old.exists() && mine.is_some() && first.is_none_or(|first| Some(first) == mine) {
+                if let Some(theirs) = read_json::<Store>(&old) {
+                    println!("[discover] the lists and ratings from before profiles are the first profile's now");
+                    write_json(path, &theirs);
+                    let _ = std::fs::rename(&old, dir.join("wrapped-discover-before-profiles.json"));
+                    return theirs;
+                }
+            }
+        }
+        own.unwrap_or_default()
+    }
+
     fn save(&self, app: &AppHandle) {
-        let Some(path) = Self::path(app) else { return };
-        let guard = self.store.lock().unwrap();
-        if let Some(store) = guard.as_ref() {
+        let path = Self::path(app);
+        if let Some(store) = self.stores.lock().unwrap().get(&path) {
             write_json(&path, store);
         }
     }
@@ -2748,6 +2870,8 @@ async fn publish(app: &AppHandle, client: &LibraryClient, which: Which, picked: 
     let date = short_date(now, offset);
     let description = format!("Built by Roon: Wrapped on {date}: {}.", which.blurb());
     let discover = app.state::<Discover>();
+    // (with the profile's name once more profiles than one get lists)
+    let name = list_name(app, which);
     let mut list = discover.with_store(app, |s| s.list(which).clone());
     let playlists = client.playlists().unwrap_or_default();
     let find = |id: &Option<String>| playlists.iter().find(|p| id.is_some() && p.playlist_id == *id).cloned();
@@ -2770,7 +2894,7 @@ async fn publish(app: &AppHandle, client: &LibraryClient, which: Which, picked: 
     let current_id = list.first().and_then(|b| b.playlist_id.clone());
     if let Some(previous) = list.first_mut() {
         if let Some(found) = find(&previous.playlist_id) {
-            let dated = free_name(format!("{}, {}", which.name(), previous.date));
+            let dated = free_name(format!("{name}, {}", previous.date));
             match client.rename_playlist(&found.handle, &dated).await {
                 Ok(()) => {
                     moved.push((found.handle.clone(), found.name.clone()));
@@ -2780,14 +2904,14 @@ async fn publish(app: &AppHandle, client: &LibraryClient, which: Which, picked: 
             }
         }
     }
-    for other in playlists.iter().filter(|p| p.name == which.name() && (current_id.is_none() || p.playlist_id != current_id)) {
-        let aside = free_name(format!("{}, older", which.name()));
+    for other in playlists.iter().filter(|p| p.name == name && (current_id.is_none() || p.playlist_id != current_id)) {
+        let aside = free_name(format!("{name}, older"));
         match client.rename_playlist(&other.handle, &aside).await {
             Ok(()) => moved.push((other.handle.clone(), other.name.clone())),
             Err(e) => note(format!("couldn't move {} aside: {e}", other.name)),
         }
     }
-    let card = match client.create_playlist_described(which.name(), &description, &picked.songs).await {
+    let card = match client.create_playlist_described(&name, &description, &picked.songs).await {
         Ok(card) => card,
         Err(e) => {
             for (handle, name) in moved {
@@ -2884,17 +3008,18 @@ fn status(app: &AppHandle) -> DiscoverStatus {
         let rediscover_requests = s.requests.iter().filter(|r| r.which() == Which::Rediscover).map(|r| RequestCard { request: r.clone(), said: describe(r, true) }).collect();
         (s.weekly.iter().map(card).collect(), s.rediscover.iter().map(card).collect(), requests, rediscover_requests)
     });
-    let building = *discover.building.lock().unwrap();
+    // (a list being made for another profile isn't this one's)
+    let building = (*discover.building_for.lock().unwrap() == profile(app)).then(|| *discover.building.lock().unwrap()).flatten();
     let failed = discover.failed.lock().unwrap().clone();
     let tier2 = crate::judge::Llm::from_settings(&WrappedSettings::load(app)).is_some();
     let tier3 = crate::sound::Sound::ready(app);
-    DiscoverStatus { weekly, rediscover, building, weekly_error: failed.get("weekly").cloned(), rediscover_error: failed.get("rediscover").cloned(), requests, rediscover_requests, tier2, tier3 }
+    DiscoverStatus { weekly, rediscover, building, weekly_error: failed.get(&fail_key(app, "weekly")).cloned(), rediscover_error: failed.get(&fail_key(app, "rediscover")).cloned(), requests, rediscover_requests, tier2, tier3 }
 }
 
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1164;
+pub const BUILD: u32 = 1177;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).
@@ -2917,7 +3042,7 @@ const RETRY_AFTER: i64 = 6 * 3_600_000;
 /// When this run of Toasted started (Unix ms).
 static LAUNCH: OnceLock<i64> = OnceLock::new();
 /// When a scheduled build of each list was last tried (weekly, rediscover).
-static LAST_TRY: Mutex<[i64; 2]> = Mutex::new([0, 0]);
+static LAST_TRY: Mutex<Option<HashMap<String, i64>>> = Mutex::new(None);
 
 /// The lists make themselves every week: a list from before this week's
 /// Monday (00:00 on the PC's clock) is made again, Discover Weekly first,
@@ -2949,8 +3074,28 @@ fn week_start(now: i64, offset_minutes: i32) -> i64 {
     (days - since_monday) * DAY_MS - offset
 }
 
+/// The week's lists for every profile that gets them (its Profile page),
+/// one profile after the other, the one in use first: each from its own
+/// history, ratings and requests, whichever profile is in use meanwhile.
 async fn scheduled(app: &AppHandle) {
     if !enabled(app) || app.state::<Library>().client().is_none() {
+        return;
+    }
+    let mut owners = WrappedSettings::load_saved(app).discover_owners();
+    let in_use = profile(app);
+    owners.sort_by_key(|id| Some(id) != in_use.as_ref());
+    if owners.is_empty() {
+        // (no profile known yet: the one set of lists of 1.5 and earlier)
+        return scheduled_lists(app).await;
+    }
+    for id in owners {
+        ACTING.scope(id, scheduled_lists(app)).await;
+    }
+}
+
+/// `scheduled` for one profile (the one this task acts for).
+async fn scheduled_lists(app: &AppHandle) {
+    if !on_here(app) {
         return;
     }
     let launch = *LAUNCH.get_or_init(now_ms);
@@ -2985,14 +3130,17 @@ async fn scheduled(app: &AppHandle) {
         }
         {
             let mut tried = LAST_TRY.lock().unwrap();
-            if now - tried[slot] < RETRY_AFTER {
+            let tried = tried.get_or_insert_with(HashMap::new).entry(fail_key(app, &slot.to_string())).or_insert(0);
+            if now - *tried < RETRY_AFTER {
                 continue;
             }
-            tried[slot] = now;
+            *tried = now;
         }
-        println!("[discover] the week's {} is due: building it", which.name());
+        println!("[discover] the week's {} is due: building it", list_name(app, which));
         match wrapped_discover_build(app.clone(), which, None).await {
-            Ok(_) => LAST_TRY.lock().unwrap()[slot] = 0,
+            Ok(_) => {
+                LAST_TRY.lock().unwrap().get_or_insert_with(HashMap::new).remove(&fail_key(app, &slot.to_string()));
+            }
             Err(e) => println!("[discover] the scheduled {} didn't build: {e}", which.name()),
         }
     }
@@ -3017,6 +3165,18 @@ pub async fn wrapped_discover_build(app: AppHandle, which: Which, utc_offset_min
     if !enabled(&app) {
         return Err("Wrapped Discovery is off (Wrapped's Settings).".into());
     }
+    if !on_here(&app) {
+        return Err("Discover's lists are off for this profile (its Profile page in Wrapped's Settings).".into());
+    }
+    // (the list is this profile's to the end, whichever is picked while
+    // it's being made)
+    match profile(&app) {
+        Some(id) => ACTING.scope(id, build_now(app, which, utc_offset_minutes)).await,
+        None => build_now(app, which, utc_offset_minutes).await,
+    }
+}
+
+async fn build_now(app: AppHandle, which: Which, utc_offset_minutes: Option<i32>) -> Result<DiscoverStatus, String> {
     let discover = app.state::<Discover>();
     {
         let mut building = discover.building.lock().unwrap();
@@ -3024,6 +3184,7 @@ pub async fn wrapped_discover_build(app: AppHandle, which: Which, utc_offset_min
             return Err("A list is being built already.".into());
         }
         *building = Some(which);
+        *discover.building_for.lock().unwrap() = profile(&app);
     }
     if let Some(offset) = utc_offset_minutes {
         discover.with_store(&app, |s| s.utc_offset_minutes = offset);
@@ -3034,18 +3195,19 @@ pub async fn wrapped_discover_build(app: AppHandle, which: Which, utc_offset_min
     let slot = if which == Which::Weekly { "weekly" } else { "rediscover" };
     match &result {
         Ok(()) => {
-            discover.failed.lock().unwrap().remove(slot);
+            discover.failed.lock().unwrap().remove(&fail_key(&app, slot));
         }
         Err(e) => {
             note(format!("failed: {e}"));
-            discover.failed.lock().unwrap().insert(slot.to_string(), e.clone());
+            discover.failed.lock().unwrap().insert(fail_key(&app, slot), e.clone());
         }
     }
     if let Ok(dir) = app.path().app_data_dir() {
         let _ = std::fs::write(dir.join("discover-log.txt"), LOG.lock().unwrap().join("\n"));
     }
     *discover.building.lock().unwrap() = None;
-    let _ = app.emit("wrapped-discover", serde_json::json!({ "which": which, "done": true }));
+    *discover.building_for.lock().unwrap() = None;
+    say(&app, serde_json::json!({ "which": which, "done": true }));
     result.map(|_| status(&app))
 }
 
@@ -3054,7 +3216,7 @@ async fn build(app: &AppHandle, which: Which) -> Result<(), String> {
     let key = WrappedSettings::load(app).lastfm_key;
     // The latest plays first: what you did with the last lists is in them
     let app2 = app.clone();
-    let _ = app2.emit("wrapped-discover", serde_json::json!({ "which": which, "text": "Reading your latest plays from Roon..." }));
+    say(&app2, serde_json::json!({ "which": which, "text": "Reading your latest plays from Roon..." }));
     match crate::wrapped::history_catch_up(app).await {
         Ok(n) => note(format!("history: {n} new plays read")),
         Err(e) => note(format!("history not refreshed: {e}")),
@@ -3123,8 +3285,11 @@ async fn build(app: &AppHandle, which: Which) -> Result<(), String> {
     }
     // Plays from the lists don't feed the next one; Recent Activity says
     // what you started on purpose
-    let _ = app.emit("wrapped-discover", serde_json::json!({ "which": which, "text": "Reading your Recent Activity..." }));
-    let ctx = Context { from_lists: plays_from_lists(app, &every), intent: intent_from_recents(&client, now_ms()).await };
+    say(app, serde_json::json!({ "which": which, "text": "Reading your Recent Activity..." }));
+    // (Recent Activity is the profile in use's: a list made in the
+    // background for another profile goes without it)
+    let intent = if for_profile_in_use(app) { intent_from_recents(&client, now_ms()).await } else { HashMap::new() };
+    let ctx = Context { from_lists: plays_from_lists(app, &every), intent };
     note(format!("{} plays came from the Discover lists and don't count as listening", ctx.from_lists.len()));
     // A song you never played carries no judgment: only the ones you did
     // play (even skipped) stay out, and only their artists rest for a
@@ -3163,8 +3328,13 @@ async fn build(app: &AppHandle, which: Which) -> Result<(), String> {
     }
     note(format!("past lists: {kept} songs played stay out, {resting} unplayed rest for now, {freed} older unplayed may come back"));
     let app2 = app.clone();
+    // (whose list this is, told here: the picks' jobs run as tasks of
+    // their own)
+    let ours = for_profile_in_use(app);
     let progress = move |text: String| {
-        let _ = app2.emit("wrapped-discover", serde_json::json!({ "which": which, "text": text }));
+        if ours {
+            let _ = app2.emit("wrapped-discover", serde_json::json!({ "which": which, "text": text }));
+        }
     };
     let started = std::time::Instant::now();
     progress("Reading your ratings...".into());

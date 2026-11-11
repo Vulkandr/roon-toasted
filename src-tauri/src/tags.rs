@@ -1143,6 +1143,17 @@ pub fn wrapped_tags_fill(app: AppHandle, stop: Option<bool>) -> FillStatus {
     fill_status(&app)
 }
 
+/// After the library or the history was read (wrapped.rs): the artists
+/// that came with it and have no tags yet get theirs, in the background,
+/// so nobody has to come back for "Tag my artists".
+pub fn fill_missing(app: &AppHandle) {
+    let status = fill_status(app);
+    if status.tagged < status.artists && !status.filling {
+        println!("[tags] {} artists without tags: tagging them", status.artists - status.tagged);
+        wrapped_tags_fill(app.clone(), None);
+    }
+}
+
 // ----- Similar artists by the tags -----
 
 /// One artist like another (see `wrapped_similar`).

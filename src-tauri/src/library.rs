@@ -264,7 +264,17 @@ async fn run(app: AppHandle, generation: u64, host: String, core_id: String) {
                 // (the profile in use is known for sure now: its colors, and
                 // its own General settings if it has them)
                 crate::settings::announce(&app);
+                // (and its listening history and Last.fm name are the ones
+                // Wrapped goes by)
+                crate::wrapped::profile_in_use(&app, &client);
                 let _ = app.emit("wrapped-settings-changed", crate::wrapped::WrappedSettings::load(&app));
+                // (artists that came in since the last tagging get their
+                // tags, a little after the start so nothing waits on it)
+                let app2 = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(Duration::from_secs(30)).await;
+                    crate::tags::fill_missing(&app2);
+                });
                 attempt = 0;
                 crate::wrapped::refresh_artists(app.clone(), client.clone());
 
@@ -324,6 +334,10 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
                 // (a profile added, renamed or removed in Roon: the pages hear)
                 let now = profiles_now(client);
                 if now != profiles {
+                    // (the list can come in after the link is up; the
+                    // profile in use is then known, and its history)
+                    crate::wrapped::profile_in_use(app, client);
+                    let _ = app.emit("wrapped-settings-changed", crate::wrapped::WrappedSettings::load(app));
                     let _ = app.emit("library-profiles", &now);
                     profiles = now;
                 }
@@ -392,6 +406,9 @@ pub async fn library_set_profile(app: AppHandle, id: String) -> Result<Profiles,
     let now = profiles_now(&client);
     println!("[library {}] profile: {}", clock(), client.profile().map(|p| p.name).unwrap_or_default());
     // (Wrapped's General settings may be this profile's own)
+    // (its listening history and Last.fm name are the ones Wrapped goes by
+    // now)
+    crate::wrapped::profile_in_use(&app, &client);
     let _ = app.emit("wrapped-settings-changed", crate::wrapped::WrappedSettings::load(&app));
     let _ = app.emit("library-profiles", &now);
     Ok(now)

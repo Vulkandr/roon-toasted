@@ -645,6 +645,7 @@ pub fn run() {
             // Wrapped's Home page kept current (see home.rs)
             step("home", || home::schedule(app.handle()));
             step("scrobbles", || scrobbles::schedule(app.handle()));
+            step("rescan", || wrapped::schedule_rescan(app.handle()));
             // Discover's weekly lists, made every Monday (see discover.rs)
             step("discover", || discover::schedule(app.handle()));
             // Roon stuck at a song's end: on to the next one
@@ -839,6 +840,9 @@ pub fn run() {
             wrapped::wrapped_settings_get,
             wrapped::wrapped_settings_update,
             wrapped::wrapped_profile_custom,
+            wrapped::wrapped_profile_discover,
+            wrapped::wrapped_profile_rescan_daily,
+            wrapped::wrapped_rescan,
             tags::wrapped_artist_tags,
             tags::wrapped_tags_count,
             tags::wrapped_album_tags,

@@ -4024,7 +4024,10 @@ barDiveBtn.addEventListener("click", (event) => {
 listen("wrapped-settings-changed", (event) => {
   const was = wrappedSettings?.discovery !== false;
   const ownWas = !!wrappedSettings?.sharedGeneral;
+  const listsWas = wrappedSettings?.discoverHere !== false;
   wrappedSettings = event.payload;
+  // (Discover's lists switched on or off for the profile in use)
+  if ((wrappedSettings?.discoverHere !== false) !== listsWas && !wrapped.hidden && ["discover", "home"].includes(wrappedStack.at(-1)?.page)) renderWrapped();
   paintPieceDive();
   applyPageSize();
   // (the profile in use got, or lost, settings of its own: General shows whose)
@@ -4723,7 +4726,12 @@ function showProfiles(state) {
   if (profileState.current !== before) {
     // (its settings may be its own: an open Settings shows them)
     settingsEditShared = false;
-    if (before !== null && !wrapped.hidden && wrappedStack.at(-1)?.page === "settings") redrawSettingsInPlace();
+    // (and its listening is its own: the page that's open is drawn again
+    // from it)
+    if (before !== null && !wrapped.hidden) {
+      if (wrappedStack.at(-1)?.page === "settings") redrawSettingsInPlace();
+      else renderWrapped();
+    }
   }
   const profile = currentProfile();
   profileButton.hidden = !profile;
@@ -5375,9 +5383,87 @@ function renderWrapped() {
   wrappedBody.replaceChildren();
   wrappedBody.scrollTop = 0;
   wrappedTicket++;
+  // The library copy is being read again for this profile (what it holds
+  // is another profile's): the scan shows, not a page built from it
+  if (libraryStale && entry.page !== "settings") return showLibraryScan();
   const page = WRAPPED_PAGES[entry.page] || WRAPPED_PAGES.home;
   Promise.resolve(page(entry)).catch((err) => console.error("wrapped page", err));
   onboardingStart(entry.page);
+}
+
+// The whole page while the library copy is read again for the profile in
+// use (wrapped.rs, `LibraryStatus::stale`): empty, a big spinner in the
+// middle and how far the read is. The page comes back when it's done
+let libraryStale = false;
+let libraryScanText = null;
+const LIBRARY_SCAN_START = "Reading the library from Roon...";
+function showLibraryScan() {
+  const who = currentProfile()?.name;
+  wrappedHeading("Scanning", who ? `Reading the library for ${who}` : "Reading the library");
+  const holder = document.createElement("div");
+  holder.className = "wrapped-scan";
+  holder.innerHTML = '<div class="wrapped-spinner"></div><div class="wrapped-scan-title"></div><div class="wrapped-scan-text"></div>';
+  holder.querySelector(".wrapped-scan-title").textContent = "Scanning your library";
+  libraryScanText = holder.querySelector(".wrapped-scan-text");
+  libraryScanText.textContent = LIBRARY_SCAN_START;
+  wrappedBody.append(holder);
+}
+invoke("wrapped_library_status")
+  .then((st) => {
+    if (!st?.stale || libraryStale) return;
+    libraryStale = true;
+    if (!wrapped.hidden) renderWrapped();
+  })
+  .catch(() => {});
+listen("wrapped-library-stale", (event) => {
+  libraryStale = !!event.payload;
+  if (wrapped.hidden) return;
+  if (wrappedStack.at(-1)?.page === "settings") redrawSettingsInPlace();
+  else renderWrapped();
+});
+listen("wrapped-library", (event) => {
+  const p = event.payload;
+  if (!libraryStale || p.done || !libraryScanText?.isConnected) return;
+  libraryScanText.textContent = `${(p.read ?? 0).toLocaleString()} of ${(p.total ?? 0).toLocaleString()} ${p.what || "artists"}`;
+});
+
+// A small line at the bottom right of Wrapped, over the page and with
+// nothing behind it, whenever something is being scanned in the
+// background (by hand or by the daily rescan): what, and how far. Each
+// kind of scan says its own; the latest one to speak shows
+const scanNote = $("#scan-note");
+const scanNotes = new Map();
+function scanSay(kind, text) {
+  if (text) {
+    scanNotes.delete(kind);
+    scanNotes.set(kind, text);
+  } else {
+    scanNotes.delete(kind);
+  }
+  const latest = [...scanNotes.values()].at(-1);
+  scanNote.hidden = !latest;
+  scanNote.textContent = latest || "";
+}
+{
+  const num = (v) => (v ?? 0).toLocaleString();
+  listen("wrapped-history", (event) => {
+    const p = event.payload;
+    if (p.done || p.error) return scanSay("history", "");
+    const whose = p.profile ? `${p.profile}'s plays` : "plays";
+    scanSay("history", p.wanted ? `Scanning ${whose}: ${num(p.loaded)} of ${num(p.wanted)}` : `Scanning ${whose}`);
+  });
+  listen("wrapped-library", (event) => {
+    const p = event.payload;
+    scanSay("library", p.done ? "" : `Scanning library: ${num(p.read)} of ${num(p.total)} ${p.what || "artists"}`);
+  });
+  listen("wrapped-scrobbles", (event) => {
+    const st = event.payload;
+    scanSay("scrobbles", st?.syncing ? `Scanning ${st.user}'s scrobbles: ${num(st.count)}` : "");
+  });
+  listen("wrapped-tags", (event) => {
+    const p = event.payload;
+    scanSay("tags", p.finished ? "" : `Tagging artists: ${num(p.done)} of ${num(p.total)}`);
+  });
 }
 
 function wrappedHeading(title, sub) {
@@ -6118,6 +6204,21 @@ const WRAPPED_PAGES = {
       go.className = "wrapped-button";
       go.textContent = "Open Settings";
       go.addEventListener("click", () => openWrappedPage({ page: "settings" }));
+      wrappedBody.append(go);
+      return;
+    }
+    // (the weekly lists are switched on per profile: the account's first
+    // one has them, another gets them on its Profile page)
+    if (wrappedSettings?.discoverHere === false) {
+      const who = currentProfile()?.name || "this profile";
+      wrappedBody.append(wrappedNote(`Discover's weekly lists are off for ${who}. They can be switched on in Wrapped's Settings, on the Profile page (the wrench by the profile).`));
+      const go = document.createElement("button");
+      go.className = "wrapped-button";
+      go.textContent = "Open Profile settings";
+      go.addEventListener("click", () => {
+        wrappedSettingsPage = "profile";
+        openWrappedPage({ page: "settings" });
+      });
       wrappedBody.append(go);
       return;
     }
@@ -7871,7 +7972,7 @@ async function homeMemories(holder, ticket) {
   }
   const [memories, discover, dives] = await Promise.all([
     invoke("wrapped_home_memories", { tzOffsetMin: new Date().getTimezoneOffset() }).catch(() => null),
-    wrappedSettings?.discovery === false ? null : invoke("wrapped_discover_status").catch(() => null),
+    wrappedSettings?.discovery === false || wrappedSettings?.discoverHere === false ? null : invoke("wrapped_discover_status").catch(() => null),
     invoke("wrapped_dive_status").catch(() => null),
   ]);
   if (ticket !== wrappedTicket) return;
@@ -8054,8 +8155,9 @@ function historyProgress(holder, p) {
   const n = (x) => x.toLocaleString();
   if (p.error) holder.replaceChildren(wrappedNote(p.error, "wrapped-note error"));
   else if (p.done) holder.replaceChildren();
-  else if (!p.wanted) holder.replaceChildren(wrappedNote("Checking Roon for new plays..."));
-  else holder.replaceChildren(wrappedNote(`Reading your history from Roon: ${n(p.loaded)} of ${n(p.wanted)} plays...`));
+  // (`profile`: whose, while every profile's is read in one pass)
+  else if (!p.wanted) holder.replaceChildren(wrappedNote(p.profile ? `Checking Roon for ${p.profile}'s new plays...` : "Checking Roon for new plays..."));
+  else holder.replaceChildren(wrappedNote(`Reading ${p.profile ? `${p.profile}'s` : "your"} history from Roon: ${n(p.loaded)} of ${n(p.wanted)} plays...`));
 }
 
 // ----- The library's artists and albums (the copy Settings reads) -----
@@ -11574,7 +11676,8 @@ WRAPPED_PAGES.settings = async function () {
       historyButton.textContent = historyStatus?.plays ? "Read it all again" : "Read it";
       paintStart();
     } else {
-      historyText.textContent = p.wanted ? `Reading: ${n(p.loaded)} of ${n(p.wanted)} plays...` : "Checking Roon for new plays...";
+      const whose = p.profile ? `${p.profile}'s` : "";
+      historyText.textContent = p.wanted ? `Reading${whose ? ` ${whose} plays` : ""}: ${n(p.loaded)} of ${n(p.wanted)}${whose ? "" : " plays"}...` : `Checking Roon for ${whose ? `${whose} ` : ""}new plays...`;
       startBusy(true);
     }
   });
@@ -11621,12 +11724,12 @@ WRAPPED_PAGES.settings = async function () {
   whoRow.append(whoPic, whoName, whoChange);
   whoCard.append(whoRow);
 
-  const fmCard = card("Last.fm", "If you scrobble to Last.fm, your plays from before Roon's history count too (Home, History's tops). They're read once after you save a username, then new ones daily; Your Music has the read and Rescan.", pageOf.profile);
+  const fmCard = card("Last.fm", "If this profile scrobbles to Last.fm, its plays from before Roon's history count too (Home, History's tops). The username is the one the profile is signed in with in Roon, or one you type here; with neither, the profile has no scrobbles. They're read once, then new ones daily; Your Music has the read and Rescan. Profiles on the same Last.fm account share one read.", pageOf.profile);
   const userRow = document.createElement("div");
   userRow.className = "wrapped-setting-row settings-lastfm-row";
   const userInput = document.createElement("input");
   userInput.className = "wrapped-search";
-  userInput.placeholder = "Your Last.fm username";
+  userInput.placeholder = "No Last.fm username for this profile";
   userInput.value = wrappedSettings.lastfmUser || "";
   userInput.autocomplete = "off";
   const saveUser = button("Save", async () => {
@@ -11655,7 +11758,7 @@ WRAPPED_PAGES.settings = async function () {
     roonFm.textContent = theirs ? `In Roon, this profile is on Last.fm as ${theirs}.` : "In Roon, this profile isn't signed in to Last.fm.";
     useRoonFm.hidden = !theirs || theirs.toLowerCase() === ours.toLowerCase();
   };
-  fmCard.append(userRow, roonFmRow, statusLine("For now one username serves every profile. Each profile gets its own once listening history is kept per profile."));
+  fmCard.append(userRow, roonFmRow);
   // (the Colors card further down, once it's there)
   let paintOwnColors = null;
   settingsProfilePaint = () => {
@@ -11983,9 +12086,119 @@ WRAPPED_PAGES.settings = async function () {
   ownEnd.className = "settings-own-end";
   ownEnd.append(ownPills, button("Open Settings", () => showWrappedSettingsPage("general")));
   ownCard.head.append(ownEnd);
-  // (another profile picked: its choice shows here)
-  paintOwnColors = paintOwn;
+  // ----- Discover's weekly lists for this profile: on for the account's
+  // first profile, off for the others until switched on here
+  // (wrapped.rs: wrapped_profile_discover) -----
+  const listsCard = card(
+    "Discover lists",
+    "Discover Weekly and Library Rediscover, made for this profile every week from its own listening and ratings. On for the account's first profile; any other profile gets them by switching this on. With lists for more than one profile, each playlist carries whose it is in Roon (\"Discover Weekly: Name\"), since Roon's playlists are shared by every profile.",
+    pageOf.profile,
+  );
+  fmCard.after(listsCard);
+  const listsPills = document.createElement("div");
+  listsPills.className = "wrapped-tabs small";
+  const paintLists = () => {
+    const on = wrappedSettings?.discoverHere !== false;
+    for (const pill of listsPills.children) pill.classList.toggle("selected", (pill.dataset.value === "on") === on);
+    listsPills.hidden = !profileState.current;
+  };
+  for (const [value, label] of [
+    ["off", "Off"],
+    ["on", "On"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.value = value;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      const id = profileState.current;
+      if (!id || pill.classList.contains("selected")) return;
+      try {
+        wrappedSettings = await invoke("wrapped_profile_discover", { id, on: value === "on" });
+        paintLists();
+      } catch (err) {
+        wrappedToast(String(err));
+      }
+    });
+    listsPills.append(pill);
+  }
+  listsCard.head.append(listsPills);
+
+  // ----- Scanning, for this profile: Rescan reads its new plays and
+  // scrobbles now (and the library everyone shares, with the tags of new
+  // artists); "Rescan daily" has that done once a day without anyone
+  // asking (wrapped.rs: wrapped_rescan, schedule_rescan) -----
+  const scanCard = card(
+    "Scanning",
+    "Rescan reads this profile's new plays from Roon and its new Last.fm scrobbles, then the library (shared by every profile) and the tags of artists new to it. With Rescan daily on, that happens by itself once a day while Toasted runs; a small line at the bottom right of Wrapped shows whenever something is being scanned.",
+    pageOf.profile,
+  );
+  fmCard.after(scanCard);
+  const scanText = statusLine("...");
+  const paintScan = async () => {
+    try {
+      const st = await invoke("wrapped_history_status");
+      const fm = await invoke("wrapped_scrobbles_status").catch(() => null);
+      if (!scanText.isConnected) return;
+      const parts = [`${n(st.plays)} ${st.plays === 1 ? "play" : "plays"}`];
+      if (fm?.user && fm.count) parts.push(`${n(fm.count)} ${fm.count === 1 ? "scrobble" : "scrobbles"}`);
+      scanText.textContent = st.syncedAt ? `Last scanned ${historyWhen(st.syncedAt)}: ${parts.join(", ")}` : "Not scanned yet";
+    } catch {
+      scanText.textContent = "";
+    }
+  };
+  const scanButton = button("Rescan", async () => {
+    scanButton.disabled = true;
+    scanText.textContent = "Scanning...";
+    try {
+      await invoke("wrapped_rescan");
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+    scanButton.disabled = false;
+    paintScan();
+  });
+  cardRow(scanCard, "This profile", scanText, scanButton);
+  const dailyPills = document.createElement("div");
+  dailyPills.className = "wrapped-tabs small";
+  const paintDaily = () => {
+    const on = wrappedSettings?.rescanHere !== false;
+    for (const pill of dailyPills.children) pill.classList.toggle("selected", (pill.dataset.value === "on") === on);
+  };
+  for (const [value, label] of [
+    ["off", "Off"],
+    ["on", "On"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.value = value;
+    pill.textContent = label;
+    pill.addEventListener("click", async () => {
+      const id = profileState.current;
+      if (!id || pill.classList.contains("selected")) return;
+      try {
+        wrappedSettings = await invoke("wrapped_profile_rescan_daily", { id, on: value === "on" });
+        paintDaily();
+      } catch (err) {
+        wrappedToast(String(err));
+      }
+    });
+    dailyPills.append(pill);
+  }
+  cardRow(scanCard, "Rescan daily", statusLine("New plays and scrobbles for this profile, once a day"), dailyPills);
+  scanCard.hidden = !profileState.current;
+  // (another profile picked: its choices show here)
+  paintOwnColors = () => {
+    paintOwn();
+    paintLists();
+    paintDaily();
+    paintScan();
+    scanCard.hidden = !profileState.current;
+  };
   paintOwn();
+  paintLists();
+  paintDaily();
+  paintScan();
 
   // Default Menu: what shows when Wrapped opens (see applyDefaultMenu),
   // and which side menu comes with a Wrapped page
@@ -12511,8 +12724,18 @@ const isWrappedPlaylist = (p) => p.name.startsWith(WRAPPED_PREFIX) || WEEKLY_NAM
 // copy has its date after the name). Always first wherever playlists are
 // listed, in this order, with a line under them
 const THIS_WEEK_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover"];
-const isThisWeeksList = (p) => THIS_WEEK_NAMES.includes(p.name.trim());
-const thisWeeksLists = (list) => THIS_WEEK_NAMES.map((name) => list.find((p) => p.name.trim() === name)).filter(Boolean);
+// (once more profiles than one get the lists, each list carries whose it
+// is, "🌟 Discover Weekly: Vulkandr": the ones on top are the ones of the
+// profile in use)
+const thisWeekNames = () => {
+  const who = currentProfile()?.name;
+  return THIS_WEEK_NAMES.map((name) => (who ? [`${name}: ${who}`, name] : [name]));
+};
+const isThisWeeksList = (p) => thisWeekNames().flat().includes(p.name.trim());
+const thisWeeksLists = (list) =>
+  thisWeekNames()
+    .map((names) => names.map((name) => list.find((p) => p.name.trim() === name)).find(Boolean))
+    .filter(Boolean);
 // Newest first, as Roon lists them (by when each was last changed: the
 // only date a playlist carries; ones without a date keep their place at
 // the end)
