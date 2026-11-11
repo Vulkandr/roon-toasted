@@ -15,6 +15,16 @@
 //! - Wrapper (default Ctrl+Alt+W): opens the Wrapper, or hides it when it's
 //!   open and in front. Only registered while the Wrapper is switched on.
 //!
+//! The media keys (Volume Up and so on, see mediakeys.rs) are registered
+//! here too, with their own switch in Settings; the Hotkeys switch doesn't
+//! touch them.
+//!
+//! Registering goes through `apply`, which compares what should be
+//! registered with what is and changes only the difference. It asks the
+//! main thread to do each change and waits for it, so it must never run on
+//! the main thread itself: `register_saved` (callable from anywhere) runs
+//! it on a thread of its own and says `hotkeys-changed` when it's done.
+//!
 //! They're set in Settings and saved in settings.json (`hotkeyPlayer`,
 //! `hotkeySearch`, `hotkeyWrapper`; null = off). The Hotkeys switch
 //! (`hotkeysEnabled`) turns them all off at once, releasing the combinations for other apps. Settings changes them with `set_hotkey`, which
@@ -23,6 +33,7 @@
 //! combination, `pause_hotkeys` switches them all off, so pressing the current
 //! combination doesn't open or hide the Toaster.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -30,6 +41,12 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutEvent, ShortcutState};
 
 use crate::settings;
+
+/// What's registered with Windows right now. Only `apply` touches it, and
+/// holds it for its whole run, so two runs never overlap.
+static REGISTERED: Mutex<Vec<Shortcut>> = Mutex::new(Vec::new());
+/// Settings is recording a new combination: nothing is registered.
+static PAUSED: AtomicBool = AtomicBool::new(false);
 
 /// The last registration problem for each hotkey, for Settings to show
 /// (e.g. another app already owns the combination).
@@ -43,6 +60,8 @@ struct Errors {
     player: Option<String>,
     search: Option<String>,
     wrapper: Option<String>,
+    /// The media keys another app holds on to.
+    media: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -58,6 +77,11 @@ pub struct HotkeyStatus {
     pub player_error: Option<String>,
     pub search_error: Option<String>,
     pub wrapper_error: Option<String>,
+    /// Media keys that couldn't be taken (another app has them).
+    pub media_error: Option<String>,
+    /// Why the media keys are with Windows although their switch is on
+    /// (no zone, or a fixed-volume one).
+    pub media_note: Option<String>,
 }
 
 /// The plugin, with one handler for every hotkey.
@@ -83,6 +107,9 @@ fn pretty(text: &str) -> String {
 }
 
 fn on_hotkey(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
+    if crate::mediakeys::on_key(app, shortcut, event.state()) {
+        return;
+    }
     if event.state() != ShortcutState::Pressed {
         return;
     }
@@ -96,45 +123,116 @@ fn on_hotkey(app: &AppHandle, shortcut: &Shortcut, event: ShortcutEvent) {
     }
 }
 
-/// Registers one saved hotkey; returns why it didn't work, if it didn't.
-fn register(app: &AppHandle, text: Option<&str>) -> Option<String> {
-    let text = text?; // off: nothing to register, nothing wrong
-    let Some(shortcut) = parse(Some(text)) else {
-        return Some(format!("{} isn't a key combination the app can use.", pretty(text)));
-    };
-    match app.global_shortcut().register(shortcut) {
-        Ok(()) => None,
-        Err(_) => Some(format!("{} is already used by another app.", pretty(text))),
+/// "A", "A and B", "A, B and C".
+fn listed(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.to_string(),
+        [most @ .., last] => format!("{} and {last}", most.join(", ")),
     }
 }
 
-/// Registers the saved hotkeys (none when the Hotkeys switch is off; Open
-/// Toaster only while the Toaster is on, Search while the Toaster or the
-/// Wrapper is, Open Wrapper only while the Wrapper is), replacing any
-/// registered before, and remembers any problems for Settings.
+/// Registers the saved hotkeys and the media keys, on a thread of its own
+/// (see the top of this file), and tells the pages when it's done.
+/// Callable from anywhere, the main thread included.
 pub fn register_saved(app: &AppHandle) {
-    let _ = app.global_shortcut().unregister_all();
+    let app = app.clone();
+    let _ = std::thread::Builder::new().name("hotkeys".into()).spawn(move || {
+        apply(&app);
+        let _ = app.emit("hotkeys-changed", ());
+    });
+}
+
+/// Makes what's registered with Windows match the settings: the saved
+/// hotkeys (none when the Hotkeys switch is off; Open Toaster only while
+/// the Toaster is on, Search while the Toaster or the Wrapper is, Open
+/// Wrapper only while the Wrapper is) and the media keys (mediakeys.rs),
+/// or nothing at all while Settings records a combination. Remembers any
+/// problems for Settings. Never on the main thread: it waits for it.
+fn apply(app: &AppHandle) {
+    let mut registered = REGISTERED.lock().unwrap_or_else(|e| e.into_inner());
     let saved = settings::get_settings(app.clone());
-    let errors = if saved.hotkeys_enabled {
-        let when = |on: bool, text: Option<&str>| if on { register(app, text) } else { None };
-        Errors {
-            player: when(saved.toaster_enabled, saved.hotkey_player.as_deref()),
-            search: when(saved.toaster_enabled || saved.wrapper_enabled, saved.hotkey_search.as_deref()),
-            wrapper: if saved.wrapper_enabled {
-                register(app, saved.hotkey_wrapper.as_deref())
-            } else {
-                None
-            },
+    let paused = PAUSED.load(Ordering::Relaxed);
+    let mut errors = Errors::default();
+
+    // What should be registered: each with where its error goes (0 to 2,
+    // the hotkeys; 3, a media key) and its name
+    let mut wanted: Vec<(Shortcut, usize, String)> = Vec::new();
+    if saved.hotkeys_enabled && !paused {
+        let combos = [
+            (saved.toaster_enabled, saved.hotkey_player.as_deref()),
+            (saved.toaster_enabled || saved.wrapper_enabled, saved.hotkey_search.as_deref()),
+            (saved.wrapper_enabled, saved.hotkey_wrapper.as_deref()),
+        ];
+        for (slot, (on, text)) in combos.into_iter().enumerate() {
+            let (true, Some(text)) = (on, text) else {
+                continue; // off: nothing to register, nothing wrong
+            };
+            match parse(Some(text)) {
+                Some(shortcut) => wanted.push((shortcut, slot, pretty(text))),
+                None => {
+                    let problem = Some(format!("{} isn't a key combination the app can use.", pretty(text)));
+                    match slot {
+                        0 => errors.player = problem,
+                        1 => errors.search = problem,
+                        _ => errors.wrapper = problem,
+                    }
+                }
+            }
         }
-    } else {
-        Errors::default()
-    };
+    }
+    if !paused {
+        for (shortcut, name) in crate::mediakeys::wanted(&saved) {
+            wanted.push((shortcut, 3, name.to_string()));
+        }
+    }
+
+    // Let go of the ones no longer wanted
+    let gone: Vec<Shortcut> = registered.iter().filter(|r| !wanted.iter().any(|(w, _, _)| w == *r)).copied().collect();
+    if !gone.is_empty() {
+        let _ = app.global_shortcut().unregister_multiple(gone.clone());
+        registered.retain(|r| !gone.contains(r));
+    }
+
+    // Take the new ones
+    let mut media_refused: Vec<&str> = Vec::new();
+    for (shortcut, slot, name) in &wanted {
+        if registered.contains(shortcut) {
+            continue;
+        }
+        match app.global_shortcut().register(*shortcut) {
+            Ok(()) => registered.push(*shortcut),
+            Err(e) => {
+                println!("[hotkeys] {name} wasn't registered: {e}");
+                let problem = Some(format!("{name} is already used by another app."));
+                match slot {
+                    0 => errors.player = problem,
+                    1 => errors.search = problem,
+                    2 => errors.wrapper = problem,
+                    _ => media_refused.push(name),
+                }
+            }
+        }
+    }
+    // Media keys another app registered (Roon does) are taken with the
+    // keyboard hook instead; only if that fails do they stay refused
+    if !media_refused.is_empty() {
+        println!("[hotkeys] taking {} with the keyboard hook instead", listed(&media_refused));
+    }
+    if !crate::mediakeys::take(app, &media_refused) && !media_refused.is_empty() {
+        let (verb, they) = if media_refused.len() == 1 { ("is", "it stays") } else { ("are", "they stay") };
+        errors.media = Some(format!(
+            "{} {verb} already used by another app, so {they} with Windows.",
+            listed(&media_refused)
+        ));
+    }
     *app.state::<HotkeyState>().errors.lock().unwrap() = errors;
 }
 
 fn status(app: &AppHandle) -> HotkeyStatus {
     let saved = settings::get_settings(app.clone());
     let errors = app.state::<HotkeyState>().errors.lock().unwrap().clone();
+    let media_note = crate::mediakeys::note(&saved);
     HotkeyStatus {
         enabled: saved.hotkeys_enabled,
         player: saved.hotkey_player,
@@ -143,6 +241,8 @@ fn status(app: &AppHandle) -> HotkeyStatus {
         player_error: errors.player,
         search_error: errors.search,
         wrapper_error: errors.wrapper,
+        media_error: errors.media,
+        media_note,
     }
 }
 
@@ -185,17 +285,17 @@ pub async fn set_hotkey(
 
     if let Some(text) = &shortcut {
         let Some(parsed) = parse(Some(text)) else {
-            register_saved(&app);
+            apply(&app);
             return Err(format!("{} isn't a key combination the app can use.", pretty(text)));
         };
         if others.iter().any(|other| parse(other.as_deref()).as_ref() == Some(&parsed)) {
-            register_saved(&app);
+            apply(&app);
             return Err(format!("{} is already another hotkey.", pretty(text)));
         }
     }
 
     settings::save(&path, &updated)?;
-    register_saved(&app);
+    apply(&app);
 
     // Windows refused it (another app owns it): put the old one back.
     let refused = {
@@ -209,7 +309,7 @@ pub async fn set_hotkey(
     };
     if let (Some(reason), Some(_)) = (refused, &shortcut) {
         settings::save(&path, &before)?;
-        register_saved(&app);
+        apply(&app);
         return Err(reason);
     }
 
@@ -221,9 +321,6 @@ pub async fn set_hotkey(
 /// (`paused: true`), and back on afterwards.
 #[tauri::command]
 pub async fn pause_hotkeys(app: AppHandle, paused: bool) {
-    if paused {
-        let _ = app.global_shortcut().unregister_all();
-    } else {
-        register_saved(&app);
-    }
+    PAUSED.store(paused, Ordering::Relaxed);
+    apply(&app);
 }

@@ -64,6 +64,12 @@ pub struct AppSettings {
     /// Whether the global hotkeys are on at all (off: both released, e.g. for
     /// people who only open the Toaster from the Stream Deck).
     pub hotkeys_enabled: bool,
+    /// The keyboard's Play/Pause, Stop, Next and Previous keys control the
+    /// selected Roon zone instead of other apps (mediakeys.rs).
+    pub media_keys_playback: bool,
+    /// Its Volume Up, Volume Down and Mute keys control the selected zone
+    /// instead of the Windows volume.
+    pub media_keys_volume: bool,
     /// Global hotkey that opens (or hides) the Toaster, e.g. "Ctrl+Alt+Z";
     /// None = off. Changed through `set_hotkey` (hotkeys.rs), not `update_settings`.
     pub hotkey_player: Option<String>,
@@ -161,6 +167,8 @@ impl Default for AppSettings {
             toaster_background: None,
             background_images: Vec::new(),
             hotkeys_enabled: true,
+            media_keys_playback: true,
+            media_keys_volume: false,
             hotkey_player: Some("Ctrl+Alt+Z".into()),
             hotkey_search: Some("Ctrl+Alt+S".into()),
             toasts_enabled: true,
@@ -427,6 +435,8 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value) -> Result<App
     if updated.hotkeys_enabled != before.hotkeys_enabled
         || updated.wrapper_enabled != before.wrapper_enabled
         || updated.toaster_enabled != before.toaster_enabled
+        || updated.media_keys_playback != before.media_keys_playback
+        || updated.media_keys_volume != before.media_keys_volume
     {
         crate::hotkeys::register_saved(&app);
     }

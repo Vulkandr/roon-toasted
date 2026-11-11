@@ -687,6 +687,8 @@ const hotkeyButtons = {
 const hotkeyError = document.querySelector("#hotkey-error");
 const hotkeysEnabled = document.querySelector("#hotkeys-enabled");
 const hotkeysGroup = document.querySelector("#hotkeys-group");
+const mediaKeysNote = document.querySelector("#media-keys-note");
+const mediaKeysError = document.querySelector("#media-keys-error");
 let recording = null; // "player", "search" or "wrapper" while waiting for keys
 
 // "Ctrl+Alt+R" -> "Ctrl + Alt + R"
@@ -710,6 +712,8 @@ function showHotkeys(status) {
   hotkeyError.textContent = [status.playerError, status.searchError, status.wrapperError]
     .filter(Boolean)
     .join(" ");
+  mediaKeysNote.textContent = status.mediaNote || "";
+  mediaKeysError.textContent = status.mediaError || "";
 }
 
 async function refreshHotkeys() {
@@ -805,6 +809,45 @@ hotkeysGroup.querySelector(".label-on").addEventListener("click", () => setHotke
 
 refreshHotkeys();
 listen("settings-changed", () => refreshHotkeys());
+// (registering happens a moment after a setting changes, and again when
+// the selected zone gains or loses its volume control)
+listen("hotkeys-changed", () => {
+  if (!recording) refreshHotkeys();
+});
+
+// ===== Media Keys =========================================================
+//
+// The keyboard's playback keys and its volume keys control the selected
+// Roon zone, each with a switch of its own.
+
+const mediaPlayback = document.querySelector("#media-keys-playback");
+const mediaPlaybackGroup = document.querySelector("#media-playback-group");
+const mediaVolume = document.querySelector("#media-keys-volume");
+const mediaVolumeGroup = document.querySelector("#media-volume-group");
+
+function showMediaKeys(settings) {
+  mediaPlayback.checked = !!settings.mediaKeysPlayback;
+  mediaVolume.checked = !!settings.mediaKeysVolume;
+}
+
+async function setMediaKeys(changes) {
+  try {
+    showMediaKeys(await invoke("update_settings", { changes }));
+  } catch (err) {
+    console.error(err);
+    showMediaKeys(await invoke("get_settings"));
+  }
+}
+
+mediaPlayback.addEventListener("change", () => setMediaKeys({ mediaKeysPlayback: mediaPlayback.checked }));
+mediaPlaybackGroup.querySelector(".label-off").addEventListener("click", () => setMediaKeys({ mediaKeysPlayback: false }));
+mediaPlaybackGroup.querySelector(".label-on").addEventListener("click", () => setMediaKeys({ mediaKeysPlayback: true }));
+mediaVolume.addEventListener("change", () => setMediaKeys({ mediaKeysVolume: mediaVolume.checked }));
+mediaVolumeGroup.querySelector(".label-off").addEventListener("click", () => setMediaKeys({ mediaKeysVolume: false }));
+mediaVolumeGroup.querySelector(".label-on").addEventListener("click", () => setMediaKeys({ mediaKeysVolume: true }));
+
+invoke("get_settings").then(showMediaKeys);
+listen("settings-changed", (event) => showMediaKeys(event.payload));
 
 // ===== Toasts =============================================================
 //

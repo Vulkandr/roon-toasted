@@ -278,6 +278,17 @@ impl Zones {
     fn payload(inner: &Inner) -> ZonesPayload {
         let mut zones: Vec<ZoneView> = inner.zones.values().cloned().collect();
         zones.sort_by_key(|z| z.name.to_lowercase());
+        // A volume the media keys are moving shows where they've sent it
+        // (Roon reports it a few steps at a time; see mediakeys.rs)
+        for zone in &mut zones {
+            for output in &mut zone.outputs {
+                if let Some(volume) = &mut output.volume {
+                    if let Some(value) = crate::mediakeys::shown_volume(&output.output_id) {
+                        volume.value = value;
+                    }
+                }
+            }
+        }
 
         let selected_zone_id = inner
             .picked_zone_id
@@ -319,10 +330,17 @@ impl Zones {
             let _ = app.emit("roon-zones", &payload);
             crate::toast::zones_updated(app, &payload);
             crate::discover::zones_updated(app, &payload);
+            crate::mediakeys::zones_updated(app, &payload);
             if let Some((core, zone_id)) = queue_change {
                 crate::queue::follow(app, core, zone_id);
             }
         }
+    }
+
+    /// Sends the zones to the pages again as they are now (something that
+    /// goes into `payload` changed, not the zones themselves).
+    pub fn refresh(&self) {
+        self.update(|_| {});
     }
 
     /// The connected Core, if any (used by browse.rs).

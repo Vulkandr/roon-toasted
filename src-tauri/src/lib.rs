@@ -36,12 +36,14 @@ mod changelog;
 mod discover;
 mod dive;
 mod judge;
+mod keyhook;
 mod ollama;
 mod sources;
 mod hotkeys;
 mod icon;
 mod launch;
 mod library;
+mod mediakeys;
 mod update;
 mod monitors;
 mod ocr;
@@ -462,7 +464,12 @@ pub fn run() {
         std::thread::sleep(std::time::Duration::from_secs(2));
     }
 
-    let mut builder = tauri::Builder::default();
+    // No "raw input" from the keyboard and mouse for our windows (Tauri
+    // asks for it by default, for device events the app doesn't use): while
+    // an app reads the keyboard that way and has a window in front, Windows
+    // leaves that app's own keyboard hook out, and the media keys' hook
+    // (keyhook.rs) heard nothing whenever a Toasted window was in front
+    let mut builder = tauri::Builder::default().device_event_filter(tauri::DeviceEventFilter::Always);
 
     // Only one copy of the app may run at a time. Launching it again (or a
     // roon-toasted:// link) goes to the copy that's already running, which

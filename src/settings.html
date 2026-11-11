@@ -199,6 +199,33 @@
         </div>
         </div>
         <p id="hotkey-error" class="error"></p>
+
+        <!-- The keyboard's playback keys and its volume keys control the
+             selected Roon zone instead of other apps and Windows, each
+             with a switch of its own (mediakeys.rs) -->
+        <div class="hotkeys-head media-keys-head" id="media-keys-heading" data-new="media-keys">
+          <h3>Media Keys</h3>
+          <div class="switch-group media-keys-set" id="media-playback-group" title="Your keyboard's Play/Pause, Stop, Next and Previous keys control the selected Roon zone, in any app. Other apps no longer get those keys while this is on and Roon is connected.">
+            <span class="media-keys-name">Playback</span>
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="media-keys-playback" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+          <div class="switch-group media-keys-set" id="media-volume-group" title="Your keyboard's Volume Up, Volume Down and Mute keys change the volume of the selected Roon zone instead of the Windows volume, in any app. Hold a key to keep going.">
+            <span class="media-keys-name">Volume</span>
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="media-keys-volume" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+        </div>
+        <p id="media-keys-note" class="muted media-keys-note"></p>
+        <p id="media-keys-error" class="error media-keys-note"></p>
       </section>
       <section class="card toasts-card">
         <!-- The card's own switch sits next to its title -->
@@ -273,6 +300,13 @@
           Open Toaster opens it, or hides it if it's currently open. Search opens it on the
           Search tab, ready to type. If Hotkeys are disabled, Roon: Dialed Up can still bring
           up the Toaster.
+        </p>
+        <p>
+          <strong>Media Keys:</strong> Playback sends your keyboard's Play/Pause, Stop, Next
+          and Previous keys to the selected Roon zone, whatever app you're in; other apps no
+          longer get them while Roon is connected. Volume does the same with Volume Up,
+          Volume Down and Mute, instead of the Windows volume; hold a key to keep going. A
+          zone with a fixed volume leaves the volume keys with Windows.
         </p>
         <p>
           <strong>Start with Windows:</strong> Puts Roon: Toasted in the tray when you sign in,

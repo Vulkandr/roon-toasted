@@ -24,7 +24,6 @@
         <span class="titlebar-title" data-tauri-drag-region="deep">Roon: Wrapped</span>
         <!-- A build number for checking a dev build came through (bumped by hand) -->
         <span id="titlebar-build" class="titlebar-build" data-tauri-drag-region="deep"></span>
-        <button id="detach" class="titlebar-action" title="Close the Wrapper and give Roon its own window back">Return Roon</button>
         <span id="status" class="titlebar-status" data-tauri-drag-region="deep" hidden></span>
         <span class="titlebar-spacer" data-tauri-drag-region="deep"></span>
         <!-- While Now Playing is open: back to Roon (same as its X) -->
@@ -32,6 +31,8 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
           <span>Minimize player</span>
         </button>
+        <!-- On the right, where Roon's own title bar has Enable Wrapper -->
+        <button id="detach" class="titlebar-action" title="Close the Wrapper and give Roon its own window back">Return Roon</button>
         <button id="open-settings" class="titlebar-icon" title="Wrapped Settings">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg>
         </button>
