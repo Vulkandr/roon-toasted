@@ -318,6 +318,11 @@ fn profile(app: &AppHandle) -> Option<String> {
     ACTIVE.lock().unwrap().get_or_insert_with(|| WrappedSettings::load_saved(app).history_profile).clone()
 }
 
+/// The profile in use, for what else is kept per profile (dive.rs).
+pub fn profile_in_use(app: &AppHandle) -> Option<String> {
+    ACTIVE.lock().unwrap().get_or_insert_with(|| WrappedSettings::load_saved(app).history_profile).clone()
+}
+
 /// The profile a list is being built for in this task, if it is one (the
 /// history that build reads is that profile's: wrapped.rs).
 pub fn acting() -> Option<String> {
@@ -3019,7 +3024,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1177;
+pub const BUILD: u32 = 1180;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).

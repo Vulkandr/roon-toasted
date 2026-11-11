@@ -109,12 +109,33 @@ pub struct HomeStatus {
 static BUILDING: AtomicBool = AtomicBool::new(false);
 static PROGRESS: Mutex<String> = Mutex::new(String::new());
 
+/// The page is built from a Roon profile's own listening, so each profile
+/// has its own (`wrapped-home-<profile id>.json`): the file of the profile
+/// in use, or the one file of 1.5 and earlier while none is known yet.
 fn path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("wrapped-home.json"))
+    let dir = app.path().app_data_dir().ok()?;
+    Some(match crate::discover::profile_in_use(app) {
+        Some(id) => dir.join(format!("wrapped-home-{id}.json")),
+        None => dir.join("wrapped-home.json"),
+    })
 }
 
 fn load(app: &AppHandle) -> HomeData {
-    path(app).and_then(|p| read_json(&p)).unwrap_or_default()
+    let Some(own) = path(app) else { return HomeData::default() };
+    if let Some(data) = read_json(&own) {
+        return data;
+    }
+    // (the account's first profile starts from the page of 1.5 and
+    // earlier, which was built from its listening; any other profile's is
+    // built fresh)
+    let mine = crate::discover::profile_in_use(app);
+    let first = crate::wrapped::WrappedSettings::load_saved(app).first_profile;
+    if mine.is_some() && first.is_none_or(|first| Some(first) == mine) {
+        if let Some(data) = app.path().app_data_dir().ok().and_then(|d| read_json(&d.join("wrapped-home.json"))) {
+            return data;
+        }
+    }
+    HomeData::default()
 }
 
 fn status(app: &AppHandle) -> HomeStatus {
@@ -171,6 +192,8 @@ fn start(app: &AppHandle, whole: bool) {
     }
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
+        // (the page is this profile's, whichever is picked while it builds)
+        let kept_at = path(&app);
         let before = load(&app);
         let result = if whole { build(&app).await } else { albums_again(&app, before.clone()).await };
         let data = match result {
@@ -180,7 +203,7 @@ fn start(app: &AppHandle, whole: bool) {
                 HomeData { error: e, ..before }
             }
         };
-        if let Some(p) = path(&app) {
+        if let Some(p) = kept_at {
             write_json(&p, &data);
         }
         BUILDING.store(false, Ordering::SeqCst);

@@ -157,12 +157,41 @@ fn now_ms() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0)
 }
 
+/// The Deep Dives kept are a Roon profile's own, like its Discover lists
+/// (`wrapped-dive-<profile id>.json`): the file of the profile in use, or
+/// the one file of 1.5 and earlier while no profile is known yet.
 fn store_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|dir| dir.join("wrapped-dive.json"))
+    let dir = app.path().app_data_dir().ok()?;
+    Some(match crate::discover::profile_in_use(app) {
+        Some(id) => dir.join(format!("wrapped-dive-{id}.json")),
+        None => dir.join("wrapped-dive.json"),
+    })
 }
 
 fn load(app: &AppHandle) -> Store {
-    store_path(app).and_then(|p| read_json(&p)).unwrap_or_default()
+    store_path(app).map(|p| load_at(app, &p)).unwrap_or_default()
+}
+
+/// The Deep Dives in a profile's file. The account's first profile, with
+/// none of its own yet, takes over the ones from before profiles (that
+/// file is then kept aside under another name).
+fn load_at(app: &AppHandle, path: &PathBuf) -> Store {
+    let own: Option<Store> = read_json(path);
+    if own.as_ref().is_none_or(|s| s.dives.is_empty()) {
+        if let Ok(dir) = app.path().app_data_dir() {
+            let old = dir.join("wrapped-dive.json");
+            let (mine, first) = (crate::discover::profile_in_use(app), crate::wrapped::WrappedSettings::load_saved(app).first_profile);
+            if old != *path && old.exists() && mine.is_some() && first.is_none_or(|first| Some(first) == mine) {
+                if let Some(theirs) = read_json::<Store>(&old) {
+                    println!("[dive] the Deep Dives from before profiles are the first profile's now");
+                    write_json(path, &theirs);
+                    let _ = std::fs::rename(&old, dir.join("wrapped-dive-before-profiles.json"));
+                    return theirs;
+                }
+            }
+        }
+    }
+    own.unwrap_or_default()
 }
 
 fn save(app: &AppHandle, store: &Store) {
@@ -466,6 +495,9 @@ pub async fn wrapped_dive_build(app: AppHandle, picks: Vec<DivePick>, text: Stri
         }
     };
     let started = std::time::Instant::now();
+    // (the Deep Dive is kept with the profile it was asked on, whichever
+    // is picked while it's being made)
+    let kept_at = store_path(&app);
     let before = made(&app, follows);
     let result = build(&app, picks, &text, &plan, &history, before.as_ref(), &progress).await;
     match &result {
@@ -477,10 +509,12 @@ pub async fn wrapped_dive_build(app: AppHandle, picks: Vec<DivePick>, text: Stri
     }
     BUILDING.store(false, Ordering::SeqCst);
     let list = result?;
-    let mut store = load(&app);
-    store.dives.insert(0, list);
-    store.dives.truncate(KEPT);
-    save(&app, &store);
+    if let Some(path) = kept_at {
+        let mut store = load_at(&app, &path);
+        store.dives.insert(0, list);
+        store.dives.truncate(KEPT);
+        write_json(&path, &store);
+    }
     Ok(status(&app))
 }
 

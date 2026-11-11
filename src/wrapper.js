@@ -4728,6 +4728,12 @@ function showProfiles(state) {
     settingsEditShared = false;
     // (and its listening is its own: the page that's open is drawn again
     // from it)
+    if (before !== null) {
+      // (the Discover ratings and Deep Dives the player goes by are the
+      // profile's own too)
+      loadDiscoverRatings();
+      loadDiveLists();
+    }
     if (before !== null && !wrapped.hidden) {
       if (wrappedStack.at(-1)?.page === "settings") redrawSettingsInPlace();
       else renderWrapped();
@@ -12727,9 +12733,14 @@ const THIS_WEEK_NAMES = ["🌟 Discover Weekly", "💎 Library Rediscover"];
 // (once more profiles than one get the lists, each list carries whose it
 // is, "🌟 Discover Weekly: Vulkandr": the ones on top are the ones of the
 // profile in use)
+// (a list with the plain name is the account's first profile's: it had
+// the lists before any other profile did, and until its next one is made
+// that list keeps its plain name)
 const thisWeekNames = () => {
-  const who = currentProfile()?.name;
-  return THIS_WEEK_NAMES.map((name) => (who ? [`${name}: ${who}`, name] : [name]));
+  const who = currentProfile();
+  if (!who) return THIS_WEEK_NAMES.map((name) => [name]);
+  const first = profileState.profiles[0]?.id === who.id;
+  return THIS_WEEK_NAMES.map((name) => (first ? [`${name}: ${who.name}`, name] : [`${name}: ${who.name}`]));
 };
 const isThisWeeksList = (p) => thisWeekNames().flat().includes(p.name.trim());
 const thisWeeksLists = (list) =>
