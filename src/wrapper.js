@@ -6434,8 +6434,8 @@ const WRAPPED_PAGES = {
     const head = artistHeader(card);
     head.querySelector(".wrapped-album-info").prepend(artistBanner(card, head));
     wrappedBody.replaceChildren(head);
-    wrappedFacts("artist", card, ticket);
-    wrappedOutsideTags(wrappedBody.querySelector(".wrapped-genres.outside"), card.name, ticket);
+    const facts = wrappedFacts("artist", card, ticket);
+    wrappedOutsideTags(wrappedBody.querySelector(".wrapped-genres.outside"), card.name, ticket, undefined, facts);
     // Roon's picks for the artist (similar artists, and the albums it would
     // start you on, which order the discography by Popularity) load meanwhile
     const picks = invoke("library_artist_extras", { handle: card.handle }).then(
@@ -14054,10 +14054,13 @@ function wrappedGenreChips(holder, genres) {
 
 // The outside world's tags for an artist (Last.fm, MusicBrainz; tags.rs),
 // under Roon's: genre, style and scene, each its own color
-async function wrappedOutsideTags(holder, name, ticket, album) {
+// (`facts`: Roon's facts on the artist, still loading; where they're from
+// lets tags.rs tell a namesake from elsewhere apart)
+async function wrappedOutsideTags(holder, name, ticket, album, facts) {
   let tags;
   try {
-    tags = album ? await invoke("wrapped_album_tags", { artist: name, album }) : await invoke("wrapped_artist_tags", { name });
+    const place = facts ? await facts.then((f) => f?.country || f?.from || null).catch(() => null) : null;
+    tags = album ? await invoke("wrapped_album_tags", { artist: name, album }) : await invoke("wrapped_artist_tags", { name, place });
   } catch (err) {
     console.warn("tags", err);
     return;
@@ -14373,6 +14376,7 @@ async function wrappedFacts(kind, card, ticket) {
     const el = wrappedBody.querySelector(".wrapped-facts");
     if (el) el.textContent = line;
   }
+  return facts;
 }
 
 // Track rows like Roon's: play, the Wrapped radio mark, number and title,

@@ -100,6 +100,12 @@ struct Store {
     albums: HashMap<String, AlbumTags>,
     /// Keyed by the artist's name, lower-cased.
     similar: HashMap<String, SimilarCache>,
+    /// Artists the outside knows by another name than Roon's (Roon's
+    /// "11th Hour" is the Dutch doom band "The 11th Hour"; plain "11th
+    /// Hour" is a Belgian rapcore band): Roon's name, lower-cased, to the
+    /// name to ask Last.fm and MusicBrainz for. An artist checked and
+    /// left alone has its own name here. See `lookup_placed`.
+    same_as: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -142,6 +148,57 @@ impl Tags {
         }
     }
 
+    /// The name to ask the outside for (see `Store::same_as`).
+    pub fn asked_as(&self, app: &AppHandle, name: &str) -> String {
+        self.with_store(app, |s| s.same_as.get(&key_of(name)).cloned()).unwrap_or_else(|| name.trim().to_string())
+    }
+
+    /// `lookup`, checked against where Roon says the artist is from
+    /// (`place`: a country, or a birthplace ending in one). When
+    /// MusicBrainz found an artist of another country, it's a namesake:
+    /// the name is tried with "The" in front (or without it), and that
+    /// artist is kept in this one's place if its country is the right one.
+    /// Checked once per artist.
+    pub async fn lookup_placed(&self, app: &AppHandle, name: &str, lastfm_key: &str, place: &str) -> ArtistTags {
+        let have = self.lookup(app, name, lastfm_key).await;
+        let key = key_of(name);
+        let (Some(want), Some(got)) = (country_code(place), have.country.clone()) else {
+            return have;
+        };
+        if got == want || self.with_store(app, |s| s.same_as.contains_key(&key)) {
+            return have;
+        }
+        let plain = name.trim();
+        let other = match plain.get(..4) {
+            Some(the) if the.eq_ignore_ascii_case("the ") => plain[4..].trim().to_string(),
+            _ => format!("The {plain}"),
+        };
+        self.turn().await;
+        let mut found = fetch(&other, lastfm_key).await;
+        let right = found.country.as_deref() == Some(want.as_str());
+        println!(
+            "[tags] {plain}: Roon says {want}, the tags are of an artist from {got}; \"{other}\" is from {}: {}",
+            found.country.as_deref().unwrap_or("nowhere known"),
+            if right { "taken instead" } else { "left as it was" }
+        );
+        if !right {
+            self.with_store(app, |s| {
+                s.same_as.insert(key, plain.to_string());
+            });
+            self.save(app);
+            return have;
+        }
+        found.name = plain.to_string();
+        self.with_store(app, |s| {
+            s.artists.insert(key.clone(), found.clone());
+            // (its neighbours were the namesake's)
+            s.similar.remove(&key);
+            s.same_as.insert(key, other);
+        });
+        self.save(app);
+        found
+    }
+
     pub fn cached(&self, app: &AppHandle, name: &str) -> Option<ArtistTags> {
         self.with_store(app, |s| s.artists.get(&key_of(name)).cloned())
     }
@@ -158,7 +215,8 @@ impl Tags {
             }
         }
         self.turn().await;
-        let fetched = fetch(name, lastfm_key).await;
+        let mut fetched = fetch(&self.asked_as(app, name), lastfm_key).await;
+        fetched.name = name.to_string();
         self.with_store(app, |s| {
             s.artists.insert(key_of(name), fetched.clone());
         });
@@ -221,7 +279,7 @@ impl Tags {
         }
         self.turn().await;
         let names = match client() {
-            Ok(client) => lastfm_similar(&client, name, lastfm_key).await.unwrap_or_default(),
+            Ok(client) => lastfm_similar(&client, &self.asked_as(app, name), lastfm_key).await.unwrap_or_default(),
             Err(_) => Vec::new(),
         };
         self.with_store(app, |s| {
@@ -247,7 +305,7 @@ impl Tags {
         self.turn().await;
         let mut out = ArtistTags { name: name.to_string(), fetched_at: now_ms(), ..Default::default() };
         match client() {
-            Ok(client) => match lastfm_top_tags(&client, name, lastfm_key).await {
+            Ok(client) => match lastfm_top_tags(&client, &self.asked_as(app, name), lastfm_key).await {
                 Ok(tags) => {
                     out.from_lastfm = true;
                     out.tags = tags;
@@ -372,9 +430,11 @@ pub async fn lastfm_top_tracks(app: &AppHandle, name: &str) -> Vec<String> {
         return Vec::new();
     }
     let Ok(client) = client() else { return Vec::new() };
+    // (by the name the outside knows the artist by)
+    let name = app.state::<Tags>().asked_as(app, name);
     let res = client
         .get("https://ws.audioscrobbler.com/2.0/")
-        .query(&[("method", "artist.gettoptracks"), ("artist", name), ("api_key", key.as_str()), ("format", "json"), ("autocorrect", "1"), ("limit", "100")])
+        .query(&[("method", "artist.gettoptracks"), ("artist", name.as_str()), ("api_key", key.as_str()), ("format", "json"), ("autocorrect", "1"), ("limit", "100")])
         .send()
         .await;
     let Ok(res) = res else { return Vec::new() };
@@ -649,6 +709,63 @@ fn style_features(tags: &[Tag]) -> Vec<Tag> {
     out
 }
 
+/// The ISO code of a country as Roon names it ("Netherlands", or the end
+/// of a birthplace: "Escatawpa, Mississippi, USA"), for telling namesakes
+/// apart (`lookup_placed`). None for a country not listed: no check then.
+fn country_code(place: &str) -> Option<String> {
+    let last = place.rsplit(',').next()?.trim();
+    if last.len() == 2 && last.chars().all(|c| c.is_ascii_alphabetic()) && last != "UK" && last != "US" {
+        return Some(last.to_ascii_uppercase());
+    }
+    Some(
+        match last.to_lowercase().as_str() {
+            "sweden" => "SE",
+            "finland" => "FI",
+            "norway" => "NO",
+            "denmark" => "DK",
+            "iceland" => "IS",
+            "germany" => "DE",
+            "uk" | "united kingdom" | "great britain" | "england" | "scotland" | "wales" | "northern ireland" => "GB",
+            "ireland" => "IE",
+            "us" | "usa" | "united states" | "united states of america" => "US",
+            "canada" => "CA",
+            "australia" => "AU",
+            "new zealand" => "NZ",
+            "japan" => "JP",
+            "france" => "FR",
+            "netherlands" | "the netherlands" | "holland" => "NL",
+            "belgium" => "BE",
+            "poland" => "PL",
+            "russia" | "russian federation" => "RU",
+            "ukraine" => "UA",
+            "italy" => "IT",
+            "spain" => "ES",
+            "portugal" => "PT",
+            "brazil" => "BR",
+            "mexico" => "MX",
+            "argentina" => "AR",
+            "chile" => "CL",
+            "greece" => "GR",
+            "turkey" | "türkiye" => "TR",
+            "czechia" | "czech republic" => "CZ",
+            "austria" => "AT",
+            "switzerland" => "CH",
+            "hungary" => "HU",
+            "romania" => "RO",
+            "estonia" => "EE",
+            "latvia" => "LV",
+            "lithuania" => "LT",
+            "china" => "CN",
+            "south korea" | "korea" => "KR",
+            "india" => "IN",
+            "israel" => "IL",
+            "south africa" => "ZA",
+            _ => return None,
+        }
+        .to_string(),
+    )
+}
+
 /// A country's name for its ISO code, for the scene tag.
 fn country_name(code: &str) -> Option<&'static str> {
     Some(match code {
@@ -701,13 +818,18 @@ fn country_name(code: &str) -> Option<&'static str> {
 
 /// What the outside says about an artist (cached; fetched when missing).
 #[tauri::command]
-pub async fn wrapped_artist_tags(app: AppHandle, name: String) -> Result<ArtistTags, String> {
+pub async fn wrapped_artist_tags(app: AppHandle, name: String, place: Option<String>) -> Result<ArtistTags, String> {
     if name.trim().is_empty() {
         return Err("No artist name.".into());
     }
     let key = WrappedSettings::load(&app).lastfm_key;
     let tags = app.state::<Tags>();
-    Ok(tags.lookup(&app, &name, &key).await)
+    // (`place`: where Roon says the artist is from, on their page; a
+    // namesake from elsewhere is put right there)
+    Ok(match place.as_deref().map(str::trim).filter(|p| !p.is_empty()) {
+        Some(place) => tags.lookup_placed(&app, &name, &key, place).await,
+        None => tags.lookup(&app, &name, &key).await,
+    })
 }
 
 /// An album's tags (its artist's when Last.fm has fewer than three for it).
