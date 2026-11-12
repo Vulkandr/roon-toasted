@@ -1599,3 +1599,44 @@ document.querySelector("#plugin-link").addEventListener("click", (event) => {
   event.preventDefault();
   invoke("plugin:opener|open_url", { url: event.currentTarget.href });
 });
+
+// ===== The window's height follows the page =================================
+//
+// The window is as tall as what it shows: the page that's picked (its
+// cards, with any Legend that's open, and the footer's line), and never
+// shorter than the list of pages on the left. It grows downward as a page
+// gets longer and shrinks again when it gets shorter; lib.rs
+// (`settings_fit_height`) keeps it on the screen, and past that the page
+// scrolls as before. Not while maximized.
+
+const fitNav = document.querySelector("#pages-nav");
+const fitMain = document.querySelector("main");
+const fitFooter = document.querySelector(".footer");
+const fitBar = document.querySelector(".titlebar");
+let fitQueued = false;
+let fitLast = 0;
+function fitHeight() {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => {
+    fitQueued = false;
+    // (the list's own height: its last entry's bottom, not its box, which
+    // is as tall as the window)
+    const last = fitNav.lastElementChild;
+    const nav = last ? last.getBoundingClientRect().bottom - fitNav.getBoundingClientRect().top + fitNav.scrollTop + 12 : 0;
+    const page = fitMain.offsetHeight + fitFooter.offsetHeight;
+    const height = Math.ceil(fitBar.offsetHeight + Math.max(nav, page)) + 2;
+    if (height === fitLast) return;
+    fitLast = height;
+    invoke("settings_fit_height", { height }).catch(() => {});
+  });
+}
+new ResizeObserver(fitHeight).observe(fitMain);
+new MutationObserver(fitHeight).observe(fitNav, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
+// (shown again, or moved to another screen: the same page may need another
+// height there)
+window.addEventListener("focus", () => {
+  fitLast = 0;
+  fitHeight();
+});
+fitHeight();

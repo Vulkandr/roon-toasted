@@ -47,9 +47,9 @@ your whole listening history (see [Wrapped's own pages](#wrappeds-own-pages)).
   shows a local file's actual waveform from Roon in most styles, optionally
   bouncing near the playhead, colored by loudness, and as Roon has it or more
   dynamic.
-- **Profiles:** save layouts and switch between them, or start from the
-  Default, Waves and Waves Large presets. The player bar along the bottom can
-  follow the same style.
+- **Now Playing profiles:** save layouts and switch between them, or start
+  from the Default, Waves and Waves Large presets. The player bar along the
+  bottom can follow the same style.
 
 Switch it on in **Settings > The Wrapper**, then open it from the tray, with
 Ctrl + Alt + W, or from Settings. Closing it keeps Roon running out of sight,
@@ -88,10 +88,23 @@ Wrapper opens). They run on the Hearts & Library link.
   time.
 - **Your library:** Genres (from the artists' tags), Artists, Albums, Tracks
   (with a shuffle of its own), Playlists, Listen Later and Tags, and album and
-  artist pages with similar artists, tags and play menus.
-- **In the player:** Discover and Deep Dive buttons left of the controls, the
-  heart right after the song's name, and in Now Playing a Wrapped menu with
-  Discover, Deep Dive, the artist and the album.
+  artist pages with similar artists, tags and play menus. Artist pages open
+  with Roon's banner photo and a Tracks section: the artist's popular songs
+  (in Last.fm's order) and the ones in your library you've played most.
+- **Playlists:** add the playing song, any song or a whole album to a
+  playlist, new or existing, and delete playlists you're done with.
+- **Roon profiles:** pick a profile next to the Wrapper's title. Hearts,
+  bans, listening history, Last.fm, Home, Discover and Deep Dive are kept per
+  profile, and a profile can have settings of its own; the library and the
+  playlists are shared, as in Roon. It doesn't change the profile Roon's own
+  app is on.
+- **Bans:** an optional Ban button in the player, and ban buttons on artist
+  and album pages. Bans are Roon's own, per profile, and nothing banned is
+  picked by Discover, Home or Deep Dive. History lists what's banned.
+- **In the player:** Discover and Deep Dive buttons left of the controls, Add
+  to playlist left of Previous, the heart right after the song's name, and in
+  Now Playing a Wrapped menu with Discover, Deep Dive, the artist and the
+  album, plus the song's genres and tags if you switch them on.
 - **Onboarding:** a short walkthrough the first time you open each part.
   Replay it or switch it off in Settings.
 - **Live albums:** off by default, which leaves live albums out of everything
@@ -156,6 +169,11 @@ buttons.
   the main one (Settings > General > Artists).
 - **Hotkeys** for the Toaster, Search and the Wrapper; all can be changed or
   turned off.
+- **Media Keys:** your keyboard's Play/Pause, Stop, Next and Previous keys
+  control the zone selected in Toasted, in any app (on by default; other apps
+  don't get those keys while Roon is connected). Optionally the Volume Up,
+  Volume Down and Mute keys change that zone's volume instead of the Windows
+  volume. Both switches are in Settings > Hotkeys & Media Keys.
 - **Tray menu** with Toaster, Wrapper and Taskbar Widget switches, plus Toasts
   and Start with Windows.
 
@@ -227,7 +245,7 @@ once connected, otherwise `null`. No answer means it isn't running.
 
 - Roon doesn't share everything with extensions. Hearts, library, audio
   quality and waveforms come from Roon's internal protocol instead, which is
-  why they're experimental (Settings > Hearts & Library). There's still no
+  why they're experimental (Settings > Roon Core > Hearts & Library). There's still no
   queue reordering or clearing, and the Toaster can't open a specific page in
   the Roon app (the Wrapper can, since Roon is right there).
 - Toasts are skipped while a game runs in exclusive full-screen mode, because

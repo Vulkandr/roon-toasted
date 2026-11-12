@@ -1486,7 +1486,3 @@ button:disabled {
   display: none;
 }
 
-/* Hearts & Library: the Ban Button row, a little under Add to Library */
-.ban-row {
-  margin-top: 12px;
-}

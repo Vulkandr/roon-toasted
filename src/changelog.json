@@ -1,5 +1,46 @@
 [
   {
+    "version": "1.6.0",
+    "date": "2026-11-12",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["Media Keys", "Your keyboard's Play/Pause, Stop, Next and Previous keys now control the zone selected in Toasted, in any app. This is on by default, so while Roon is connected other apps (Spotify, YouTube and so on) no longer get those keys. Turn it off in Settings > Hotkeys & Media Keys > Media Keys > Playback. A second switch, Volume, is off by default: on, the Volume Up, Volume Down and Mute keys change the zone's volume instead of the Windows volume, and holding a key keeps going."],
+          ["Roon profiles", "Toasted now knows about your Roon profiles. Pick one from the profile button next to the Wrapper's title, or at the top of either Settings list. Hearts, bans, listening history, Last.fm, Home, Discover and Deep Dive are kept per profile; the library and the playlists are shared, as in Roon. Picking a profile here doesn't change the one Roon's own app is on."],
+          ["A page for each profile", "The wrench next to the profile opens its page in Wrapped's Settings: its Last.fm username (Roon's, or one you type), whether it gets Discover lists (on for the account's first profile), Rescan daily with a Rescan button, and a choice between the shared General settings and settings of its own."],
+          ["Bans", "A Ban button for the player (off by default: Hearts & Library, Ban button) bans the song that's playing for the profile in use. Artist pages have a ban button of their own, and albums can be banned too. Bans are Roon's own, so Roon skips them as well, and nothing banned is picked by Discover, Home or Deep Dive. History has a Banned button with the banned songs, albums and artists, where a ban can be lifted."],
+          ["Settings in pages", "Toasted's Settings and Wrapped's Settings are now a list of pages down the left side, one page at a time, instead of one long scroll. The Roon Core page's entry has a light that shows the connection, and each card's help folds out at its bottom."],
+          ["Add to playlist", "A new button left of Previous adds the playing song to a playlist: pick one, or type a name for a new one. Every song's menu has Add to Playlist too, and an album page's button adds the whole album."],
+          ["Delete playlists", "Playlists can be deleted from Wrapped, with the bin on the Playlists page or on the playlist's own page."],
+          ["Tracks on artist pages", "Artist pages have a Tracks section over the albums. Popular is the artist's songs in Last.fm's top-songs order, and My Library is their songs in your library, the ones you've played most first. The cover plays the song, and More shows up to 30."],
+          ["Artist banners", "Artist pages show Roon's wide photo of the artist, with their picture square at its left, and the name, tags and buttons over it."],
+          ["Genres and tags in Now Playing", "The Wrapped piece in Now Playing can show the playing song's genres and its Roon tags (two checkboxes in the layout editor, and one for their titles). Click one to open its page."],
+          ["Now Playing links", "A new setting in Wrapped's Settings, General: the album and artist links in Now Playing can open Wrapped's own pages instead of Roon's."]
+        ]
+      },
+      {
+        "title": "Fixes",
+        "items": [
+          ["Hearts with several profiles", "With more than one Roon profile, a heart could land on the wrong profile. Hearts now go to the profile picked in Toasted."],
+          ["Now Playing links on another zone", "When Roon's own window was on a different zone than the player, clicking the album or artist in Now Playing opened the wrong page. The link is now checked first, and Roon's search finds the right page when it doesn't match."],
+          ["Artists that share a name", "An artist could get the tags of another band with the same name (Roon's 11th Hour got a rapcore band's). Opening the artist's page now checks the tags against where Roon says the artist is from."],
+          ["Open in Roon", "On some artist pages Open in Roon waited four seconds before showing Roon's page. It now shows it as soon as the page is ready."],
+          ["Last.fm errors", "A passing Last.fm error no longer stops a scrobble read; it's tried again."]
+        ]
+      },
+      {
+        "title": "Good to know",
+        "items": [
+          ["One more read", "After updating, Wrapped reads the library once more by itself so hearts and bans are right for every profile."],
+          ["Profiles start empty", "A profile other than your first has its own history, Home and Deep Dives, so it starts with only what that profile has played. What you had before stays with the first profile."],
+          ["Return Roon", "The Return Roon button moved to the right side of the Wrapper's title bar, next to Settings."],
+          ["Popular needs a Last.fm key", "Without a Last.fm key (Wrapped's Settings), the Popular tab shows the songs in Roon's own order."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.5.1",
     "date": "2026-11-09",
     "sections": [

@@ -174,6 +174,37 @@ pub(crate) enum ToasterMode {
 /// (logical pixels).
 const SCREEN_MARGIN: f64 = 16.0;
 
+/// Settings: its window made as tall as its page needs (`height`, in
+/// logical pixels, from settings.js: the title bar and the page that's
+/// picked, or the list of pages if that's taller). The width and the top
+/// edge stay; the bottom never goes below the screen's work area, and past
+/// that the page scrolls. Not while maximized.
+#[tauri::command]
+fn settings_fit_height(app: AppHandle, height: f64) {
+    let Some(window) = app.get_webview_window(SETTINGS_WINDOW) else {
+        return;
+    };
+    if window.is_maximized().unwrap_or(false) {
+        return;
+    }
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let Ok(size) = window.inner_size() else {
+        return;
+    };
+    let size = size.to_logical::<f64>(scale);
+    let mut wanted = height.ceil().max(200.0);
+    if let (Some(monitor), Ok(top)) = (window.current_monitor().ok().flatten(), window.outer_position()) {
+        let work = monitor.work_area();
+        let below = f64::from(work.position.y + work.size.height as i32 - top.y) / monitor.scale_factor() - SCREEN_MARGIN;
+        if below > 200.0 {
+            wanted = wanted.min(below);
+        }
+    }
+    if (wanted - size.height).abs() >= 1.0 {
+        let _ = window.set_size(tauri::LogicalSize::new(size.width, wanted));
+    }
+}
+
 /// Makes a hidden window fit the usable area of the screen it will open on
 /// (the screen minus the taskbar), so it never opens taller or wider than the
 /// screen, or partly off it. Does nothing while the window is showing, so an
@@ -715,6 +746,7 @@ pub fn run() {
             zonekeeper::zone_squared,
             settings::get_settings,
             settings::update_settings,
+            settings_fit_height,
             roon::roon_status,
             roon::switch_core,
             roon::roon_search_again,
