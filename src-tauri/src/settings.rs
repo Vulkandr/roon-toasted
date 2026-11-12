@@ -128,6 +128,9 @@ pub struct AppSettings {
     /// The Ban button on the player (after Queue): bans the song that's
     /// playing for the Roon profile in use. Off unless switched on.
     pub ban_button: bool,
+    /// Now Playing's links (the song's album and artist) open Wrapped's
+    /// pages instead of Roon's. Off: Roon's own pages.
+    pub player_links_wrapped: bool,
     /// Look for new releases on GitHub (update.rs); nothing installs without a click.
     pub check_for_updates: bool,
     /// A Roon Core address the user typed in (Settings > Roon Core > Manual),
@@ -214,6 +217,7 @@ impl Default for AppSettings {
             library_controls: true,
             library_add_mode: roon_library::AddMode::Track,
             ban_button: false,
+            player_links_wrapped: false,
             check_for_updates: true,
             manual_core_host: None,
             manual_core_port: DEFAULT_CORE_PORT,

@@ -43,6 +43,7 @@ const zoneButton = $("#zone-button");
 const zoneName = $("#zone-name");
 const zoneMenu = $("#zone-menu");
 const profileMenu = $("#profile-menu");
+const playlistMenu = $("#playlist-menu");
 const profileButton = $("#profile-button");
 const muteBtn = $("#mute");
 const volume = $("#volume");
@@ -127,6 +128,7 @@ let customBackground = null; // and its background (null: tinted from the accent
 let addMode = "track"; // what "add to library" adds, from Settings
 // (the Ban button after Queue, on or off: Settings, Hearts & Library)
 let banButton = false;
+let playerLinksWrapped = false; // Now Playing's links open Wrapped's pages, not Roon's
 let queue = { zoneId: null, items: [] };
 // Wrapped (the menu over Roon's logo and the page over Roon's content):
 // Roon's sidebar width in real pixels (null = collapsed, undefined = no
@@ -194,7 +196,7 @@ function reportHole() {
   const rect = hole.getBoundingClientRect();
   const covers = [];
   const radii = []; // a cover's rounded corners are cut too, so Roon shows there
-  for (const element of [zoneMenu, profileMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedSide, wrapped]) {
+  for (const element of [zoneMenu, profileMenu, playlistMenu, queuePanel, stage, wrappedBtn, wrappedPageBtn, wrappedSide, wrapped]) {
     if (element.hidden) continue;
     const r = element.getBoundingClientRect();
     // The cut-out has hard edges, so the buttons keep theirs square and paint
@@ -227,6 +229,7 @@ const holeWatcher = new ResizeObserver(reportHole);
 holeWatcher.observe(hole);
 holeWatcher.observe(zoneMenu);
 holeWatcher.observe(profileMenu);
+holeWatcher.observe(playlistMenu);
 holeWatcher.observe(queuePanel);
 holeWatcher.observe(stage);
 holeWatcher.observe(wrappedBtn);
@@ -430,6 +433,7 @@ function applySettings(settings) {
   customBackground = settings.shownBackground;
   addMode = settings.libraryAddMode;
   banButton = !!settings.banButton;
+  playerLinksWrapped = !!settings.playerLinksWrapped;
   rememberPlayer = settings.wrapperRememberPlayer !== false;
   if (colorsChanged) applyColors();
   renderLibrary();
@@ -554,15 +558,71 @@ for (const [link, which] of [[title, "title"], [album, "album"], [artist, "artis
     if (linking) return;
     linking = true;
     try {
-      // Ours stays open if the link wasn't found on Roon's player screen
-      const clicked = await invoke("wrapper_roon_link", { which });
-      if (clicked) await dropStage();
+      await followPlayerLink(which);
     } catch (err) {
       console.error("wrapper_roon_link", err);
     } finally {
       linking = false;
     }
   });
+}
+
+// Where a link in Now Playing goes. With "Now Playing links" set to
+// Wrapped (Settings, General): Wrapped's own page of the album or artist.
+// Else Roon's: its link is clicked, unless it says something else than
+// ours (Roon's window on another zone than this player: wrapper.rs reads
+// the link first); then Roon's search finds the page, as "Open in Roon"
+// on a Wrapped page does.
+// A line right under the track's text in Now Playing (where the click
+// was), lined up as the text is; the caller takes it away again
+function linkNote(text) {
+  stage.querySelector(".stage-link-note")?.remove();
+  const note = document.createElement("div");
+  note.className = "stage-link-note";
+  const pill = document.createElement("span");
+  pill.textContent = text;
+  note.append(pill);
+  const box = trackText.getBoundingClientRect();
+  note.style.left = `${box.left}px`;
+  note.style.top = `${box.bottom + 10}px`;
+  note.style.width = `${box.width}px`;
+  note.style.textAlign = getComputedStyle(artist).textAlign;
+  stage.append(note);
+  return note;
+}
+
+async function followPlayerLink(which) {
+  const np = zone?.nowPlaying;
+  const firstArtist = (np?.artist || "").split(" / ")[0].trim();
+  if (playerLinksWrapped && libraryReady && np) {
+    let card;
+    try {
+      card = await invoke("library_playing_album", { zoneId: zone.zoneId });
+    } catch (err) {
+      return wrappedToastStage(String(err));
+    }
+    if (which === "artist" && !card.performerHandle) return wrappedToastStage("Roon didn't say who the artist is.");
+    return openWrappedFromStage(which === "artist" ? { page: "artist", handle: card.performerHandle } : { page: "album", handle: card.handle });
+  }
+  const expect = which === "artist" ? firstArtist : which === "album" ? np?.album : np?.title;
+  // Ours stays open if the link wasn't found on Roon's player screen
+  const result = await invoke("wrapper_roon_link", { which, expect: expect || null });
+  if (result === "clicked") return dropStage();
+  if (result !== "different") return;
+  const pick = which === "artist" ? firstArtist : np.album;
+  if (!pick) return;
+  const text = which === "artist" ? pick : `${firstArtist} ${pick}`.trim();
+  // (Now Playing stays up, with a line saying so, until Roon's search is
+  // done and its page has come to rest, as a Wrapped page does)
+  const note = linkNote(`Opening ${pick} in Roon...`);
+  let picked = false;
+  try {
+    picked = await invoke("wrapper_open_in_roon", { text, pick });
+  } finally {
+    note.remove();
+  }
+  await dropStage();
+  if (!picked) wrapperToast(`Roon's results for ${text}; nothing matched "${pick}" exactly.`);
 }
 
 // ===== Now Playing (the stage) =============================================
@@ -593,8 +653,10 @@ const PIECES = {
   quality: { kind: "auto", node: "#quality", text: true },
   zone: { kind: "auto", node: "#zone-row", text: true, icons: true },
   volume: { kind: "bar", node: ".volume-row", text: true, icons: true, bar: true },
-  // Wrapped's title and buttons (its own control, inside the piece)
-  wrapped: { kind: "auto", node: "#wrapped-piece", text: true, icons: true },
+  // Wrapped's title and buttons (its own control, inside the piece). Its
+  // icons are the app's own drawings, the same in every pack, so the
+  // editor offers it no icon pack (`ownIcons`); the icon edge still applies
+  wrapped: { kind: "auto", node: "#wrapped-piece", text: true, icons: true, ownIcons: true },
 };
 const DEFAULT_ICONS = "lucide";
 // The app's own accent (wrapper.css), for bars set to the app's color
@@ -2822,6 +2884,13 @@ const editorText = $("#editor-text");
 const editorFont = $("#editor-font");
 const editorIcons = $("#editor-icons");
 const editorQuality = $("#editor-quality");
+// (the Wrapped piece's Genres and Tags, off unless ticked)
+const editorWrapped = $("#editor-wrapped");
+const wrappedGenresCheck = $("#editor-wrapped-genres");
+const wrappedTagsCheck = $("#editor-wrapped-tags");
+// (a title over each line: on unless unticked, and only there to tick
+// while Genres or Tags is on)
+const wrappedTitlesCheck = $("#editor-wrapped-titles");
 const qualityFormatCheck = $("#editor-quality-format");
 const formatSide = $("#editor-format-side");
 const editorPlay = $("#editor-play");
@@ -2923,9 +2992,16 @@ function refreshEditor() {
     }
     fontSelect.value = name;
   }
-  const withIcons = selected && PIECES[selected].icons ? layout.pieces[selected] : null;
+  const withIcons = selected && PIECES[selected].icons && !PIECES[selected].ownIcons ? layout.pieces[selected] : null;
   editorIcons.hidden = !withIcons;
   editorQuality.hidden = selected !== "quality";
+  editorWrapped.hidden = selected !== "wrapped";
+  wrappedGenresCheck.checked = !!layout.pieces.wrapped?.genres;
+  wrappedTagsCheck.checked = !!layout.pieces.wrapped?.tags;
+  const labelsOn = !!layout.pieces.wrapped?.genres || !!layout.pieces.wrapped?.tags;
+  wrappedTitlesCheck.checked = labelsOn && layout.pieces.wrapped?.labelTitles !== false;
+  wrappedTitlesCheck.disabled = !labelsOn;
+  $("#editor-wrapped-titles-label").classList.toggle("off", !labelsOn);
   qualityFormatCheck.checked = !!layout.pieces.quality.format;
   // The side: greyed out (still in place) while File format is off
   formatSide.classList.toggle("disabled", !qualityFormatCheck.checked);
@@ -3545,6 +3621,18 @@ for (const chip of formatSide.querySelectorAll(".chip")) {
     changed();
   });
 }
+for (const [check, name] of [
+  [wrappedGenresCheck, "genres"],
+  [wrappedTagsCheck, "tags"],
+  [wrappedTitlesCheck, "labelTitles"],
+]) {
+  check.addEventListener("change", () => {
+    if (selected !== "wrapped") return;
+    layout.pieces.wrapped[name] = check.checked;
+    changed();
+    renderLabels();
+  });
+}
 qualityFormatCheck.addEventListener("change", () => {
   if (selected !== "quality") return;
   layout.pieces.quality.format = qualityFormatCheck.checked;
@@ -3922,6 +4010,8 @@ function renderLibrary() {
   markWrappedPlaying();
   const show = libraryReady && zone != null && zone.nowPlaying != null;
   libraryBtn.classList.toggle("spacer", !show);
+  // (the playing song into a playlist: left of Previous, with the library link)
+  $("#playlist-add").hidden = !show;
   renderBan();
   if (!show) return;
 
@@ -4192,9 +4282,79 @@ function renderDivePiece() {
 }
 
 let heartSent = "";
+// ----- The playing song's genres and tags, in Now Playing's Wrapped piece
+// above what Wrapped says about the song. Two switches in the layout
+// editor (the Wrapped piece's Genres and Tags), both off unless ticked.
+// Genres: Wrapped's own for the artist (tags.rs) or Roon's for the album,
+// as Wrapped's Settings has it under General. Tags: the ones you've put on
+// the song or its album in Roon. Asked for once per song -----
+// (a chip's page: Now Playing closes, then Wrapped opens on it; not while
+// the layout is being edited)
+async function openWrappedFromStage(entry) {
+  if (editing) return;
+  await closeStage();
+  if (stage.hidden) openWrappedPage(entry);
+}
+const pieceLabels = $("#wrapped-piece-labels");
+const pieceGenres = $("#wrapped-piece-genres");
+const pieceTags = $("#wrapped-piece-tags");
+let labelsFor = null; // the song and choices the chips were last asked for
+function renderLabels() {
+  const piece = layout?.pieces?.wrapped;
+  const np = zone?.nowPlaying;
+  const [wantGenres, wantTags] = [!!piece?.genres, !!piece?.tags];
+  // (the titles over the lines, on unless unticked in the editor)
+  pieceLabels.classList.toggle("untitled", piece?.labelTitles === false);
+  if (stage.hidden || !np || (!wantGenres && !wantTags)) {
+    pieceLabels.hidden = true;
+    labelsFor = null;
+    return;
+  }
+  const roonGenres = wrappedSettings?.genres === "roon";
+  const key = [zone.zoneId, np.title, np.artist, np.album, wantGenres, wantTags, roonGenres, libraryReady].join("|");
+  if (key === labelsFor) return;
+  labelsFor = key;
+  pieceGenres.parentElement.hidden = true;
+  pieceTags.parentElement.hidden = true;
+  const still = () => labelsFor === key;
+  const fill = (holder, names, open) => {
+    holder.replaceChildren();
+    for (const name of names) {
+      const chip = document.createElement("button");
+      chip.className = "wrapped-piece-chip";
+      chip.textContent = name;
+      chip.addEventListener("click", (event) => {
+        event.stopPropagation();
+        open(name);
+      });
+      holder.append(chip);
+    }
+    holder.parentElement.hidden = !names.length;
+    pieceLabels.hidden = pieceGenres.parentElement.hidden && pieceTags.parentElement.hidden;
+  };
+  const openGenre = (name) => openWrappedFromStage({ page: "genre", name });
+  const roon = libraryReady && (wantTags || (wantGenres && roonGenres)) ? invoke("library_playing_labels", { zoneId: zone.zoneId }).catch(() => null) : Promise.resolve(null);
+  roon.then((labels) => {
+    if (!still() || !labels) return;
+    if (wantGenres && roonGenres) fill(pieceGenres, labels.genres.slice(0, 6), openGenre);
+    if (wantTags) fill(pieceTags, labels.tags, (name) => openWrappedFromStage({ page: "tags", name }));
+  });
+  if (wantGenres && !roonGenres && np.artist) {
+    // (the first artist named: the tags are kept per artist)
+    invoke("wrapped_artist_tags", { name: np.artist.split(/ \/ |, /)[0] })
+      .then((tags) => {
+        if (!still()) return;
+        const names = (tags?.tags || []).filter((t) => t.kind === "genre").map((t) => t.name);
+        fill(pieceGenres, names.slice(0, 6), openGenre);
+      })
+      .catch(() => {});
+  }
+}
+
 function renderRating() {
   // (and the Deep Dive line next to it, which follows the same changes)
   renderDivePiece();
+  renderLabels();
   const song = discoverSongNow();
   const inPiece = !stage.hidden && layout?.pieces?.wrapped?.visible !== false;
   rateBox.hidden = !song || inPiece;
@@ -4872,6 +5032,128 @@ readProfiles();
 listen("library-profiles", (event) => showProfiles(event.payload));
 // (Hearts & Library switched off, or its link lost: no profile to show)
 listen("library-status", readProfiles);
+
+// ===== Add to playlist =====================================================
+// One menu for every place a song can go into a playlist from: the button
+// left of Previous (the song that's playing) and the menu on a song or an
+// album in Wrapped. A field on top names a new playlist (Enter makes it,
+// with the songs in it) and narrows the list as you type; a click on a
+// playlist adds the songs to its end.
+const playlistAddBtn = $("#playlist-add");
+let playlistAnchor = null;
+function closePlaylistMenu() {
+  if (playlistMenu.hidden) return;
+  playlistMenu.hidden = true;
+  playlistAnchor = null;
+  reportHole();
+}
+async function openPlaylistMenu(anchor, tracksOf) {
+  const say = (text) => (stage.hidden ? wrappedToast(text) : wrappedToastStage(text));
+  let lists;
+  try {
+    lists = newestPlaylistsFirst(await invoke("library_playlists"));
+  } catch (err) {
+    return say(String(err));
+  }
+  // (one at a time: a second click while Roon answers does nothing)
+  let busy = false;
+  const run = async (what, done) => {
+    if (busy) return;
+    busy = true;
+    try {
+      const tracks = await tracksOf();
+      if (!tracks?.length) throw new Error("Nothing to add.");
+      await what(tracks);
+      say(done(tracks.length));
+      closePlaylistMenu();
+      // (a new playlist shows in the side menu)
+      fillWrappedSide();
+    } catch (err) {
+      say(String(err));
+    }
+    busy = false;
+  };
+  const songs = (n) => (n === 1 ? "" : `${n} songs `);
+  playlistMenu.replaceChildren();
+  const field = document.createElement("input");
+  field.className = "playlist-menu-new";
+  field.type = "text";
+  field.placeholder = "New playlist, or type to find one";
+  field.spellcheck = false;
+  const list = document.createElement("div");
+  list.className = "playlist-menu-list";
+  const fill = () => {
+    const words = field.value.trim().toLowerCase();
+    list.replaceChildren();
+    if (words) {
+      const make = document.createElement("button");
+      make.className = "zone-option playlist-menu-make";
+      make.insertAdjacentHTML("beforeend", PLAYLIST_ICON);
+      const text = document.createElement("span");
+      text.textContent = `New playlist "${field.value.trim()}"`;
+      make.append(text);
+      make.addEventListener("click", create);
+      list.append(make);
+    }
+    for (const p of lists) {
+      if (words && !p.name.toLowerCase().includes(words)) continue;
+      const option = document.createElement("button");
+      option.className = "zone-option";
+      const name = document.createElement("span");
+      name.className = "playlist-menu-name";
+      name.textContent = p.name;
+      option.append(name);
+      option.addEventListener("click", () =>
+        run(
+          (tracks) => invoke("library_playlist_add", { handle: p.handle, tracks }),
+          (n) => `Added ${songs(n)}to ${p.name}`,
+        ),
+      );
+      list.append(option);
+    }
+  };
+  const create = () => {
+    const name = field.value.trim();
+    if (!name) return;
+    run(
+      (tracks) => invoke("library_create_playlist", { name, tracks }),
+      (n) => `New playlist ${name}${n === 1 ? "" : `, ${n} songs`}`,
+    );
+  };
+  field.addEventListener("input", fill);
+  field.addEventListener("keydown", (event) => {
+    event.stopPropagation();
+    if (event.key === "Enter") create();
+    if (event.key === "Escape") closePlaylistMenu();
+  });
+  playlistMenu.append(field, list);
+  fill();
+  playlistMenu.hidden = false;
+  playlistAnchor = anchor;
+  // By its anchor, their left edges in line: under it, or over it when
+  // there's no room below (the player's button sits at the bottom)
+  const rect = anchor.getBoundingClientRect();
+  const height = playlistMenu.offsetHeight;
+  const below = rect.bottom + 6 + height <= window.innerHeight - 8;
+  playlistMenu.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - playlistMenu.offsetWidth - 12))}px`;
+  playlistMenu.style.top = `${below ? rect.bottom + 6 : Math.max(8, rect.top - 6 - height)}px`;
+  reportHole();
+  field.focus({ preventScroll: true });
+}
+playlistAddBtn.addEventListener("click", (event) => {
+  event.stopPropagation();
+  if (!playlistMenu.hidden && playlistAnchor === playlistAddBtn) return closePlaylistMenu();
+  if (!zone?.nowPlaying) return;
+  const zoneId = zone.zoneId;
+  openPlaylistMenu(playlistAddBtn, async () => [await invoke("library_playing_handle", { zoneId })]);
+});
+document.addEventListener("pointerdown", (event) => {
+  if (playlistMenu.hidden) return;
+  if (playlistMenu.contains(event.target) || playlistAnchor?.contains(event.target)) return;
+  closePlaylistMenu();
+});
+window.addEventListener("resize", closePlaylistMenu);
+window.addEventListener("blur", closePlaylistMenu);
 
 // ===== Wrapped =============================================================
 
@@ -5847,6 +6129,14 @@ function wrappedPlayMenu(anchor, { what, handle, seed, radio }) {
   item(MENU_ICONS.play, "Play Now", () => play("now"));
   item(MENU_ICONS.next, "Add Next", () => play("next"));
   item(MENU_ICONS.queue, "Queue", () => play("queue"));
+  // (a song, or every song of an album, into a playlist)
+  item(PLAYLIST_ICON, "Add to Playlist", () =>
+    openPlaylistMenu(anchor, async () => {
+      if (what !== "album") return [handle];
+      const tracks = await invoke("library_album_tracks_for", { zoneId: zone?.zoneId ?? "", handle });
+      return tracks.map((t) => t.handle);
+    }),
+  );
   if (radio) item(RADIO_ICON, "Start Radio", () => startRoonRadio(what, radio, anchor));
   if (seed && tier2Ready()) item(diveIcon(), "Deep Dive", () => divePickAdd(seed));
   wrapped.append(menu);
@@ -6139,7 +6429,11 @@ const WRAPPED_PAGES = {
     }
     if (ticket !== wrappedTicket) return;
     wrappedHeading(card.name, card.albumCount ? `${card.albumCount} album${card.albumCount === 1 ? "" : "s"}` : "");
-    wrappedBody.replaceChildren(artistHeader(card));
+    // (Roon's banner of the artist, when it has one: behind the name,
+    // right of the picture, which then stands square at the left)
+    const head = artistHeader(card);
+    head.querySelector(".wrapped-album-info").prepend(artistBanner(card, head));
+    wrappedBody.replaceChildren(head);
     wrappedFacts("artist", card, ticket);
     wrappedOutsideTags(wrappedBody.querySelector(".wrapped-genres.outside"), card.name, ticket);
     // Roon's picks for the artist (similar artists, and the albums it would
@@ -6148,6 +6442,10 @@ const WRAPPED_PAGES = {
       (x) => ({ x }),
       (err) => ({ err }),
     );
+    // (their songs, over the albums: Popular and My Library)
+    const songs = document.createElement("div");
+    wrappedBody.append(songs);
+    wrappedArtistTracks(songs, card, ticket);
     const holder = document.createElement("div");
     holder.append(wrappedNote("Loading albums..."));
     wrappedBody.append(holder);
@@ -8863,6 +9161,127 @@ async function withTrackHandle(track, then) {
   }
 }
 
+// ----- An artist's songs, on their page over the albums: Popular (the
+// songs Roon offers for the artist, in the order of Last.fm's most played
+// when Last.fm knows them) and My Library (their songs in the library, the
+// ones this profile has played most first). Six show; More shows the rest.
+// The tab picked is kept from one artist to the next -----
+let artistTracksTab = "popular";
+function wrappedArtistTracks(box, card, ticket) {
+  const SHOWN = 6;
+  const head = document.createElement("div");
+  head.className = "wrapped-artist-tracks-head";
+  const title = document.createElement("h3");
+  title.className = "wrapped-section";
+  title.textContent = "Tracks";
+  const tabs = document.createElement("div");
+  tabs.className = "wrapped-tabs small";
+  const more = document.createElement("button");
+  more.className = "wrapped-button small";
+  const grid = document.createElement("div");
+  grid.className = "wrapped-artist-tracks";
+  const note = document.createElement("div");
+  head.append(title, tabs, more);
+  box.append(head, note, grid);
+  let all = false;
+  // (each list is asked for once, when its tab is first shown)
+  const lists = {};
+  const load = (tab) =>
+    (lists[tab] ||= (
+      tab === "popular"
+        ? invoke("library_artist_popular", { handle: card.handle, name: card.name }).then((p) => ({ songs: p.tracks, by: p.by }))
+        : invoke("wrapped_artist_library_tracks", { name: card.name, performerId: card.performerId ?? null }).then((songs) => ({ songs }))
+    ).catch((err) => ({ songs: [], err: String(err) })));
+  const rowOf = (song) => {
+    const row = document.createElement("div");
+    row.className = "wrapped-artist-track";
+    // (the album's cover plays the song: a play mark shows over it under
+    // the pointer)
+    const play = wrappedArt(song.imageKey, 96, song.album || song.title);
+    play.classList.add("wrapped-artist-track-art");
+    play.title = "Play now";
+    const mark = document.createElement("span");
+    mark.className = "wrapped-artist-track-play";
+    mark.innerHTML = WRAPPED_PLAY_ICON;
+    play.append(mark);
+    play.addEventListener("click", () => {
+      if (!zone) return wrappedToast("Pick a zone first.");
+      withTrackHandle(song, (handle) => send("library_play_track", { zoneId: zone.zoneId, handle }));
+    });
+    const text = document.createElement("span");
+    text.className = "wrapped-artist-track-text";
+    const name = document.createElement("span");
+    name.className = "wrapped-artist-track-title link";
+    name.textContent = song.title;
+    name.addEventListener("click", (event) => {
+      event.stopPropagation();
+      withTrackHandle(song, (handle) =>
+        wrappedPlayMenu(name, {
+          what: "song",
+          handle,
+          seed: { kind: "song", handle, title: song.title, artist: card.name, album: song.album || "", imageKey: song.imageKey ?? card.imageKey },
+          radio: { tracks: [handle] },
+        }),
+      );
+    });
+    const sub = document.createElement("span");
+    sub.className = "wrapped-artist-track-sub";
+    const on = document.createElement("span");
+    on.textContent = song.album ? `on ${song.album}` : "";
+    const open = song.albumId != null ? { page: "album", albumId: song.albumId } : song.albumHandle ? { page: "album", handle: song.albumHandle } : null;
+    if (open) {
+      on.classList.add("link");
+      on.addEventListener("click", () => openWrappedPage(open));
+    }
+    sub.append(on);
+    if (song.plays) sub.append(` \u00b7 ${song.plays} play${song.plays === 1 ? "" : "s"}`);
+    text.append(name, sub);
+    const length = document.createElement("span");
+    length.className = "wrapped-track-length";
+    length.textContent = song.lengthSeconds ? formatTime(song.lengthSeconds) : "";
+    row.append(play, text, length);
+    return row;
+  };
+  const show = async () => {
+    const tab = artistTracksTab;
+    for (const pill of tabs.children) pill.classList.toggle("selected", pill.dataset.tab === tab);
+    const list = await load(tab);
+    if (ticket !== wrappedTicket || tab !== artistTracksTab) return;
+    const WORDS = {
+      popular: list.by === "lastfm" ? "" : "In Roon's own order: Last.fm doesn't list these songs, or no Last.fm key is set (Wrapped's Settings).",
+      library: "",
+    };
+    const none = { popular: "Roon offers no songs for this artist.", library: "None of this artist's songs is in your library copy." };
+    note.replaceChildren();
+    if (list.err) note.append(wrappedNote(list.err, "wrapped-note error"));
+    else if (!list.songs.length) note.append(wrappedNote(none[tab]));
+    else if (WORDS[tab]) note.append(wrappedNote(WORDS[tab]));
+    grid.replaceChildren(...list.songs.slice(0, all ? 30 : SHOWN).map(rowOf));
+    more.hidden = list.songs.length <= SHOWN;
+    more.textContent = all ? "Less" : "More";
+  };
+  for (const [tab, label] of [
+    ["popular", "Popular"],
+    ["library", "My Library"],
+  ]) {
+    const pill = document.createElement("button");
+    pill.className = "wrapped-tab";
+    pill.dataset.tab = tab;
+    pill.textContent = label;
+    pill.addEventListener("click", () => {
+      artistTracksTab = tab;
+      show();
+    });
+    tabs.append(pill);
+  }
+  more.addEventListener("click", () => {
+    all = !all;
+    show();
+  });
+  more.hidden = true;
+  show();
+}
+
 // A song's row (the Tracks page, playlists, tags, Listen Later). `opts`:
 // `play` replaces what the play button does, `extra(row)` adds buttons at
 // the end, `menu` adds to the song's menu
@@ -9398,6 +9817,38 @@ WRAPPED_PAGES.playlist = async function (entry) {
         wrappedToast(`Playing ${name} on ${zone.name}`);
       }),
     );
+    // (delete the playlist: two clicks, then back to where you came from)
+    if (editable) {
+      const del = wrappedIconButton(TRASH_ICON, "Delete this playlist", async () => {
+        if (del.dataset.armed !== "1") {
+          del.dataset.armed = "1";
+          del.classList.add("armed");
+          wrappedToast(`Click the bin again to delete "${name}"`);
+          setTimeout(() => {
+            delete del.dataset.armed;
+            del.classList.remove("armed");
+          }, 4000);
+          return;
+        }
+        del.classList.add("busy");
+        try {
+          await invoke("library_delete_playlist", { handle: entry.handle });
+          wrappedToast(`Deleted "${name}"`);
+          fillWrappedSide();
+          if (wrappedStack.length > 1) {
+            wrappedBackPage();
+            // (no way forward to a playlist that's gone)
+            wrappedForward.pop();
+          } else {
+            openWrappedPage({ page: "playlists" });
+          }
+        } catch (err) {
+          wrappedToast(String(err));
+          del.classList.remove("busy");
+        }
+      }, "wrapped-delete");
+      actions.append(del);
+    }
     wrappedBody.append(actions);
     if (!songs.length) return wrappedBody.append(wrappedNote("This playlist is empty."));
     // Play goes on through the playlist from the song; X takes it out
@@ -12399,6 +12850,18 @@ WRAPPED_PAGES.settings = async function () {
       (on) => ({ banButton: on }),
     ),
   );
+  // (where Now Playing's album and artist links go)
+  const linksCard = card("Now Playing links", "Where the song's album and artist take you when clicked in Now Playing: Roon's own page, or Wrapped's. Set to Roon, a Roon window that's on another zone than the player is searched for the right page.");
+  linksCard.head.append(
+    toastedPills(
+      [
+        [false, "Roon"],
+        [true, "Wrapped"],
+      ],
+      !!toastedNow.playerLinksWrapped,
+      (on) => ({ playerLinksWrapped: on }),
+    ),
+  );
   invoke("library_status").then(paintLink).catch(() => {});
   const unlistenLink = await listen("library-status", (event) => {
     if (ticket !== wrappedTicket) return unlistenLink();
@@ -12518,6 +12981,7 @@ WRAPPED_PAGES.settings = async function () {
     colorsCard,
     group("Behavior"),
     sideCard,
+    linksCard,
     genresCard,
     similarCard,
     onboardCard,
@@ -13351,7 +13815,8 @@ function playlistRows(list, mine) {
     title.classList.add("link");
     title.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
     row.append(art, text);
-    if (mine && !p.readOnly) {
+    // (any playlist Roon lets be changed, Wrapped's own or not; two clicks)
+    if (!p.readOnly) {
       const del = wrappedIconButton(TRASH_ICON, "Delete this playlist", async () => {
         if (del.dataset.armed !== "1") {
           // Click twice: the first arms it
@@ -13460,6 +13925,12 @@ function albumHeader(card) {
     });
   });
   split.append(play, more);
+  // The album into a playlist: an existing one, or a new one named in the
+  // menu's field (wrapper.js, "Add to playlist")
+  const albumToPlaylist = wrappedIconButton(PLAYLIST_ICON, "Add this album to a playlist", () => {
+    if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
+    openPlaylistMenu(albumToPlaylist, async () => wrappedAlbumTracks.map((t) => t.handle));
+  }, "wrapped-save");
   actions.append(
     split,
     wrappedHeart({ inLibrary: card.inLibrary, favorite: card.favorite }, async (favorite) => {
@@ -13471,20 +13942,37 @@ function albumHeader(card) {
     wrappedDive({ kind: "album", handle: card.handle, title: card.title, artist: radioSeed.name, imageKey: card.imageKey, radio: radioSeed }, () => wrappedRadioBuilder("album", radioSeed)),
     wrappedOpenInRoon(`${card.artist} ${card.title}`.trim(), card.title),
     ...albumBanButton(card),
-    wrappedIconButton(PLAYLIST_ICON, "Save this album as a Wrapped playlist", async () => {
-      if (!wrappedAlbumTracks.length) return wrappedToast("The tracks haven't loaded yet.");
-      const name = `${WRAPPED_PREFIX}${card.title}`;
-      try {
-        const made = await invoke("library_create_playlist", { name, tracks: wrappedAlbumTracks.map((t) => t.handle) });
-        wrappedToast(`Saved "${made.name}" (${made.tracks ?? wrappedAlbumTracks.length} tracks)`);
-      } catch (err) {
-        wrappedToast(String(err));
-      }
-    }, "wrapped-save"),
+    albumToPlaylist,
   );
   info.append(title, artist, facts, genres, outside, actions);
   head.append(info);
   return head;
+}
+
+// An artist's banner: the wide (16 by 7) picture Roon's own artist page
+// has at its top, by the artist's picture key, filling the header behind
+// the picture and name (`head` gets "has-banner" once it has loaded).
+// Nothing shows for an artist Roon has no wide picture of
+function artistBanner(card, head) {
+  const box = document.createElement("div");
+  box.className = "wrapped-artist-banner";
+  const keys = [artistPictures(card)].flat().filter(Boolean);
+  if (!keys.length) {
+    box.hidden = true;
+    return box;
+  }
+  const img = document.createElement("img");
+  img.alt = "";
+  let at = 0;
+  const load = () => (img.src = `${convertFileSrc(keys[at], "roonimg")}?width=1024&height=1024&src=broker&shape=16by7&v=1`);
+  img.addEventListener("error", () => {
+    if (++at < keys.length) return load();
+    box.hidden = true;
+  });
+  img.addEventListener("load", () => head.classList.add("has-banner"));
+  load();
+  box.append(img);
+  return box;
 }
 
 function artistHeader(card) {
@@ -13542,7 +14030,12 @@ function artistHeader(card) {
       .catch(() => {});
     actions.append(ban);
   }
-  info.append(name, facts, genres, outside, actions);
+  // (the genres and tags in a holder of their own: over a banner they sit
+  // apart from the name, at the bottom right; else it's as if it weren't there)
+  const labels = document.createElement("div");
+  labels.className = "wrapped-artist-labels";
+  labels.append(genres, outside);
+  info.append(name, facts, labels, actions);
   head.append(info);
   return head;
 }

@@ -111,6 +111,11 @@
               <button id="radio" class="icon-btn toggle" title="Roon Radio">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9"/><path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5"/><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5"/><path d="M19.1 4.9C23 8.8 23 15.1 19.1 19"/></svg>
               </button>
+              <!-- Add the song that's playing to a playlist (wrapper.js,
+                   "Add to playlist"; needs Hearts & Library) -->
+              <button id="playlist-add" class="icon-btn" title="Add to playlist" hidden>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 12H3"/><path d="M16 6H3"/><path d="M16 18H3"/><path d="M18 9v6"/><path d="M21 12h-6"/></svg>
+              </button>
               <button id="previous" class="icon-btn" title="Previous">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="19 20 9 12 19 4 19 20"/><line x1="5" x2="5" y1="19" y2="5"/></svg>
               </button>
@@ -214,6 +219,19 @@
                   <button class="wrapped-piece-btn" data-action="album" data-tip="Open the album in Wrapped">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/></svg>
                   </button>
+                </div>
+                <!-- The playing song's genres and your Roon tags on it, each
+                     switched on in the layout editor (off unless it is;
+                     wrapper.js, renderLabels) -->
+                <div id="wrapped-piece-labels" class="wrapped-piece-labels" hidden>
+                  <div class="wrapped-piece-labelled" hidden>
+                    <div class="wrapped-piece-label">Genres</div>
+                    <div id="wrapped-piece-genres" class="wrapped-piece-chips"></div>
+                  </div>
+                  <div class="wrapped-piece-labelled" hidden>
+                    <div class="wrapped-piece-label">Tags</div>
+                    <div id="wrapped-piece-tags" class="wrapped-piece-chips tags"></div>
+                  </div>
                 </div>
                 <!-- A Discover list's song: why it's there, and its thumbs
                      (wrapper.js, renderRating) -->
@@ -356,6 +374,13 @@
                   <button class="chip" data-format-side="above">Above</button>
                   <button class="chip" data-format-side="below">Below</button>
                 </span>
+              </div>
+              <!-- The Wrapped piece: the playing song's genres and your
+                   Roon tags on it, above what Wrapped says about the song -->
+              <div id="editor-wrapped" class="editor-group" hidden>
+                <label class="editor-check" title="Show the playing song's genres in the Wrapped piece (Wrapped's own or Roon's, as set in Wrapped's Settings under General)"><input id="editor-wrapped-genres" type="checkbox" /> Genres</label>
+                <label class="editor-check" title="Show the tags you've put on the playing song or its album in Roon (needs Hearts &amp; Library)"><input id="editor-wrapped-tags" type="checkbox" /> Tags</label>
+                <label id="editor-wrapped-titles-label" class="editor-check" title="A small &quot;Genres&quot; and &quot;Tags&quot; over each line"><input id="editor-wrapped-titles" type="checkbox" /> Titles</label>
               </div>
               <div id="editor-play" class="editor-group" hidden>
                 <span class="editor-label">Play button</span>
@@ -594,6 +619,9 @@
       <div id="zone-menu" class="zone-menu" hidden></div>
       <!-- The profiles to pick from: filled and positioned by wrapper.js -->
       <div id="profile-menu" class="zone-menu profile-menu" hidden></div>
+      <!-- The playlists to add a song to, with a new one's name on top
+           (wrapper.js, "Add to playlist") -->
+      <div id="playlist-menu" class="zone-menu playlist-menu" hidden></div>
 
       <!-- Wrapped: the button over Roon's logo (top-left of its sidebar),
            its menu, and the page over Roon's content area. All three are

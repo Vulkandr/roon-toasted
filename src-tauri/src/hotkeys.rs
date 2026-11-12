@@ -203,7 +203,12 @@ fn apply(app: &AppHandle) {
         match app.global_shortcut().register(*shortcut) {
             Ok(()) => registered.push(*shortcut),
             Err(e) => {
-                println!("[hotkeys] {name} wasn't registered: {e}");
+                // (a media key another app has is expected, and said in one
+                // line below; a hotkey of the app's own that's taken is
+                // worth the reason)
+                if *slot <= 2 {
+                    println!("[hotkeys] {name} wasn't registered: {e}");
+                }
                 let problem = Some(format!("{name} is already used by another app."));
                 match slot {
                     0 => errors.player = problem,

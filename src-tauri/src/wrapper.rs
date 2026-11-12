@@ -294,20 +294,26 @@ pub async fn wrapper_roon_close() -> Result<(), String> {
 }
 
 /// The page: a link in its Now Playing ("title", "album" or "artist") was
-/// clicked; Roon goes to that page. Returns once the click is made: true,
-/// or false if the link wasn't found on Roon's player screen.
+/// clicked; Roon goes to that page. `expect` is what the link should say
+/// (the song's title, album or artist as our player shows it): Roon's
+/// window may be on another zone, playing something else, and its link
+/// would then go to the wrong page, so the link's words are read off
+/// Roon's player first (ocr.rs). Returns once done: "clicked"; "missing"
+/// (the link wasn't found on Roon's player screen); or "different" (the
+/// link says something else: nothing was clicked, Roon's player is closed
+/// again).
 #[tauri::command]
-pub async fn wrapper_roon_link(which: String) -> Result<bool, String> {
+pub async fn wrapper_roon_link(which: String, expect: Option<String>) -> Result<&'static str, String> {
     #[cfg(windows)]
     {
-        tauri::async_runtime::spawn_blocking(move || windows_wrapper::roon_link(&which))
+        tauri::async_runtime::spawn_blocking(move || windows_wrapper::roon_link(&which, expect.as_deref()))
             .await
             .map_err(|e| e.to_string())
     }
     #[cfg(not(windows))]
     {
-        let _ = which;
-        Ok(false)
+        let _ = (which, expect);
+        Ok("missing")
     }
 }
 
@@ -2772,31 +2778,40 @@ mod windows_wrapper {
     /// "album" or "artist"). Opens Roon's player, clicks the link there as
     /// soon as it can be seen, then waits for Roon to leave its player for
     /// the page, so the page can drop ours onto it. Whether the link was
-    /// found and clicked (if not, Roon's player is closed again).
+    /// found and clicked (if not, Roon's player is closed again): see
+    /// `wrapper_roon_link` for the answers, and for `expect`.
     /// Blocking; run off the main thread.
-    pub fn roon_link(which: &str) -> bool {
+    pub fn roon_link(which: &str, expect: Option<&str>) -> &'static str {
         // One at a time: clicks on our links while one is under way are
         // dropped, not queued (queued ones reopened Roon's player again and
         // again)
         let Ok(_busy) = LINK_BUSY.try_lock() else {
-            return false;
+            return "missing";
         };
         let _player = PLAYER_BUSY.lock().unwrap();
         if STATE.load(Ordering::Relaxed) != OPEN {
-            return false;
+            return "missing";
         }
         let _in_use = InUse::new();
         let Some(roon) = roon_window().filter(|r| is_visible(*r)) else {
-            return false;
+            return "missing";
         };
         let scale = roon_scale();
         let mut opened_at: Option<Instant> = None;
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut clicked = false;
+        let mut different = false;
         while Instant::now() < deadline {
             if let Some(picture) = capture_roon(roon) {
                 if screen_state(&picture, scale).is_some() {
                     if let Some(spot) = find_link(&picture, scale, which) {
+                        // (Roon's window on another zone: its link says
+                        // something else, and isn't clicked)
+                        let band = (60.0 * scale).round() as i32;
+                        if expect.is_some_and(|want| crate::ocr::says_other(&picture.pixels, picture.width, picture.height, spot.1, band, want)) {
+                            different = true;
+                            break;
+                        }
                         click_at(roon, spot);
                         clicked = true;
                         break;
@@ -2811,13 +2826,13 @@ mod windows_wrapper {
         PLAYER_WANTED.store(false, Ordering::Relaxed);
         PLAYER_TRIES.store(0, Ordering::Relaxed);
         if !clicked {
-            // Not found: Roon's player goes back down
+            // Not found, or not ours: Roon's player goes back down
             wait_closed(roon, true);
-            return false;
+            return if different { "different" } else { "missing" };
         }
         // Roon goes to the page, its player closing by itself
         wait_closed(roon, false);
-        true
+        "clicked"
     }
 
     /// Roon put in front for a shortcut: once the keys still held from our

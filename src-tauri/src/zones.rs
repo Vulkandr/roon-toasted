@@ -611,8 +611,15 @@ pub fn image_request(app: &AppHandle, request: Request<Vec<u8>>, responder: UriS
         // artist's one default picture, or nothing. square=1 asks square
         // first.)
         let square = query.split('&').any(|pair| pair == "square=1");
+        // (shape=16by7: an artist's banner, the wide picture at the top of
+        // Roon's own artist page ("<key>.16by7_1024.jpg"). Only that: an
+        // artist without one gets no picture here, not the square one.)
+        let wide = query.split('&').any(|pair| pair == "shape=16by7");
         let broker = || async {
             let Some(px) = size else { return image.get_broker_image(&key, None).await };
+            if wide {
+                return image.get_broker_image_spec(&key, &format!("16by7_{px}")).await;
+            }
             let squared = format!("1by1_{px}");
             let plain = px.to_string();
             let (first, second) = if square { (&squared, &plain) } else { (&plain, &squared) };

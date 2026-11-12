@@ -786,6 +786,64 @@ pub fn wrapped_banned_songs(app: AppHandle, kind: Option<String>) -> Vec<BannedS
     out
 }
 
+/// A library song with how often the profile in use has played it (an
+/// artist's page, My Library).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayedTrack {
+    #[serde(flatten)]
+    pub track: LibraryTrack,
+    pub plays: usize,
+}
+
+/// The artist's songs in the library, the most played first (by the
+/// profile in use, from its history), then the rest by album and number.
+#[tauri::command]
+pub fn wrapped_artist_library_tracks(app: AppHandle, name: String, performer_id: Option<u64>) -> Vec<PlayedTrack> {
+    let wanted = name.trim().to_lowercase();
+    let theirs = |t: &LibraryTrack| {
+        (performer_id.is_some() && t.performer_id == performer_id)
+            || t.artist.to_lowercase().split(" / ").flat_map(|a| a.split(", ")).any(|a| a.trim() == wanted)
+    };
+    let tracks: Vec<LibraryTrack> = app.state::<LibraryCopy>().with_store(&app, |s| s.tracks.iter().filter(|t| theirs(t)).cloned().collect());
+    if tracks.is_empty() {
+        return Vec::new();
+    }
+    // (plays by Roon's track id, and by title for a play of another copy
+    // of the song)
+    let ids: std::collections::HashSet<u64> = tracks.iter().filter_map(|t| t.track_id).collect();
+    let titles: std::collections::HashSet<String> = tracks.iter().map(|t| t.title.to_lowercase()).collect();
+    let (mut by_id, mut by_title): (HashMap<u64, usize>, HashMap<String, usize>) = (HashMap::new(), HashMap::new());
+    app.state::<Wrapped>().with_plays(&app, |plays| {
+        for p in plays {
+            match p.track_id.filter(|id| ids.contains(id)) {
+                Some(id) => *by_id.entry(id).or_default() += 1,
+                None => {
+                    let title = p.title.to_lowercase();
+                    if titles.contains(&title) && p.artist.to_lowercase().contains(&wanted) {
+                        *by_title.entry(title).or_default() += 1;
+                    }
+                }
+            }
+        }
+    });
+    let mut out: Vec<PlayedTrack> = tracks
+        .into_iter()
+        .map(|track| {
+            let plays = track.track_id.and_then(|id| by_id.get(&id)).copied().unwrap_or(0) + by_title.get(&track.title.to_lowercase()).copied().unwrap_or(0);
+            PlayedTrack { track, plays }
+        })
+        .collect();
+    out.sort_by(|a, b| {
+        b.plays
+            .cmp(&a.plays)
+            .then_with(|| a.track.album.to_lowercase().cmp(&b.track.album.to_lowercase()))
+            .then_with(|| (a.track.media_number, a.track.track_number).cmp(&(b.track.media_number, b.track.track_number)))
+    });
+    out.truncate(60);
+    out
+}
+
 /// "Rescan daily" switched on or off for a profile (the Profile page).
 #[tauri::command]
 pub fn wrapped_profile_rescan_daily(app: AppHandle, id: String, on: bool) -> WrappedSettings {

@@ -363,6 +363,28 @@ async fn lastfm_top_tags(client: &reqwest::Client, name: &str, key: &str) -> Res
         .collect())
 }
 
+/// An artist's most played songs on Last.fm, best first (just their
+/// titles): the artist page's Popular. Empty without a key, or when
+/// Last.fm can't be reached or doesn't know the artist.
+pub async fn lastfm_top_tracks(app: &AppHandle, name: &str) -> Vec<String> {
+    let key = WrappedSettings::load(app).lastfm_key;
+    if key.is_empty() || name.trim().is_empty() {
+        return Vec::new();
+    }
+    let Ok(client) = client() else { return Vec::new() };
+    let res = client
+        .get("https://ws.audioscrobbler.com/2.0/")
+        .query(&[("method", "artist.gettoptracks"), ("artist", name), ("api_key", key.as_str()), ("format", "json"), ("autocorrect", "1"), ("limit", "100")])
+        .send()
+        .await;
+    let Ok(res) = res else { return Vec::new() };
+    let Ok(body) = res.json::<serde_json::Value>().await else { return Vec::new() };
+    body["toptracks"]["track"]
+        .as_array()
+        .map(|tracks| tracks.iter().filter_map(|t| t["name"].as_str().map(str::to_string)).collect())
+        .unwrap_or_default()
+}
+
 async fn lastfm_album_top_tags(client: &reqwest::Client, artist: &str, album: &str, key: &str) -> Result<Vec<Tag>, String> {
     let res = client
         .get("https://ws.audioscrobbler.com/2.0/")

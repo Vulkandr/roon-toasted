@@ -481,6 +481,22 @@ pub async fn library_ban(app: AppHandle, zone_id: String, banned: bool, song: Op
     result.map_err(describe)
 }
 
+/// Roon's genres and the user's Roon tags for the zone's current track
+/// (Now Playing's Wrapped piece, when its Genres or Tags are switched on).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlayingLabels {
+    pub genres: Vec<String>,
+    pub tags: Vec<String>,
+}
+
+#[tauri::command]
+pub async fn library_playing_labels(app: AppHandle, zone_id: String) -> Result<PlayingLabels, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let (genres, tags, _) = client.playing_labels(&zone_id).await.map_err(describe)?;
+    Ok(PlayingLabels { genres, tags })
+}
+
 /// Bans an artist for the profile in use, or lifts the ban (the Ban button
 /// on an artist's page): Roon's own artist ban, and Wrapped's ban list
 /// with it, so neither Roon nor Discover, Home or Deep Dive picks them.
@@ -671,6 +687,49 @@ pub async fn library_artist_extras(app: AppHandle, handle: String) -> Result<Art
     client.artist_extras(&handle).await.map_err(describe)
 }
 
+/// An artist's popular songs for their page: the songs Roon offers for the
+/// artist (which can be played), put in the order of Last.fm's most played
+/// when Last.fm knows them (`by` then says "lastfm"), in Roon's own order
+/// otherwise.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PopularTracks {
+    pub tracks: Vec<roon_library::TopTrack>,
+    pub by: &'static str,
+}
+
+#[tauri::command]
+pub async fn library_artist_popular(app: AppHandle, handle: String, name: String) -> Result<PopularTracks, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let (roon, lastfm) = tokio::join!(client.top_tracks(&handle), crate::tags::lastfm_top_tracks(&app, &name));
+    let mut tracks = roon.map_err(describe)?;
+    // (a song's title as both name it: no case, no "(Remastered)" and the
+    // like, no punctuation)
+    let plain = |title: &str| -> String {
+        let mut out = String::new();
+        let mut depth = 0;
+        for c in title.chars() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' => depth = (depth - 1).max(0),
+                c if depth == 0 && c.is_alphanumeric() => out.extend(c.to_lowercase()),
+                _ => {}
+            }
+        }
+        out
+    };
+    let rank: std::collections::HashMap<String, usize> = lastfm.iter().enumerate().rev().map(|(i, title)| (plain(title), i)).collect();
+    let matched = tracks.iter().filter(|t| rank.contains_key(&plain(&t.title))).count();
+    println!("[library {}] popular, {name}: {} from Roon, {} from Last.fm, {matched} matched", clock(), tracks.len(), lastfm.len());
+    // (Last.fm's order when it knows a fair share of them; a song it
+    // doesn't list keeps Roon's place after the ones it does)
+    let by = if matched >= 3 || (matched > 0 && matched * 2 >= tracks.len()) { "lastfm" } else { "roon" };
+    if by == "lastfm" {
+        tracks.sort_by_key(|t| rank.get(&plain(&t.title)).copied().unwrap_or(usize::MAX));
+    }
+    Ok(PopularTracks { tracks, by })
+}
+
 /// Roon's picks around an album: similar albums, recommended albums, similar artists.
 #[tauri::command]
 pub async fn library_album_extras(app: AppHandle, handle: String) -> Result<AlbumExtras, String> {
@@ -816,6 +875,25 @@ pub async fn library_create_playlist(app: AppHandle, name: String, tracks: Vec<S
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.create_playlist(name.trim(), &tracks).await.map_err(describe)
+}
+
+/// Adds tracks (handles) to the end of a playlist (by handle); how many
+/// went in.
+#[tauri::command]
+pub async fn library_playlist_add(app: AppHandle, handle: String, tracks: Vec<String>) -> Result<usize, String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    let result = client.add_to_playlist(&handle, &tracks).await;
+    // (what Roon made of it, while adding to a playlist is new)
+    println!("[library {}] add to playlist, {} tracks: {}", clock(), tracks.len(), match &result { Ok(n) => format!("{n} in"), Err(e) => format!("failed: {e}") });
+    result.map_err(describe)
+}
+
+/// The zone's current track as a handle (for adding it to a playlist).
+#[tauri::command]
+pub fn library_playing_handle(library: State<'_, Library>, zone_id: String) -> Result<String, String> {
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.playing_handle(&zone_id).map_err(describe)
 }
 
 /// Deletes a playlist (by handle).

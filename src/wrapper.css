@@ -2287,6 +2287,64 @@ input[type="range"]:disabled {
   color: var(--accent);
 }
 
+/* The Add to playlist button, left of Previous */
+#playlist-add[hidden] {
+  display: none;
+}
+
+/* Its menu: a field on top for a new playlist's name (which also narrows
+   the list), then the playlists */
+.playlist-menu {
+  display: flex;
+  flex-direction: column;
+  width: 280px;
+  max-height: 340px;
+  overflow: hidden;
+}
+
+.playlist-menu[hidden] {
+  display: none;
+}
+
+.playlist-menu-new {
+  flex: none;
+  margin: 2px 2px 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+
+.playlist-menu-new:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.playlist-menu-list {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--track) transparent;
+}
+
+.playlist-menu-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.playlist-menu-make {
+  color: var(--accent);
+}
+
+.playlist-menu-make svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
 /* The Ban button: red while the song that's playing is banned */
 #ban-btn[hidden] {
   display: none;
@@ -6578,6 +6636,70 @@ body > .wrapped-toast {
   border-color: var(--warn);
 }
 
+/* Now Playing's Wrapped piece: the playing song's genres, then your Roon
+   tags on it, as plain text under the buttons, a dot between one and the
+   next (each line switched on in the layout editor). A click opens it in
+   Wrapped */
+.wrapped-piece-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+  max-width: 24em;
+  margin: 0.4em 0;
+}
+
+.wrapped-piece-labels[hidden],
+.wrapped-piece-labelled[hidden] {
+  display: none;
+}
+
+/* (each line's small title, "Genres" and "Tags": there unless unticked in
+   the layout editor) */
+.wrapped-piece-label {
+  font-size: 0.75em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  opacity: 0.65;
+}
+
+.wrapped-piece-labels.untitled .wrapped-piece-label {
+  display: none;
+}
+
+.wrapped-piece-chips {
+  display: flex;
+  flex-wrap: wrap;
+  line-height: 1.35;
+}
+
+.wrapped-piece-chip {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-size: 1em;
+  cursor: pointer;
+}
+
+.wrapped-piece-chip:hover {
+  text-decoration: underline;
+}
+
+.wrapped-piece-chip:not(:last-child)::after {
+  content: "\00b7";
+  display: inline-block;
+  margin: 0 0.45em;
+  opacity: 0.6;
+  text-decoration: none;
+}
+
+/* (your own tags: in the accent, to tell them from the genres) */
+.wrapped-piece-chips.tags .wrapped-piece-chip {
+  color: var(--accent);
+}
+
 /* Now Playing's Wrapped piece: why a Discover song is there, and its
    thumbs, under the buttons */
 .wrapped-piece-rate {
@@ -8580,4 +8702,272 @@ body.wrapped-column-moving * {
 /* History's Banned / History button, gone while the Ban button is off */
 .wrapped-tabs-row .wrapped-button[hidden] {
   display: none;
+}
+
+/* A playlist's own page: its bin at the far right of the row Play is in */
+.wrapped-actions > .wrapped-delete {
+  margin-left: auto;
+}
+
+/* An artist's page: their songs over the albums. The title, the two tabs
+   and More in a row; the songs in columns under it, as many as fit */
+.wrapped-artist-tracks-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.wrapped-artist-tracks-head .wrapped-section {
+  margin: 0;
+}
+
+.wrapped-artist-tracks-head > .wrapped-button {
+  margin-left: auto;
+}
+
+.wrapped-artist-tracks-head > .wrapped-button[hidden] {
+  display: none;
+}
+
+.wrapped-artist-tracks {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  column-gap: 28px;
+  margin: 8px 0 18px;
+}
+
+.wrapped-artist-track {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.wrapped-artist-track-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.wrapped-artist-track-title {
+  overflow: hidden;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wrapped-artist-track-sub {
+  overflow: hidden;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wrapped-artist-track-art {
+  position: relative;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  overflow: hidden;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.wrapped-artist-track-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.wrapped-artist-track-play {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.wrapped-artist-track-art:hover .wrapped-artist-track-play {
+  opacity: 1;
+}
+
+.wrapped-artist-track-play svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* "Opening ... in Roon" under the track's text in Now Playing (a link
+   there was clicked, and Roon is being searched for its page) */
+.stage-link-note {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+}
+
+.stage-link-note span {
+  display: inline-block;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--card);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+  font-size: 12.5px;
+}
+
+/* An artist's banner (Roon's wide picture): the header becomes one strip,
+   the artist's picture square at its left and the banner filling the rest
+   whole (the strip is as tall as a 16 by 7 picture of that width, so
+   nothing of the banner is cut off), the name and the rest over it at the
+   bottom left */
+.wrapped-artist-head.has-banner {
+  flex-wrap: nowrap;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+/* (7 of 23 parts: a square that tall leaves a 16 by 7 space beside it) */
+.wrapped-artist-head.has-banner > .wrapped-art {
+  width: 30.435%;
+  min-width: 200px;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-info {
+  position: relative;
+  flex: 1;
+  justify-content: flex-end;
+  padding: 22px 26px;
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-info > :not(.wrapped-artist-banner) {
+  position: relative;
+  z-index: 1;
+}
+
+/* Over the banner: the name and where they're from at the bottom left,
+   the genres and tags at the bottom right, the buttons at the top right */
+.wrapped-artist-head.has-banner .wrapped-album-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) fit-content(52%);
+  grid-template-rows: minmax(0, 1fr) auto auto;
+  column-gap: 20px;
+  row-gap: 6px;
+  align-items: end;
+  justify-content: normal;
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-info > .wrapped-album-title {
+  grid-area: 2 / 1;
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-info > .wrapped-facts {
+  grid-area: 3 / 1;
+}
+
+/* (the genres and tags: their own column over all the rows, at its
+   bottom, so however many lines they take the name stays where it is) */
+.wrapped-artist-labels {
+  display: contents;
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-info > .wrapped-artist-labels {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  grid-area: 1 / 2 / 4 / 3;
+  align-self: end;
+}
+
+.wrapped-artist-head.has-banner .wrapped-artist-labels > .wrapped-genres {
+  justify-content: flex-end;
+  margin-top: 0;
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-info > .wrapped-actions {
+  grid-area: 1 / 1 / 2 / 3;
+  align-self: start;
+  justify-content: flex-end;
+  /* (close to the strip's top right corner, past the text's own margins) */
+  margin: -14px -18px 0 0;
+}
+
+.wrapped-artist-banner {
+  display: none;
+}
+
+.wrapped-artist-head.has-banner .wrapped-artist-banner {
+  display: block;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.wrapped-artist-head.has-banner .wrapped-artist-banner[hidden] {
+  display: none;
+}
+
+.wrapped-artist-banner img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* (darker toward the bottom, where the words are) */
+.wrapped-artist-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.6), rgba(0, 0, 0, 0.1) 70%);
+}
+
+/* Over the banner: white words with a black outline, and the genres and
+   buttons bright (white, on a dark backing for the genres) */
+.wrapped-artist-head.has-banner .wrapped-album-title,
+.wrapped-artist-head.has-banner .wrapped-facts,
+.wrapped-artist-head.has-banner .wrapped-genre {
+  color: #fff;
+  text-shadow:
+    -1px -1px 0 #000,
+    1px -1px 0 #000,
+    -1px 1px 0 #000,
+    1px 1px 0 #000,
+    0 0 6px rgba(0, 0, 0, 0.8);
+}
+
+.wrapped-artist-head.has-banner .wrapped-album-title {
+  text-shadow:
+    -2px -2px 0 #000,
+    2px -2px 0 #000,
+    -2px 2px 0 #000,
+    2px 2px 0 #000,
+    0 -2px 0 #000,
+    0 2px 0 #000,
+    -2px 0 0 #000,
+    2px 0 0 #000,
+    0 0 10px rgba(0, 0, 0, 0.8);
+}
+
+.wrapped-artist-head.has-banner .wrapped-genre {
+  background: rgba(0, 0, 0, 0.5);
+  border-width: 1.5px;
+}
+
+.wrapped-artist-head.has-banner .wrapped-actions .icon-btn:not(.wrapped-artist-ban.on) {
+  color: #fff;
+  filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000);
 }

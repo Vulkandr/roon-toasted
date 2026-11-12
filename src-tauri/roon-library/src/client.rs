@@ -49,6 +49,9 @@ const SIG_PLAY_TRACK: &str = "Sooloos.Broker.Api.Transport::PlayTrack(Sooloos.Br
 const SIG_PLAY_ALBUM: &str = "Sooloos.Broker.Api.Transport::PlayAlbum(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, Sooloos.Broker.Api.AlbumBase, bool, bool, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
 const SIG_PLAY_SWIM: &str = "Sooloos.Broker.Api.Transport::PlaySwim(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.SwimParameters, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
 const SIG_CREATE_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::CreatePlaylistFromMediaIds(Sooloos.Broker.Api.Profile, string, string, bool, System.Collections.Generic.IEnumerable<long>, Base.ResultCallback<Sooloos.Broker.Api.Playlist>)";
+const SIG_PLAYLIST_INSERT_MEDIA: &str = "Sooloos.Broker.Api.Playlists::InsertMedia(Sooloos.Broker.Api.Playlist, System.Collections.Generic.IEnumerable<long>, Sooloos.Broker.Api.InsertionPoint, Sooloos.Broker.Api.PlaylistItem, Base.ResultCallback<Sooloos.Broker.Api.PlaylistInsertionResult>)";
+/// InsertionPoint: Beginning 0, End 1, After 2, Before 3.
+const INSERT_AT_END: u32 = 1;
 const SIG_DELETE_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::Delete(Sooloos.Broker.Api.Playlist, Base.ResultCallback)";
 const SIG_RENAME_PLAYLIST: &str = "Sooloos.Broker.Api.Playlists::Rename(Sooloos.Broker.Api.Playlist, string, Base.ResultCallback)";
 const SIG_PLAY_PLAYLIST: &str = "Sooloos.Broker.Api.Transport::PlayPlaylist(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, Sooloos.Broker.Api.Playlist, Sooloos.Broker.Api.PlaylistItem, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
@@ -536,6 +539,9 @@ pub struct TopTrack {
     /// A compilation, anthology, split, soundtrack or such: Roon's
     /// IsCompilation on the album, or the words in its title.
     pub compilation: bool,
+    /// The album's cover (a broker key), when Roon gave one.
+    #[serde(default)]
+    pub image_key: Option<String>,
 }
 
 /// A track of the library's Tracks browser (see `library_tracks`): the
@@ -2995,6 +3001,56 @@ impl LibraryClient {
         Ok(describe_playlist(&g, g.get(oid).unwrap()))
     }
 
+    /// The track a zone has loaded, as a handle for `create_playlist` and
+    /// `add_to_playlist`.
+    pub fn playing_handle(&self, zone_id: &str) -> Result<String, LibraryError> {
+        let g = self.inner.graph.lock().unwrap();
+        Ok(self.require_track(&g, zone_id)?.oid.to_string())
+    }
+
+    /// Adds tracks (handles), in that order, to the end of a playlist (by
+    /// handle). Returns how many went in.
+    pub async fn add_to_playlist(&self, handle: &str, track_handles: &[String]) -> Result<usize, LibraryError> {
+        let playlist: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
+        let (service, media_ids) = {
+            let g = self.inner.graph.lock().unwrap();
+            if g.get(playlist).is_none() {
+                return Err(LibraryError::Unconfirmed("unknown playlist handle".into()));
+            }
+            let mut ids = Vec::new();
+            for handle in track_handles {
+                let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad track handle".into()))?;
+                let track = g.get(oid).ok_or_else(|| LibraryError::Unconfirmed("unknown track handle".into()))?;
+                let id = track
+                    .long_field("TrackId")
+                    .ok_or_else(|| LibraryError::Unconfirmed(format!("\"{}\" has no track id", track.str_field("Title").unwrap_or_default())))?;
+                ids.push(id);
+            }
+            (g.first_of_type("Playlists").map(|o| o.oid), ids)
+        };
+        let Some(service) = service else {
+            return Err(LibraryError::UnsupportedCore("no Playlists service in the graph".into()));
+        };
+        if media_ids.is_empty() {
+            return Err(LibraryError::Unconfirmed("no tracks to add".into()));
+        }
+        // The playlist, the media ids (a length-prefixed collection of
+        // longs, as for a new playlist), where (the end), and the item
+        // that's relative to (none)
+        let mut ids = Writer::new();
+        ids.flex_int(media_ids.len() as u32);
+        for id in &media_ids {
+            ids.long(*id);
+        }
+        let mut args = Writer::new();
+        args.long(playlist).flex_int(ids.len() as u32).bytes(ids.as_bytes()).flex_int(INSERT_AT_END).long(0);
+        let res = self.inner.remoting.call(service, SIG_PLAYLIST_INSERT_MEDIA, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "Playlists::InsertMedia".into(), status: res.status }.into());
+        }
+        Ok(media_ids.len())
+    }
+
     /// Renames a playlist (by handle). Waits for the new name to show.
     pub async fn rename_playlist(&self, handle: &str, name: &str) -> Result<(), LibraryError> {
         let oid: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad playlist handle".into()))?;
@@ -3681,6 +3737,7 @@ impl LibraryClient {
                 let flagged = album.and_then(|a| a.field("IsLive")).and_then(Value::as_bool) == Some(true);
                 TopTrack {
                     handle: t.oid.to_string(),
+                    image_key: album.and_then(|a| image_key(&g, a, "Image")),
                     track_id: t.long_field("TrackId").map(|id| id.to_string()),
                     album_key: album
                         .and_then(|a| a.long_field("AlbumId"))
@@ -3738,6 +3795,7 @@ impl LibraryClient {
             for t in tracks.iter().filter(proper).take(per_album) {
                 out.push(TopTrack {
                     handle: t.handle.clone(),
+                    image_key: album.image_key.clone(),
                     track_id: t.track_id.map(|id| id.to_string()),
                     title: t.title.clone(),
                     album: album.title.clone(),
@@ -3802,6 +3860,7 @@ impl LibraryClient {
             .into_iter()
             .map(|t| TopTrack {
                 handle: t.handle.clone(),
+                    image_key: album.image_key.clone(),
                 track_id: t.track_id.map(|id| id.to_string()),
                 title: t.title.clone(),
                 album: album.title.clone(),
@@ -4556,6 +4615,54 @@ impl LibraryClient {
         let said = format!("IsBanned before {before:?}, after {after:?}, {}", if pushed { "confirmed by the Core" } else { "no word from the Core" });
         let card = self.artist_card(handle).ok_or_else(|| LibraryError::Unconfirmed("the artist vanished".into()))?;
         Ok((card, said))
+    }
+
+    /// Roon's genres and the user's own Roon tags for what the zone is
+    /// playing (Now Playing's Wrapped piece): the album's genres, and the
+    /// tags on the track and on its album. With a line for the log on how
+    /// the tags came, while this is new.
+    pub async fn playing_labels(&self, zone_id: &str) -> Result<(Vec<String>, Vec<String>, String), LibraryError> {
+        let (album, mut tags, said) = {
+            let g = self.inner.graph.lock().unwrap();
+            let track = self.require_track(&g, zone_id)?;
+            let library_track = self.library_track_object(&g, track);
+            let album = track.ref_field("Album");
+            let mut tags: Vec<String> = Vec::new();
+            let mut said = Vec::new();
+            let holders = [("library track", library_track), ("track", Some(track)), ("album", album.and_then(|oid| g.get(oid)))];
+            for (what, holder) in holders {
+                let Some(holder) = holder else { continue };
+                let raw = holder.field("Tags");
+                let list = g.deref(raw);
+                let names: Vec<String> = list
+                    .and_then(|l| l.items.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter_map(|oid| g.get(oid).and_then(|t| t.str_field("Name")).map(str::to_string))
+                    .collect();
+                said.push(format!(
+                    "{what}: {}, {} items, names {names:?}",
+                    match raw {
+                        None => "no Tags field".to_string(),
+                        Some(Value::Ref(oid)) => format!("list {oid} {}", if list.is_some() { "here" } else { "not in the graph" }),
+                        Some(other) => format!("{other:?}").chars().take(60).collect(),
+                    },
+                    list.and_then(|l| l.items.as_ref().map(Vec::len)).unwrap_or(0)
+                ));
+                for name in names {
+                    if !tags.contains(&name) {
+                        tags.push(name);
+                    }
+                }
+            }
+            (album, tags, said.join("; "))
+        };
+        tags.sort_by_key(|t| t.to_lowercase());
+        let genres = match album {
+            Some(oid) => self.album_facts(&oid.to_string()).await.map(|f| f.genres).unwrap_or_default(),
+            None => Vec::new(),
+        };
+        Ok((genres, tags, said))
     }
 
     /// Bans an album for the profile in use, or lifts the ban, by its

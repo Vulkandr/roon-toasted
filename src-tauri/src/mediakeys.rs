@@ -318,8 +318,8 @@ async fn control(app: &AppHandle, action: ControlAction) {
     let Ok(transport) = app.state::<Zones>().transport() else {
         return;
     };
-    match transport.control(&zone.zone_id, action).await {
-        Ok(()) => println!("[media keys] {action:?} sent to {}", zone.name),
-        Err(e) => println!("[media keys] {action:?} on {}: {e}", zone.name),
+    // (a key that worked isn't logged: only one that failed)
+    if let Err(e) = transport.control(&zone.zone_id, action).await {
+        println!("[media keys] {action:?} on {}: {e}", zone.name);
     }
 }

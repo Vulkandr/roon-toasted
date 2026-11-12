@@ -57,6 +57,17 @@ pub async fn wrapper_open_in_roon(text: String, pick: String) -> Result<bool, St
     }
 }
 
+/// Whether a link on Roon's player screen says something other than
+/// `want` (wrapper.rs, before it clicks the link: Roon's window may be on
+/// another zone than our player). `pixels` is the picture of Roon's client
+/// area; the link's line is at row `y`, and the rows within `band` of it
+/// are read. Only a clear reading of other words counts: nothing read, or
+/// a name with too few plain letters to compare, is not "other".
+#[cfg(windows)]
+pub(crate) fn says_other(pixels: &[u8], width: i32, height: i32, y: i32, band: i32, want: &str) -> bool {
+    imp::says_other(pixels, width, height, y, band, want)
+}
+
 #[cfg(windows)]
 mod imp {
     use windows::Graphics::Imaging::{BitmapAlphaMode, BitmapPixelFormat, SoftwareBitmap};
@@ -71,6 +82,48 @@ mod imp {
         top: f32,
         width: f32,
         height: f32,
+    }
+
+    /// Plain a-z and 0-9 only, lower-cased: what the engine and a name
+    /// agree on whatever the accents (it reads "Beyonce" or "Beyoncé").
+    fn ascii(text: &str) -> String {
+        text.chars().filter(char::is_ascii_alphanumeric).map(|c| c.to_ascii_lowercase()).collect()
+    }
+
+    pub fn says_other(pixels: &[u8], width: i32, height: i32, y: i32, band: i32, want: &str) -> bool {
+        let want = ascii(want);
+        if want.len() < 3 {
+            return false;
+        }
+        // The left 60% of the window (the lines sit at the left, the
+        // transport in the middle), the rows around the link's
+        let (top, bottom) = ((y - band).max(0), (y + band).min(height));
+        let w = (width as f32 * 0.6) as i32;
+        if w < 100 || bottom - top < 20 {
+            return false;
+        }
+        let crop = crop(pixels, width, 0, top, w, bottom - top);
+        let lines = match recognize(&crop, w, bottom - top) {
+            Ok(lines) if !lines.is_empty() => lines,
+            Ok(_) => {
+                println!("[ocr] link: nothing read on Roon's player; clicked unchecked");
+                return false;
+            }
+            Err(e) => {
+                println!("[ocr] link: OCR failed: {e}; clicked unchecked");
+                return false;
+            }
+        };
+        // The link's own line (the one over row `y`), else all that was read
+        let at = (y - top) as f32;
+        let own: Vec<&Line> = lines.iter().filter(|l| l.top - 3.0 <= at && at <= l.top + l.height + 3.0).collect();
+        let read: String = if own.is_empty() { lines.iter().map(|l| ascii(&l.text)).collect() } else { own.iter().map(|l| ascii(&l.text)).collect() };
+        // (a long name may be cut short on Roon's line: its start is enough)
+        let start = &want[..want.len().min(12)];
+        let same = read.contains(start);
+        let seen: Vec<String> = lines.iter().map(|l| format!("\"{}\"", l.text)).collect();
+        println!("[ocr] link: Roon's player says {}; ours: {same}", seen.join("  "));
+        !same
     }
 
     pub fn read_page_name() -> Option<String> {
@@ -223,51 +276,73 @@ mod imp {
                 println!("[ocr] \"{wanted}\" not read on the page after {tries} tries");
                 return false;
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
-        }
-    }
-
-    /// Waits until Roon's page has stopped moving after a click on a search
-    /// result: the "Search results for" heading gone, a large title line
-    /// (a page's name) up, and that line at the same place on two reads in
-    /// a row. False when `wait` runs out first.
-    pub fn wait_settled(wait: std::time::Duration) -> bool {
-        let deadline = std::time::Instant::now() + wait;
-        let mut last: Option<(f32, f32)> = None;
-        loop {
-            let now = page_title_position();
-            if let (Some((x, y)), Some((lx, ly))) = (now, last) {
-                if (x - lx).abs() <= 2.0 && (y - ly).abs() <= 2.0 {
-                    return true;
-                }
-            }
-            last = now;
-            if std::time::Instant::now() >= deadline {
-                return false;
-            }
             std::thread::sleep(std::time::Duration::from_millis(120));
         }
     }
 
-    /// Where the tallest line of text on Roon's page sits (its left and
-    /// top, real pixels of the content area), when it is a page title: not
-    /// on the search results page, and large.
-    fn page_title_position() -> Option<(f32, f32)> {
+    /// Waits until Roon's page has stopped moving after a click on a search
+    /// result: two pictures of it in a row all but the same, and neither
+    /// the results page nor the "Searching for" one (their headings read
+    /// off the still picture). Pictures, not the page's title: on some
+    /// artist pages the title can't be read at all (white lettering over
+    /// the photo: OSI's), and waiting for it ran the whole `wait` every
+    /// time. False when `wait` runs out first.
+    pub fn wait_settled(wait: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + wait;
+        let mut last: Option<Vec<u8>> = None;
+        let mut why = "no picture of Roon";
+        loop {
+            if let Some((sample, crop, w, h)) = page_sample() {
+                let still = last.as_ref().is_some_and(|before| {
+                    before.len() == sample.len() && {
+                        let moved = before.iter().zip(&sample).filter(|(a, b)| a.abs_diff(**b) > 12).count();
+                        moved * 100 <= sample.len()
+                    }
+                });
+                if still {
+                    let searching = recognize(&crop, w, h).is_ok_and(|lines| {
+                        lines.iter().any(|l| {
+                            let text = plain(&l.text);
+                            text.starts_with("searchresultsfor") || text.starts_with("searchingfor")
+                        })
+                    });
+                    if !searching {
+                        return true;
+                    }
+                    why = "still on the search's page";
+                } else {
+                    why = "still moving";
+                }
+                last = Some(sample);
+            }
+            if std::time::Instant::now() >= deadline {
+                println!("[ocr] Roon's page didn't settle: {why}");
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+
+    /// Roon's page for `wait_settled`: every 6th pixel's lightness of its
+    /// content area's upper 60% (to tell two pictures apart), and that
+    /// area itself with its size (to read).
+    fn page_sample() -> Option<(Vec<u8>, Vec<u8>, i32, i32)> {
         let (roon, _) = crate::wrapper::visible_hole().or_else(crate::wrapper::covered_hole)?;
         let (pixels, width, height) = crate::wrapper::roon_picture(roon)?;
-        let scale = (width as f32 / 1440.0).max(0.6);
         let sidebar = crate::skin::sidebar().map(|(w, _)| w).unwrap_or(0).max(0);
         let (w, h) = (width - sidebar, (height as f32 * 0.6) as i32);
         if w < 100 || h < 40 {
             return None;
         }
         let crop = crop(&pixels, width, sidebar, 0, w, h);
-        let lines = recognize(&crop, w, h).ok()?;
-        if lines.iter().any(|l| plain(&l.text).starts_with("searchresultsfor")) {
-            return None;
+        let mut sample = Vec::with_capacity((w / 6 + 1) as usize * (h / 6 + 1) as usize);
+        for y in (0..h).step_by(6) {
+            for x in (0..w).step_by(6) {
+                let at = ((y * w + x) * 4) as usize;
+                sample.push(((crop[at] as u16 + crop[at + 1] as u16 + crop[at + 2] as u16) / 3) as u8);
+            }
         }
-        let title = lines.iter().max_by(|a, b| a.height.partial_cmp(&b.height).unwrap_or(std::cmp::Ordering::Equal))?;
-        (title.height >= 26.0 * scale).then_some((title.left, title.top))
+        Some((sample, crop, w, h))
     }
 
     /// Letters and digits only, lower-cased, for comparing what the engine
