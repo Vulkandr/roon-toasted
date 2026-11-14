@@ -3031,7 +3031,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1225;
+pub const BUILD: u32 = 1227;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).
@@ -3224,6 +3224,9 @@ async fn build_now(app: AppHandle, which: Which, utc_offset_minutes: Option<i32>
 }
 
 async fn build(app: &AppHandle, which: Which) -> Result<(), String> {
+    // (the handles found here are saved as a playlist at the end: no
+    // planned reconnect of the link meanwhile)
+    let _hold = crate::library::hold_link();
     let client = app.state::<Library>().client().ok_or("Not connected to the Roon Core's library yet.")?;
     let key = WrappedSettings::load(app).lastfm_key;
     // The latest plays first: what you did with the last lists is in them

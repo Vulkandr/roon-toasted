@@ -77,6 +77,34 @@ const LINK_FULL: usize = 60_000;
 const LINK_QUIET: Duration = Duration::from_secs(120);
 const LINK_TRICKLE: usize = 2_000;
 
+/// Work that carries handles from one call to the next (a Deep Dive, a
+/// Discover list, Home: songs are found, weighed for minutes, then saved
+/// as a playlist by their handles) holds the link: no planned reconnect
+/// while a hold is out, nor for `LINK_QUIET` after the last one ends (the
+/// page then plays what was made, by its handle). A reconnect in the
+/// middle left a Deep Dive with handles of the old link, and Roon
+/// answered "unknown track handle" when it came to saving the playlist.
+static HOLDS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+static HELD_UNTIL: Mutex<Option<Instant>> = Mutex::new(None);
+
+pub struct LinkHold;
+
+pub fn hold_link() -> LinkHold {
+    HOLDS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    LinkHold
+}
+
+impl Drop for LinkHold {
+    fn drop(&mut self) {
+        *HELD_UNTIL.lock().unwrap() = Some(Instant::now());
+        HOLDS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+fn link_held() -> bool {
+    HOLDS.load(std::sync::atomic::Ordering::SeqCst) > 0 || HELD_UNTIL.lock().unwrap().is_some_and(|at| at.elapsed() < LINK_QUIET)
+}
+
 /// Retry spacing after a failed connection (not for "unsupported").
 const RETRY_DELAYS: [u64; 4] = [5, 15, 60, 300];
 
@@ -346,6 +374,11 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
     loop {
         tokio::select! {
             _ = &mut refresh => {
+                // (not under work that holds the link: a minute later, then)
+                if link_held() || client.reading(LINK_QUIET) {
+                    refresh.as_mut().reset(tokio::time::Instant::now() + Duration::from_secs(60));
+                    continue;
+                }
                 println!("[library {}] daily reconnect", clock());
                 return None;
             }
@@ -360,7 +393,7 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
                 let held = client.object_count();
                 if held > grown.0 + LINK_TRICKLE {
                     grown = (held, Instant::now());
-                } else if held >= LINK_FULL && grown.1.elapsed() >= LINK_QUIET && !client.reading(LINK_QUIET) {
+                } else if held >= LINK_FULL && grown.1.elapsed() >= LINK_QUIET && !client.reading(LINK_QUIET) && !link_held() {
                     println!("[library {}] reconnecting to let go of {held} objects (quiet for {} s)", clock(), LINK_QUIET.as_secs());
                     return None;
                 }

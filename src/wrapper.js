@@ -5713,6 +5713,7 @@ function renderWrapped() {
   wrappedBody.replaceChildren();
   wrappedBody.scrollTop = 0;
   wrappedTicket++;
+  diveSayShow();
   // The library copy is being read again for this profile (what it holds
   // is another profile's): the scan shows, not a page built from it
   if (libraryStale && entry.page !== "settings") return showLibraryScan();
@@ -7109,6 +7110,36 @@ function diveHolding() {
   return diveBuilding || !!diveChat?.waiting;
 }
 
+// What the builder is on while a Deep Dive is made. It covers the Deep
+// Dive page only: on any other page of Wrapped the page is left alone and
+// the same words show at the bottom right, where a scan says how far it is
+let diveSaying = null;
+let diveSaid = false;
+function diveSay(text) {
+  diveSaying = text || null;
+  if (diveSaying) diveSaid = true;
+  diveSayShow();
+  if (!diveSaying) diveSaid = false;
+}
+function diveSayShow() {
+  // (nothing's been made yet: nothing to show or take away)
+  if (!diveSaid) return;
+  const entry = wrappedStack.at(-1);
+  const here = !!diveSaying && entry?.page === "deepdive" && deepDiveTab === "dive";
+  let cover = wrapped.querySelector(".dive-busy");
+  if (!here) cover?.remove();
+  else {
+    if (!cover) {
+      cover = document.createElement("div");
+      cover.className = "wrapped-busy dive-busy";
+      cover.innerHTML = '<div class="wrapped-spinner"></div><div class="wrapped-busy-text"></div>';
+      wrapped.append(cover);
+    }
+    cover.querySelector(".wrapped-busy-text").textContent = diveSaying;
+  }
+  scanSay("dive", diveSaying && !here ? `Deep Dive: ${diveSaying}` : "");
+}
+
 // Deep Dive back in front when it needs you or is done: its page, Wrapped
 // opened on it from anywhere else (`render`: drawn again when it's already
 // showing); the taskbar button flashes when the window is minimized or
@@ -7276,9 +7307,9 @@ async function diveBuild(said, opts = {}) {
   diveChat = null;
   diveChatRedraw();
   diveBuilding = true;
-  wrappedBusy(said || "Making your Deep Dive...");
+  diveSay(said || "Making your Deep Dive...");
   const unlisten = await listen("wrapped-dive", (event) => {
-    if (event.payload.text) wrappedBusy(event.payload.text);
+    if (event.payload.text) diveSay(event.payload.text);
   });
   try {
     const status = await invoke("wrapped_dive_build", { picks: divePicksPayload(), text: opts.smart ? "" : diveText, plan, history, follows });
@@ -7297,7 +7328,7 @@ async function diveBuild(said, opts = {}) {
   } finally {
     diveBuilding = false;
     unlisten();
-    wrappedBusy(null);
+    diveSay(null);
     // (back on Deep Dive, wherever you went meanwhile)
     diveToFront(true);
   }
@@ -13294,7 +13325,7 @@ function wrappedConfirm({ title, text, actions }) {
 }
 
 function wrappedBusy(text) {
-  let busy = wrapped.querySelector(".wrapped-busy");
+  let busy = wrapped.querySelector(".wrapped-busy:not(.dive-busy)");
   if (!text) {
     busy?.remove();
     return;

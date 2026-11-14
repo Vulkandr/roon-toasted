@@ -1,5 +1,23 @@
 [
   {
+    "version": "1.6.1",
+    "date": "2026-11-14",
+    "sections": [
+      {
+        "title": "Fixes",
+        "items": [
+          ["Deep Dive lists that didn't save", "In 1.6.0 a Deep Dive could go all the way through and then fail to save, with \"unknown track handle\". The Hearts & Library link's reconnect (the one that gives memory back after a lot has been read) could happen in the middle of making the list. It now waits until a Deep Dive, Discover or Home list is finished, and two minutes more."]
+        ]
+      },
+      {
+        "title": "What's new",
+        "items": [
+          ["Deep Dive in the background", "While a Deep Dive is being made, the cover that says what it's working on stays on the Deep Dive page only. Every other page of Wrapped can be used meanwhile, with the progress shown in small text at the bottom right, where a library scan shows its own."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.6.0",
     "date": "2026-11-13",
     "sections": [

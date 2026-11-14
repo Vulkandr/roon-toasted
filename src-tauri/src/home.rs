@@ -220,6 +220,9 @@ fn progress(app: &AppHandle, text: String) {
 /// The whole build: your favorites, the suggested artists, and every
 /// new album from both.
 async fn build(app: &AppHandle) -> Result<HomeData, String> {
+    // (handles found early are used to the end: no planned reconnect of
+    // the link meanwhile)
+    let _hold = crate::library::hold_link();
     let client = app.state::<Library>().client().ok_or("Not connected to the Roon Core's library yet.")?;
     let key = WrappedSettings::load(app).lastfm_key;
     let started = std::time::Instant::now();

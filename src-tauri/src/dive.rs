@@ -702,6 +702,9 @@ async fn listen(app: &AppHandle, client: &LibraryClient, picks: &[DivePick], alb
 }
 
 async fn build(app: &AppHandle, picks: Vec<DivePick>, text: &str, plan: &DivePlan, history: &[DiveTurn], before: Option<&DiveList>, progress: &(impl Fn(String) + Sync)) -> Result<DiveList, String> {
+    // (the handles found here are saved as a playlist at the end: no
+    // planned reconnect of the link meanwhile)
+    let _hold = crate::library::hold_link();
     let llm = llm_or_err(app)?;
     let client = app.state::<Library>().client().ok_or("Not connected to the Roon Core's library yet.")?;
     let picks: Vec<DivePick> = picks.into_iter().take(PICKS_MAX).collect();
