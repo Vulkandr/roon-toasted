@@ -799,6 +799,14 @@ pub enum LibraryError {
     Closed,
 }
 
+impl LibraryError {
+    /// The link was closed under the call (a reconnect, or the connection
+    /// dropped): the same call on the next link may well go through.
+    pub fn is_closed(&self) -> bool {
+        matches!(self, LibraryError::Closed | LibraryError::Remoting(RemotingError::Closed))
+    }
+}
+
 impl fmt::Display for LibraryError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -869,12 +877,50 @@ struct Inner {
     /// Woken whenever a watched object changes (for confirm waits) and on disconnect.
     changed: Arc<Notify>,
     connected: AtomicBool,
+    /// Paged reads (the library's artists, albums and tracks, the history)
+    /// going on right now, and when the last one ended: the app holds off
+    /// its planned reconnect while one runs or has only just ended, since a
+    /// read of the whole library is several of them in a row.
+    reads: std::sync::atomic::AtomicUsize,
+    read_ended: Mutex<Option<Instant>>,
+}
+
+/// Counts a paged read in and out (see `Inner::reads`).
+struct Reading<'a>(&'a Inner);
+
+impl<'a> Reading<'a> {
+    fn new(inner: &'a Inner) -> Self {
+        inner.reads.fetch_add(1, Ordering::SeqCst);
+        Reading(inner)
+    }
+}
+
+impl Drop for Reading<'_> {
+    fn drop(&mut self) {
+        self.0.reads.fetch_sub(1, Ordering::SeqCst);
+        *self.0.read_ended.lock().unwrap() = Some(Instant::now());
+    }
 }
 
 /// A connection to one Core's library. Cheap to clone; all clones share the session.
 #[derive(Clone)]
 pub struct LibraryClient {
     inner: Arc<Inner>,
+}
+
+impl Inner {
+    /// Drops the Core's objects and what was worked out from them, once the
+    /// session is over: they mean nothing outside it, and they're by far
+    /// the most memory a client holds (hundreds of MB after a read of the
+    /// library). Done by hand, not left to the client being dropped,
+    /// because a clone of it can outlive the session (a task still holding
+    /// one kept all of it alive after a reconnect).
+    fn forget(&self) {
+        self.graph.lock().unwrap().objects = HashMap::new();
+        *self.library_tracks.lock().unwrap() = HashMap::new();
+        *self.discographies.lock().unwrap() = HashMap::new();
+        *self.last_reported.lock().unwrap() = HashMap::new();
+    }
 }
 
 impl LibraryClient {
@@ -927,6 +973,7 @@ impl LibraryClient {
                             );
                             let _ = inner.events.send(LibraryEvent::Disconnected { reason });
                         }
+                        inner.forget();
                         inner.changed.notify_waiters();
                     }
                 },
@@ -945,6 +992,8 @@ impl LibraryClient {
                 events,
                 changed: Arc::clone(&changed),
                 connected: AtomicBool::new(false),
+                reads: std::sync::atomic::AtomicUsize::new(0),
+                read_ended: Mutex::new(None),
             }
         });
         let client = LibraryClient { inner };
@@ -971,10 +1020,11 @@ impl LibraryClient {
         Ok(client)
     }
 
-    /// Ends the session.
+    /// Ends the session, and lets go of everything it held.
     pub fn close(&self) {
         self.inner.connected.store(false, Ordering::SeqCst);
         self.inner.remoting.close();
+        self.inner.forget();
         self.inner.changed.notify_waiters();
     }
 
@@ -1057,6 +1107,21 @@ impl LibraryClient {
     /// plays; reconnect now and then so the Core can let go of them).
     pub fn object_count(&self) -> usize {
         self.inner.graph.lock().unwrap().objects.len()
+    }
+
+    /// Whether a paged read is going on, or one ended less than `quiet`
+    /// ago (the planned reconnect waits for neither).
+    pub fn reading(&self, quiet: Duration) -> bool {
+        self.inner.reads.load(Ordering::SeqCst) > 0 || self.inner.read_ended.lock().unwrap().is_some_and(|at| at.elapsed() < quiet)
+    }
+
+    /// What the link holds in memory, for diagnostics: how many objects,
+    /// roughly how many bytes, and the types there are most of.
+    pub fn graph_stats(&self) -> (usize, usize, Vec<(String, usize)>) {
+        let g = self.inner.graph.lock().unwrap();
+        let mut top = g.type_counts("");
+        top.truncate(6);
+        (g.objects.len(), g.approx_bytes(), top)
     }
 
     // --- reading ---
@@ -1914,23 +1979,6 @@ impl LibraryClient {
         let oids = result?;
         let g = self.inner.graph.lock().unwrap();
         let profile = self.profile_sooid(&g);
-        // (once, what a TrackLite carries, for the import date's name)
-        if let Some(first) = oids.first().and_then(|oid| g.get(*oid)) {
-            let mut names: Vec<&str> = first.fields.keys().map(|k| k.rsplit("::").next().unwrap_or(k)).collect();
-            names.sort_unstable();
-            println!("[library] TrackLite fields: {}", names.join(", "));
-        }
-        // (once, how the Tracks page's extra columns arrive: the first value
-        // of each among the tracks read, cut short)
-        for name in ["TrackNumber", "Credits", "FileFormat", "Format", "SampleRate", "BitDepth", "LoudnessRange", "PathName", "ContentLocation", "PlayInfo"] {
-            let sample = oids.iter().filter_map(|oid| g.get(*oid)).find_map(|t| t.field(name).cloned());
-            let shown = match &sample {
-                Some(Value::Ref(oid)) => format!("ref -> {:?}", g.get(*oid).map(|o| (o.type_name.clone(), o.structs.as_ref().and_then(|s| s.first().cloned()), o.items.as_ref().map(|i| i.len())))),
-                other => format!("{other:?}"),
-            };
-            let shown: String = shown.chars().take(240).collect();
-            println!("[library] sample {name}: {shown}");
-        }
         let mut seen = HashSet::new();
         Ok(oids
             .into_iter()
@@ -1952,6 +2000,7 @@ impl LibraryClient {
         release: &str,
         progress: &(dyn Fn(usize, usize) + Sync),
     ) -> Result<Vec<u64>, LibraryError> {
+        let _reading = Reading::new(&self.inner);
         let count = |g: &ObjectGraph| g.get(query).and_then(|q| q.field("Count")).and_then(Value::as_int);
         if !self.wait_until(Duration::from_secs(5), |g| count(g).is_some()).await {
             return Err(LibraryError::Unconfirmed("Roon did not say how many rows the query has".into()));
@@ -2076,6 +2125,7 @@ impl LibraryClient {
         stop_at: Option<i64>,
         progress: &(dyn Fn(usize, usize) + Sync),
     ) -> Result<History, LibraryError> {
+        let _reading = Reading::new(&self.inner);
         let count = |g: &ObjectGraph| g.get(query).and_then(|q| q.field("Count")).and_then(Value::as_int);
         if !self.wait_until(Duration::from_secs(5), |g| count(g).is_some()).await {
             return Err(LibraryError::Unconfirmed("Roon did not say how many plays it has".into()));

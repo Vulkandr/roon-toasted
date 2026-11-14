@@ -586,6 +586,7 @@ pub fn run() {
             // applog.rs), so every step below is timed and a stuck one named
             applog::init(app.handle());
             applog::start_watchdog(app.handle());
+            applog::start_memory_log(app.handle());
             applog::test_freeze();
             applog::test_crash();
 

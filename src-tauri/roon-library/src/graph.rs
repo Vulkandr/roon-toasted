@@ -566,6 +566,39 @@ impl ObjectGraph {
         self.find_by_type(name).next()
     }
 
+    /// Roughly how many bytes the objects hold (their fields' names and
+    /// values; for diagnostics: what the link costs in memory).
+    pub fn approx_bytes(&self) -> usize {
+        fn value(v: &Value) -> usize {
+            std::mem::size_of::<Value>()
+                + match v {
+                    Value::Bytes(b) => b.capacity(),
+                    Value::Str(s) => s.capacity(),
+                    Value::Inline(s) => inline(s),
+                    _ => 0,
+                }
+        }
+        fn fields(f: &HashMap<String, Value>) -> usize {
+            // (a slot per entry the table has room for, plus its control byte)
+            f.capacity() * (std::mem::size_of::<(String, Value)>() + 1) + f.iter().map(|(k, v)| k.capacity() + value(v) - std::mem::size_of::<Value>()).sum::<usize>()
+        }
+        fn inline(s: &InlineStruct) -> usize {
+            s.type_name.capacity() + fields(&s.fields) + s.items.iter().map(value).sum::<usize>()
+        }
+        self.objects
+            .values()
+            .map(|o| {
+                std::mem::size_of::<(u64, RoonObject)>()
+                    + o.type_name.capacity()
+                    + fields(&o.fields)
+                    + o.items.as_ref().map_or(0, |i| i.capacity() * 8)
+                    + o.structs.as_ref().map_or(0, |s| s.iter().map(|s| std::mem::size_of::<InlineStruct>() + inline(s)).sum())
+                    + o.ints.as_ref().map_or(0, |i| i.capacity() * 4)
+                    + o.strings.as_ref().map_or(0, |s| s.iter().map(|s| std::mem::size_of::<String>() + s.capacity()).sum())
+            })
+            .sum()
+    }
+
     /// How many objects of each type whose name contains `part` (for
     /// diagnostics: what a call actually pushed), most first.
     pub fn type_counts(&self, part: &str) -> Vec<(String, usize)> {

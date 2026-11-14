@@ -184,6 +184,74 @@ pub fn install_crash_handler() {
         write_line_now("[crash] Toasted closes now");
         standard(info);
     }));
+    #[cfg(windows)]
+    unsafe {
+        windows::Win32::System::Diagnostics::Debug::AddVectoredExceptionHandler(1, Some(native_crash));
+    }
+}
+
+/// The crashes the hook above never hears of: not a Rust panic but
+/// Windows itself stopping the app (memory written where it shouldn't be:
+/// heap corruption, an access violation, an illegal instruction). Such a
+/// crash left nothing in the log, and Windows keeps no record of some of
+/// them either. Called by Windows on the crashing thread before anything
+/// else: the log gets the kind and where (the module and the offset in
+/// it), and a snapshot is saved, the first time only. The crash then goes
+/// its way (an access violation some library catches by itself carries on,
+/// and the line says so).
+#[cfg(windows)]
+unsafe extern "system" fn native_crash(info: *mut windows::Win32::System::Diagnostics::Debug::EXCEPTION_POINTERS) -> i32 {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::HMODULE;
+    use windows::Win32::System::LibraryLoader::{GetModuleFileNameW, GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT};
+    const CONTINUE_SEARCH: i32 = 0;
+    static SEEN: AtomicBool = AtomicBool::new(false);
+    if info.is_null() || (*info).ExceptionRecord.is_null() {
+        return CONTINUE_SEARCH;
+    }
+    let record = &*(*info).ExceptionRecord;
+    let code = record.ExceptionCode.0 as u32;
+    let kind = match code {
+        0xC000_0374 => "heap corruption",
+        0xC000_0005 => "access violation",
+        0xC000_001D => "illegal instruction",
+        0xC000_0096 => "privileged instruction",
+        0xC000_0409 => "stack buffer overrun",
+        _ => return CONTINUE_SEARCH,
+    };
+    if SEEN.swap(true, Ordering::SeqCst) {
+        return CONTINUE_SEARCH;
+    }
+    let address = record.ExceptionAddress as usize;
+    let mut module = HMODULE::default();
+    let mut place = format!("{address:#x}");
+    if GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, PCWSTR(address as *const u16), &mut module).is_ok() {
+        let mut name = [0u16; 520];
+        let length = GetModuleFileNameW(Some(module), &mut name) as usize;
+        let path = String::from_utf16_lossy(&name[..length.min(name.len())]);
+        let file = path.rsplit(['\\', '/']).next().unwrap_or(&path);
+        place = format!("{file}+{:#x}", address.wrapping_sub(module.0 as usize));
+    }
+    let detail = if code == 0xC000_0005 && record.NumberParameters >= 2 {
+        let what = match record.ExceptionInformation[0] {
+            0 => "reading",
+            1 => "writing",
+            _ => "running",
+        };
+        format!(", {what} {:#x}", record.ExceptionInformation[1])
+    } else {
+        String::new()
+    };
+    let thread = std::thread::current();
+    write_line_now(&format!("[crash] Windows stopped thread '{}': {kind} ({code:#x}) at {place}{detail}", thread.name().unwrap_or("unnamed")));
+    if let Some(dir) = log_dir() {
+        match save_snapshot(&dir, "crash") {
+            Ok(note) => write_line_now(&format!("[crash] {note}")),
+            Err(e) => write_line_now(&format!("[crash] snapshot failed: {e}")),
+        }
+    }
+    write_line_now("[crash] Toasted closes now, unless that was caught");
+    CONTINUE_SEARCH
 }
 
 /// Crashes the app at startup if `TOASTED_TEST_CRASH` is set.
@@ -334,6 +402,53 @@ pub fn test_freeze() {
 }
 
 /// The watchdog (see the top of this file).
+/// The memory this process uses, in MB: what Task Manager shows (the
+/// working set), and what it has asked Windows for (private bytes).
+pub fn memory_mb() -> Option<(u64, u64)> {
+    #[cfg(windows)]
+    {
+        use windows::Win32::System::ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX};
+        use windows::Win32::System::Threading::GetCurrentProcess;
+        let mut counters = PROCESS_MEMORY_COUNTERS_EX::default();
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+        unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters as *mut _ as *mut PROCESS_MEMORY_COUNTERS, size) }.ok()?;
+        Some((counters.WorkingSetSize as u64 >> 20, counters.PrivateUsage as u64 >> 20))
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// Notes the app's memory in the log: a minute after it starts, then
+/// whenever it has moved by a tenth (looked at every minute), with
+/// what the library link holds (library.rs: the Core's objects, the part
+/// that grows with the library and the listening). So a log sent with a
+/// "too much memory" report says where the memory went.
+pub fn start_memory_log(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let mut last: Option<(u64, usize)> = None;
+        let wait = Duration::from_secs(60);
+        loop {
+            tokio::time::sleep(wait).await;
+            let Some((working, private)) = memory_mb() else { return };
+            let (objects, bytes, top) = tauri::Manager::state::<crate::library::Library>(&app).client().map(|c| c.graph_stats()).unwrap_or_default();
+            let moved = last.is_none_or(|(mb, n)| working.abs_diff(mb) * 10 >= mb.max(50) || objects.abs_diff(n) * 10 >= n.max(1000));
+            if !moved {
+                continue;
+            }
+            last = Some((working, objects));
+            let top: Vec<String> = top.iter().map(|(name, n)| format!("{name} {n}")).collect();
+            println!(
+                "[memory] {working} MB in use ({private} MB private); the library link holds {objects} objects, about {} MB ({})",
+                bytes >> 20,
+                if top.is_empty() { "not connected".to_string() } else { top.join(", ") }
+            );
+        }
+    });
+}
+
 pub fn start_watchdog(app: &AppHandle) {
     let _ = since_start();
     BEAT.store(since_start(), Ordering::Relaxed);

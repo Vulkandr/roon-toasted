@@ -1,7 +1,7 @@
 [
   {
     "version": "1.6.0",
-    "date": "2026-11-12",
+    "date": "2026-11-13",
     "sections": [
       {
         "title": "What's new",
@@ -22,6 +22,8 @@
       {
         "title": "Fixes",
         "items": [
+          ["Memory use", "After reading the library, Toasted held on to a lot of memory, hundreds of megabytes and well over 2 GB with a large library, and the amount could grow each day it stayed open. It's now given back a couple of minutes after the read."],
+          ["Crash reports", "A crash where Windows itself stops Toasted (a memory fault) left nothing in the log. It now leaves a line saying what happened and a snapshot (crash-*.dmp), like Toasted's other crashes."],
           ["Hearts with several profiles", "With more than one Roon profile, a heart could land on the wrong profile. Hearts now go to the profile picked in Toasted."],
           ["Now Playing links on another zone", "When Roon's own window was on a different zone than the player, clicking the album or artist in Now Playing opened the wrong page. The link is now checked first, and Roon's search finds the right page when it doesn't match."],
           ["Artists that share a name", "An artist could get the tags of another band with the same name (Roon's 11th Hour got a rapcore band's). Opening the artist's page now checks the tags against where Roon says the artist is from."],
@@ -34,6 +36,8 @@
         "items": [
           ["One more read", "After updating, Wrapped reads the library once more by itself so hearts and bans are right for every profile."],
           ["Profiles start empty", "A profile other than your first has its own history, Home and Deep Dives, so it starts with only what that profile has played. What you had before stays with the first profile."],
+          ["A short reconnect after a library read", "To give that memory back, the Hearts & Library link reconnects a couple of minutes after Wrapped reads the library (a Rescan, or the daily one). It takes about three seconds. A heart, ban or add to library clicked in the player meanwhile is held and goes through once the link is back; a Wrapped album or artist page that was open may need reopening."],
+          ["Memory in the log", "The log now notes how much memory Toasted uses, and how much of it the Hearts & Library link holds, whenever that changes much."],
           ["Return Roon", "The Return Roon button moved to the right side of the Wrapper's title bar, next to Settings."],
           ["Popular needs a Last.fm key", "Without a Last.fm key (Wrapped's Settings), the Popular tab shows the songs in Roon's own order."]
         ]

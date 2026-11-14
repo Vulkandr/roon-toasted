@@ -47,7 +47,7 @@
 //! sent a session until that session ends (a few per track played).
 
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use roon_library::{AddMode, AlbumCard, AlbumExtras, AlbumTrack, ArtistAlbum, ArtistCard, ArtistExtras, ClientOptions, Facts, GenreInfo, GenrePage, History, LibraryClient, LibraryError, LibraryEvent, MixOptions, MixPlayed, PlaylistCard, QueueSong, RadioSeeds, SearchHits, TrackInfo};
 use serde::Serialize;
@@ -57,6 +57,25 @@ use crate::settings::{self, AppSettings};
 
 /// Planned reconnect, so the Core can drop the objects it kept for us.
 const REFRESH_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// The same reconnect, early: the link keeps every object the Core sends
+/// (and the Core keeps them for us), and a read of the whole library or
+/// history sends a great many: about 200,000 objects and 450 MB for a
+/// library of 14,000 tracks, kept until the daily reconnect (a library
+/// three times that had the app at 2.3 GB). So once the link holds this
+/// many and none has come for a while (the read that brought them is
+/// over), it reconnects and starts again with the thousand or so it needs.
+///
+/// The numbers: a fresh link is at 16,000 within a minute (the artists'
+/// pictures are read on connect) and an evening of playing and browsing
+/// adds a few thousand, so 20,000 had it reconnecting about hourly for
+/// nothing; 60,000 (about 140 MB) is out of everyday reach and well under
+/// what a library read brings. And two minutes of quiet, with no paged
+/// read running or just ended: a rescan is several reads with other work
+/// between them, and 45 s had it reconnecting between two of them.
+const LINK_FULL: usize = 60_000;
+const LINK_QUIET: Duration = Duration::from_secs(120);
+const LINK_TRICKLE: usize = 2_000;
 
 /// Retry spacing after a failed connection (not for "unsupported").
 const RETRY_DELAYS: [u64; 4] = [5, 15, 60, 300];
@@ -290,7 +309,6 @@ async fn run(app: AppHandle, generation: u64, host: String, core_id: String) {
                         // Planned refresh: reconnect right away, quietly.
                         client.close();
                         library.inner.lock().unwrap().client = None;
-                        println!("[library {}] daily reconnect", clock());
                         continue;
                     }
                 }
@@ -323,13 +341,28 @@ async fn forward_events(app: &AppHandle, client: &LibraryClient, generation: u64
     tokio::pin!(refresh);
     let mut check = tokio::time::interval(Duration::from_secs(5));
     let mut profiles = profiles_now(client);
+    // (how many objects the link held when it last grew, and when)
+    let mut grown = (client.object_count(), Instant::now());
     loop {
         tokio::select! {
-            _ = &mut refresh => return None,
+            _ = &mut refresh => {
+                println!("[library {}] daily reconnect", clock());
+                return None;
+            }
             // A deliberate close (stop()) sends no event; notice it here.
             _ = check.tick() => {
                 if !client.is_connected() || app.state::<Library>().inner.lock().unwrap().generation != generation {
                     return Some("stopped".into());
+                }
+                // (still growing in earnest, that is: a song starting brings
+                // a few dozen objects, and with music on there would never
+                // be a quiet two minutes if those counted)
+                let held = client.object_count();
+                if held > grown.0 + LINK_TRICKLE {
+                    grown = (held, Instant::now());
+                } else if held >= LINK_FULL && grown.1.elapsed() >= LINK_QUIET && !client.reading(LINK_QUIET) {
+                    println!("[library {}] reconnecting to let go of {held} objects (quiet for {} s)", clock(), LINK_QUIET.as_secs());
+                    return None;
                 }
                 // (a profile added, renamed or removed in Roon: the pages hear)
                 let now = profiles_now(client);
@@ -443,6 +476,50 @@ fn describe(e: LibraryError) -> String {
     }
 }
 
+/// How long an action on the playing song waits for a link that's
+/// reconnecting, and how long it lets the new link settle before trying.
+const ACTION_WAIT: Duration = Duration::from_secs(12);
+const ACTION_SETTLE: Duration = Duration::from_millis(1500);
+
+/// Runs an action on a zone's playing song (a heart, a ban, add to
+/// library), holding on to it over a reconnect: clicked while the link is
+/// away (the planned reconnects take about three seconds) or cut off by
+/// one, it's tried again a moment after the link is back, instead of
+/// failing. Only for actions named by the zone: what a page names by a
+/// handle means nothing on the next link.
+async fn over_reconnect<T, F, Fut>(app: &AppHandle, action: F) -> Result<T, String>
+where
+    F: Fn(LibraryClient) -> Fut,
+    Fut: std::future::Future<Output = Result<T, LibraryError>>,
+{
+    let library = app.state::<Library>();
+    let started = Instant::now();
+    let mut waited = false;
+    loop {
+        let mut failure = None;
+        if let Some(client) = library.client().filter(|c| c.is_connected()) {
+            if waited {
+                tokio::time::sleep(ACTION_SETTLE).await;
+            }
+            match action(client).await {
+                Err(e) if e.is_closed() => failure = Some(e),
+                // (the new link may not have heard what the zone plays yet)
+                Err(e @ LibraryError::NothingPlaying(_)) if waited => failure = Some(e),
+                other => return other.map_err(describe),
+            }
+        }
+        let state = library.status().state;
+        if matches!(state, LibraryState::Off | LibraryState::Unsupported) || started.elapsed() >= ACTION_WAIT {
+            return Err(failure.map(describe).unwrap_or_else(|| not_ready(&library)));
+        }
+        if !waited {
+            println!("[library {}] an action waits for the link to come back", clock());
+        }
+        waited = true;
+        tokio::time::sleep(Duration::from_millis(300)).await;
+    }
+}
+
 /// Whether the feature is on and connected, with a reason when it isn't.
 #[tauri::command]
 pub fn library_status(library: State<'_, Library>) -> LibraryStatus {
@@ -460,25 +537,29 @@ pub fn library_track(library: State<'_, Library>, zone_id: String) -> Result<Opt
 /// first if needed, per the `libraryAddMode` setting).
 #[tauri::command]
 pub async fn library_heart(app: AppHandle, zone_id: String, favorite: bool) -> Result<TrackInfo, String> {
-    let library = app.state::<Library>();
-    let client = library.client().ok_or_else(|| not_ready(&library))?;
     let add = add_mode(&app);
-    client.set_favorite(&zone_id, favorite, Some(add)).await.map_err(describe)
+    over_reconnect(&app, |client| {
+        let zone_id = zone_id.clone();
+        async move { client.set_favorite(&zone_id, favorite, Some(add)).await }
+    })
+    .await
 }
 
 /// Bans the zone's current track for the profile in use, or lifts its ban
 /// (the Ban button, when it's switched on in Settings).
 #[tauri::command]
 pub async fn library_ban(app: AppHandle, zone_id: String, banned: bool, song: Option<crate::wrapped::BannedSong>) -> Result<TrackInfo, String> {
-    let library = app.state::<Library>();
-    let client = library.client().ok_or_else(|| not_ready(&library))?;
-    let result = client.set_banned(&zone_id, banned).await;
+    let result = over_reconnect(&app, |client| {
+        let zone_id = zone_id.clone();
+        async move { client.set_banned(&zone_id, banned).await }
+    })
+    .await;
     // (Roon has no list of bans outside the library: Wrapped keeps the
     // ones made here, for History's Banned)
     if let (Ok(now), Some(song)) = (&result, song) {
         crate::wrapped::ban_note(&app, song, now.banned);
     }
-    result.map_err(describe)
+    result
 }
 
 /// Roon's genres and the user's Roon tags for the zone's current track
@@ -544,18 +625,22 @@ pub async fn library_track_ban(app: AppHandle, handle: String, banned: bool, son
 /// says "track" or "album") to the library.
 #[tauri::command]
 pub async fn library_add(app: AppHandle, zone_id: String, mode: Option<AddMode>) -> Result<TrackInfo, String> {
-    let library = app.state::<Library>();
-    let client = library.client().ok_or_else(|| not_ready(&library))?;
     let add = mode.unwrap_or_else(|| add_mode(&app));
-    client.add_to_library(&zone_id, add).await.map_err(describe)
+    over_reconnect(&app, |client| {
+        let zone_id = zone_id.clone();
+        async move { client.add_to_library(&zone_id, add).await }
+    })
+    .await
 }
 
 /// Hearts or un-hearts the album of the zone's current track (it must be in the library).
 #[tauri::command]
 pub async fn library_album_heart(app: AppHandle, zone_id: String, favorite: bool) -> Result<TrackInfo, String> {
-    let library = app.state::<Library>();
-    let client = library.client().ok_or_else(|| not_ready(&library))?;
-    client.set_album_favorite(&zone_id, favorite).await.map_err(describe)
+    over_reconnect(&app, |client| {
+        let zone_id = zone_id.clone();
+        async move { client.set_album_favorite(&zone_id, favorite).await }
+    })
+    .await
 }
 
 /// The tracks of the album the zone is playing, each with a session handle.
