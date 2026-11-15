@@ -8971,3 +8971,83 @@ body.wrapped-column-moving * {
   color: #fff;
   filter: drop-shadow(0 0 1px #000) drop-shadow(0 0 2px #000);
 }
+
+/* ===== Settings: the Living Queue page's zones ============================ */
+
+/* A zone that isn't there right now (a phone whose Roon app is closed) */
+.settings-lq-zones .settings-card-row.away .settings-card-row-name {
+  color: var(--muted);
+}
+
+/* The whole list, while the living queue is off */
+.settings-lq-zones.off .wrapped-tabs {
+  opacity: 0.5;
+}
+
+/* What the living queue runs on, beside its greyed switch while that's off */
+.settings-lq-side {
+  display: flex;
+  align-items: center;
+}
+
+.settings-lq-requires {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.settings-lq-requires[hidden] {
+  display: none;
+}
+
+.wrapped-tabs.needs-link {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+/* Hide Current while the silent track it needs isn't in Roon's library */
+.settings-lq-zones .wrapped-tab.unavailable {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* The silent track's setup: what is in the way, and the ways out */
+.settings-lq-track {
+  margin: 4px 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 13px;
+}
+
+.settings-lq-track[hidden] {
+  display: none;
+}
+
+.settings-lq-track.working {
+  border-color: transparent;
+}
+
+.settings-lq-track p {
+  margin: 0;
+}
+
+.settings-lq-track .settings-lq-track-file {
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, currentColor 8%, transparent);
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
+.settings-lq-track-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}

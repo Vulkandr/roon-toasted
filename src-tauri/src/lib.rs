@@ -43,6 +43,8 @@ mod hotkeys;
 mod icon;
 mod launch;
 mod library;
+mod livequeue;
+mod silenttrack;
 mod mediakeys;
 mod update;
 mod monitors;
@@ -684,6 +686,7 @@ pub fn run() {
             step("unstick", || unstick::schedule(app.handle()));
             // A library shuffle that was running when Toasted closed
             step("shuffle", || shuffle::resume(app.handle()));
+            step("livequeue", || livequeue::start(app.handle()));
 
             // Just updated: the Changelog opens (see changelog.rs)
             step("changelog", || changelog::at_start(app.handle()));
@@ -869,6 +872,10 @@ pub fn run() {
             musicfolder::wrapped_music_folder_clear,
             musicfolder::wrapped_music_folder_rescan,
             musicfolder::wrapped_music_folder_status,
+            silenttrack::living_queue_track_status,
+            silenttrack::living_queue_track_check,
+            silenttrack::living_queue_track_pick,
+            silenttrack::living_queue_track_reveal,
             scrobbles::wrapped_scrobbles_status,
             scrobbles::wrapped_scrobbles_sync,
             discover::wrapped_ban_list,

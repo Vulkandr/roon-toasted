@@ -12837,6 +12837,7 @@ WRAPPED_PAGES.settings = async function () {
     heartsState.textContent = st.reason && st.state !== "ready" && st.state !== "off" ? `${words} ${st.reason}` : words;
   };
   let addRow = null;
+  let lqSetLink = null;
   // (Off / On on the title's line, whether the Core takes the link under it)
   heartsCard.head.append(
     toastedPills(
@@ -12849,6 +12850,7 @@ WRAPPED_PAGES.settings = async function () {
         addRow?.classList.toggle("off", !on);
         return { libraryControls: on };
       },
+      (on) => lqSetLink?.(on),
     ),
   );
   heartsCard.append(heartsState);
@@ -12897,6 +12899,180 @@ WRAPPED_PAGES.settings = async function () {
   const unlistenLink = await listen("library-status", (event) => {
     if (ticket !== wrappedTicket) return unlistenLink();
     paintLink(event.payload);
+  });
+
+  // The living queue (Toasted's own setting, shared; livequeue.rs), on a
+  // page of its own: the switch, then how each zone takes part. The zones
+  // are Roon's, live; one that took part and isn't there right now (a
+  // phone whose Roon app is closed) stays listed under the name it had.
+  const lqCard = card(
+    "Living Queue",
+    "One queue that follows you. Zones that take part all carry the queue of whichever one is playing. Press play on another of them and it carries on at the same song and the same second, and the zone you left is paused. Toasted has to be running for it to work.",
+    pageOf.livequeue,
+  );
+  const lqModes = [
+    ["off", "Off", "This zone takes no part. Toasted never touches its queue."],
+    [
+      "mirrored",
+      "Mirrored",
+      "The zone always shows the song that's playing, ready to carry on. Its queue is replaced at every song change, which can keep the zone's device awake for as long as music plays on another zone that takes part.",
+    ],
+    [
+      "hide",
+      "Hide Current",
+      "The zone is left alone, so its device can sleep. Once the music has moved on from the song it was left in, it shows a silent Living Queue track in its place. Press play on it and it jumps to the song and second you were at.",
+    ],
+  ];
+  const lqNow = { on: !!toastedNow.livingQueue, zones: { ...(toastedNow.livingQueueZones || {}) }, names: { ...(toastedNow.livingQueueNames || {}) } };
+  let lqLive = [];
+  let lqLink = !!toastedNow.libraryControls;
+  // (the silent Living Queue track Hide Current shows, silenttrack.rs: until it's "ready", in Roon's
+  // library, Hide Current can't be chosen; when Toasted can't put it there itself, the card says how to)
+  let lqTrack = await invoke("living_queue_track_status").catch(() => ({ state: "unknown", message: "", file: "" }));
+  const lqTrackBox = document.createElement("div");
+  lqTrackBox.className = "settings-lq-track";
+  const lqRows = document.createElement("div");
+  lqRows.className = "settings-lq-zones";
+  const paintLq = () => {
+    lqRows.replaceChildren();
+    lqRows.classList.toggle("off", !lqNow.on || !lqLink);
+    const rows = lqLive.map((zone) => ({ id: zone.zoneId, name: zone.name, zone }));
+    for (const id of Object.keys(lqNow.zones)) {
+      if (!rows.some((row) => row.id === id)) rows.push({ id, name: lqNow.names[id] || "A zone that's gone", zone: null });
+    }
+    if (!rows.length) {
+      lqRows.append(statusLine("No zones yet. They show here once Roon is connected."));
+      return;
+    }
+    for (const row of rows) {
+      const mode = lqNow.zones[row.id] || "off";
+      const state = !row.zone ? "Not available right now" : mode === "off" ? "Not taking part" : row.zone.state === "playing" ? "Playing" : mode === "hide" && lqTrack.state !== "ready" ? "Waiting for the Living Queue track" : mode === "mirrored" ? "Mirrored" : "Hidden until you press play";
+      const pills = document.createElement("div");
+      pills.className = "wrapped-tabs small";
+      for (const [value, label, hint] of lqModes) {
+        const pill = document.createElement("button");
+        pill.className = `wrapped-tab${value === mode ? " selected" : ""}`;
+        pill.textContent = label;
+        const blocked = value === "hide" && lqNow.on && lqLink && lqTrack.state !== "ready";
+        if (blocked) pill.classList.add("unavailable");
+        hoverTip(pill, blocked ? "Not available yet: Hide Current needs the silent Living Queue track in your Roon library. See the note at the top of this card." : hint);
+        pill.addEventListener("click", async () => {
+          if (value === mode || blocked) return;
+          const zones = { ...lqNow.zones };
+          const names = { ...lqNow.names };
+          if (value === "off") {
+            delete zones[row.id];
+            delete names[row.id];
+          } else {
+            zones[row.id] = value;
+            names[row.id] = row.name;
+          }
+          try {
+            await invoke("update_settings", { changes: { livingQueueZones: zones, livingQueueNames: names }, shared: true });
+            lqNow.zones = zones;
+            lqNow.names = names;
+            paintLq();
+            wrappedToast("Saved");
+          } catch (err) {
+            wrappedToast(String(err));
+          }
+        });
+        pills.append(pill);
+      }
+      const line = cardRow(lqRows, row.name, statusLine(state), pills);
+      line.classList.toggle("away", !row.zone);
+    }
+  };
+  const lqSwitch = toastedPills(
+    [
+      [false, "Off"],
+      [true, "On"],
+    ],
+    lqNow.on,
+    (on) => ({ livingQueue: on }),
+    (on) => {
+      lqNow.on = on;
+      paintLqTrack();
+    },
+  );
+  // (it runs on the Hearts & Library link, which Wrapped can be used
+  // without: with the link off the switch is greyed, shows Off and says why)
+  const lqNote = document.createElement("span");
+  lqNote.className = "settings-lq-requires";
+  lqNote.textContent = "Requires Hearts & Library";
+  lqSetLink = (on) => {
+    lqLink = !!on;
+    lqSwitch.classList.toggle("needs-link", !lqLink);
+    lqNote.hidden = lqLink;
+    const shown = lqNow.on && lqLink;
+    [...lqSwitch.children].forEach((pill, i) => pill.classList.toggle("selected", (i === 1) === shown));
+    paintLqTrack();
+  };
+  const lqSide = document.createElement("div");
+  lqSide.className = "settings-lq-side";
+  lqSide.append(lqSwitch, lqNote);
+  lqCard.head.append(lqSide);
+  const paintLqTrack = () => {
+    const working = lqTrack.state === "working";
+    const needed = lqTrack.state === "needed";
+    lqTrackBox.replaceChildren();
+    lqTrackBox.hidden = !lqNow.on || !lqLink || !(working || needed);
+    lqTrackBox.classList.toggle("working", working);
+    if (!lqTrackBox.hidden) {
+      const message = document.createElement("p");
+      message.textContent = lqTrack.message;
+      lqTrackBox.append(message);
+      if (needed) {
+        if (lqTrack.file) {
+          const file = document.createElement("p");
+          file.className = "settings-lq-track-file";
+          file.textContent = lqTrack.file;
+          lqTrackBox.append(file);
+        }
+        const actions = document.createElement("div");
+        actions.className = "settings-lq-track-actions";
+        for (const [label, command, tip] of [
+          ["Choose music folder", "living_queue_track_pick", "Point Toasted at the folder Roon keeps your music in. It puts the track there for you."],
+          ["Show the file", "living_queue_track_reveal", "Opens the folder with the file in it, for copying into your Roon music folder"],
+          ["Check again", "living_queue_track_check", "Has Roon rescan its music folders and looks for the track again"],
+        ]) {
+          const button = document.createElement("button");
+          button.className = "wrapped-button small";
+          button.textContent = label;
+          hoverTip(button, tip);
+          button.addEventListener("click", async () => {
+            try {
+              const now = await invoke(command);
+              if (now) {
+                lqTrack = now;
+                paintLqTrack();
+              }
+            } catch (err) {
+              wrappedToast(String(err));
+            }
+          });
+          actions.append(button);
+        }
+        lqTrackBox.append(actions);
+      }
+    }
+    paintLq();
+  };
+  lqCard.append(lqTrackBox, lqRows);
+  const unlistenLqTrack = await listen("living-queue-track", (event) => {
+    if (ticket !== wrappedTicket) return unlistenLqTrack();
+    lqTrack = event.payload;
+    paintLqTrack();
+  });
+  lqSetLink(lqLink);
+  const lqZonesNow = (payload) => {
+    lqLive = [...(payload?.zones || [])].sort((a, b) => a.name.localeCompare(b.name));
+    paintLq();
+  };
+  invoke("roon_zones").then(lqZonesNow).catch(() => paintLq());
+  const unlistenLq = await listen("roon-zones", (event) => {
+    if (ticket !== wrappedTicket) return unlistenLq();
+    lqZonesNow(event.payload);
   });
 
   // Onboarding on or off (off by itself once every page's walkthrough
@@ -14170,6 +14346,7 @@ const WRAPPED_SETTINGS_PAGES = [
   ["music", "Your Music", "track", true],
   ["discovery", "Wrapped Discovery", "discover", true],
   ["general", "General", "settings", false],
+  ["livequeue", "Living Queue", "playlists", false],
 ];
 let wrappedSettingsPage = "general";
 try {

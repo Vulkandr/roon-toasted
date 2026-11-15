@@ -68,6 +68,7 @@ const SIG_GET_RECENTS: &str = "Sooloos.Broker.Api.Library::GetRecents(Sooloos.Br
 const SIG_QUEUE_ITEMS: &str = "Sooloos.Broker.Api.Queue::GetItems(Base.ResultCallback<System.Collections.Generic.IList<Sooloos.Broker.Api.TransportItem>>)";
 const SIG_QUEUE_REMOVE_ALL: &str = "Sooloos.Broker.Api.Queue::RemoveAll()";
 const SIG_QUEUE_PLAY_FROM_ID: &str = "Sooloos.Broker.Api.Queue::PlayFromHere(long)";
+const SIG_FORCE_SCAN: &str = "Sooloos.Broker.Api.Locations::ForceScan(Sooloos.Broker.Api.Location, Base.ResultCallback)";
 const SIG_PLAY_TRACKS: &str = "Sooloos.Broker.Api.Transport::PlayTracks(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.TrackBase>, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
 const SIG_PERFORMER_RECOMMENDED: &str = "Sooloos.Broker.Api.Library::GetOneBoxPerformerRecommendedAlbums(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.PerformerRecommendedAlbums>)";
 const SIG_SIMILAR_ALBUMS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarAlbums(Sooloos.Broker.Api.AlbumLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.OneBox_SimilarAlbums>)";
@@ -474,6 +475,17 @@ pub struct TrackFile {
     /// Where the Core's web server (the port its extensions connect to,
     /// 9330 as a rule) gives the file out ("/file/<storage id>/<path>.flac").
     pub http_path: String,
+}
+
+/// One of the Core's music folders (see `storage_folders`).
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageFolder {
+    /// Names the folder to `force_scan`; valid for this session only.
+    pub handle: String,
+    pub name: String,
+    pub path: String,
+    pub online: bool,
 }
 
 /// A track found by `search`.
@@ -1122,6 +1134,97 @@ impl LibraryClient {
         let mut top = g.type_counts("");
         top.truncate(6);
         (g.objects.len(), g.approx_bytes(), top)
+    }
+
+    /// The Core's music folders (Settings > Storage), as the Core reaches
+    /// them: a path on its own machine, or a share
+    /// ("\\\\192.168.0.18\\roon music"). Of the Core's Locations, the ones
+    /// in the storage category (100; 400 is a streaming library, 500
+    /// Roon's own).
+    pub fn storage_folders(&self) -> Vec<StorageFolder> {
+        let g = self.inner.graph.lock().unwrap();
+        let mut out: Vec<StorageFolder> = g
+            .find_by_type("Location")
+            .filter(|o| o.field("Category").and_then(Value::as_int) == Some(100))
+            .filter_map(|o| {
+                let path = o.str_field("FocusDisplayName").filter(|p| !p.trim().is_empty())?.to_string();
+                Some(StorageFolder {
+                    handle: o.oid.to_string(),
+                    name: o.str_field("DisplayName").unwrap_or(&path).to_string(),
+                    path,
+                    online: o.field("IsOnline").and_then(Value::as_bool).unwrap_or(false) && o.field("IsEnabled").and_then(Value::as_bool).unwrap_or(true),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.path.cmp(&b.path));
+        out.dedup_by(|a, b| a.path == b.path);
+        out
+    }
+
+    /// Has the Core scan one of its music folders now (Settings > Storage,
+    /// "Force Rescan"): for a file just put there that the Core's own
+    /// watching of the folder did not notice, as on some network shares.
+    pub async fn force_scan(&self, handle: &str) -> Result<(), LibraryError> {
+        let location: u64 = handle.parse().map_err(|_| LibraryError::Unconfirmed("bad folder handle".into()))?;
+        let service = {
+            let g = self.inner.graph.lock().unwrap();
+            if g.get(location).is_none() {
+                return Err(LibraryError::Unconfirmed("unknown folder handle".into()));
+            }
+            g.first_of_type("Locations").map(|o| o.oid)
+        };
+        let service = service.ok_or_else(|| LibraryError::UnsupportedCore("no Locations service in the graph".into()))?;
+        let mut args = Writer::new();
+        args.long(location);
+        let res = self.inner.remoting.call(service, SIG_FORCE_SCAN, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "Locations::ForceScan".into(), status: res.status }.into());
+        }
+        Ok(())
+    }
+
+    /// What the graph holds about where the Core keeps music (its storage
+    /// locations and folders), one line per object: the type and every
+    /// member, for working out where a file can be put for Roon to find.
+    /// Members whose names look like sign-in details are left out.
+    pub fn storage_report(&self) -> Vec<String> {
+        let g = self.inner.graph.lock().unwrap();
+        let secret = |name: &str| {
+            let n = name.to_ascii_lowercase();
+            ["pass", "user", "cred", "token", "auth", "secret", "login", "key"].iter().any(|w| n.contains(w))
+        };
+        let show = |v: &Value| -> String {
+            let text = match v {
+                Value::Str(s) => format!("{s:?}"),
+                Value::Bytes(b) => format!("{} bytes", b.len()),
+                Value::Ref(r) => match g.get(*r) {
+                    Some(o) => format!("-> {} #{r}{}", o.short_type(), o.strings.as_ref().map(|s| format!(" {s:?}")).unwrap_or_default()),
+                    None => format!("-> #{r} (not in the graph)"),
+                },
+                Value::Inline(i) => format!("inline struct, {} members", i.fields.len()),
+                other => format!("{other:?}"),
+            };
+            text.chars().take(200).collect()
+        };
+        let mut lines = Vec::new();
+        for part in ["Location", "Storage", "FileSystem", "Folder", "Mount"] {
+            for o in g.find_by_type_prefix("").filter(|o| o.short_type().contains(part)) {
+                let mut members: Vec<String> = o
+                    .fields
+                    .iter()
+                    .map(|(k, v)| {
+                        let name = k.rsplit("::").next().unwrap_or(k);
+                        if secret(name) { format!("{name}: (left out)") } else { format!("{name}: {}", show(v)) }
+                    })
+                    .collect();
+                members.sort();
+                let line = format!("{} #{}: {}{}", o.short_type(), o.oid, members.join("; "), o.items.as_ref().map(|i| format!("; {} items", i.len())).unwrap_or_default());
+                if !lines.contains(&line) {
+                    lines.push(line);
+                }
+            }
+        }
+        lines
     }
 
     // --- reading ---
@@ -3164,7 +3267,7 @@ impl LibraryClient {
             return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
         };
         // Zone, profile, default PlayParameters, the playlist, from no particular item
-        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        let params = self.play_parameters_of(None)?;
         let mut args = Writer::new();
         args.long(zone).sooid(&profile).bytes(&params).long(oid).long(0);
         let res = self.inner.remoting.call(transport, SIG_PLAY_PLAYLIST, args.as_bytes()).await?;
@@ -3193,7 +3296,7 @@ impl LibraryClient {
         let (Some(transport), Some(profile)) = (transport, profile) else {
             return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
         };
-        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        let params = self.play_parameters_of(None)?;
         let mut args = Writer::new();
         args.long(zone).sooid(&profile).bytes(&params).long(oid).long(from);
         let res = self.inner.remoting.call(transport, SIG_PLAY_PLAYLIST, args.as_bytes()).await?;
@@ -4082,7 +4185,7 @@ impl LibraryClient {
         let (Some(transport), Some(profile)) = (transport, profile) else {
             return Err(LibraryError::UnsupportedCore("no Transport service or Profile in the graph".into()));
         };
-        let params = self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?;
+        let params = self.play_parameters_of(None)?;
         let mut list = Writer::new();
         list.flex_int(order.len() as u32);
         for oid in &order {
@@ -4142,16 +4245,33 @@ impl LibraryClient {
     /// Queue 4).
     fn play_parameters(&self, how: PlayHow) -> Result<Vec<u8>, LibraryError> {
         let priority = match how {
-            PlayHow::Now => return Ok(self.inner.remoting.inline_struct("Sooloos.Broker.Api.PlayParameters", &[])?),
-            PlayHow::Next => 3,
-            PlayHow::Queue => 4,
+            PlayHow::Now => None,
+            PlayHow::Next => Some(3),
+            PlayHow::Queue => Some(4),
         };
-        let mut value = Writer::new();
-        value.flex_int(priority);
-        Ok(self.inner.remoting.inline_struct(
+        self.play_parameters_of(priority)
+    }
+
+    /// PlayParameters as sent: always declared with its Priority member,
+    /// which is left out of the value for Roon's default (play now). The
+    /// Core keeps one member list per type name, the last one declared:
+    /// with the default declared as a struct of no members, an "add to
+    /// queue" after a "play now", when one had come before it too, was
+    /// read against the empty declaration and refused (PlayTracks,
+    /// UnexpectedError), for the rest of the session.
+    fn play_parameters_of(&self, priority: Option<u32>) -> Result<Vec<u8>, LibraryError> {
+        let type_id = self.inner.remoting.define_type(
             "Sooloos.Broker.Api.PlayParameters",
-            &[StructField { name: "Sooloos.Broker.Api.PlayPriority Sooloos.Broker.Api.PlayParameters::Priority", prop_type: PropertyType::Enum, value: value.into_bytes() }],
-        )?)
+            &[("Sooloos.Broker.Api.PlayPriority Sooloos.Broker.Api.PlayParameters::Priority", PropertyType::Enum)],
+        )?;
+        let mut body = Writer::new();
+        if let Some(priority) = priority {
+            body.flex_int(1).flex_int(priority);
+        }
+        body.flex_int(0);
+        let mut w = Writer::new();
+        w.long(1).flex_int(type_id).flex_int(body.len() as u32).bytes(body.as_bytes());
+        Ok(w.into_bytes())
     }
 
     /// Plays an album (by its handle) on the zone, right now, the way the Roon

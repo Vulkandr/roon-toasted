@@ -55,6 +55,7 @@
         <button class="page-link" data-page="general" type="button" title="General"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="4" y2="4"/><line x1="10" x2="3" y1="4" y2="4"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="20" y2="20"/><line x1="12" x2="3" y1="20" y2="20"/><line x1="14" x2="14" y1="2" y2="6"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="18" y2="22"/></svg><span>General</span></button>
         <button class="page-link" data-page="core" type="button" title="Roon Core"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg><span>Roon Core</span><i id="nav-core-dot" class="dot nav-dot"></i></button>
         <button class="page-link" data-page="keys" type="button" title="Hotkeys &amp; Media Keys"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 8h.01"/><path d="M12 12h.01"/><path d="M14 8h.01"/><path d="M16 12h.01"/><path d="M18 8h.01"/><path d="M6 8h.01"/><path d="M7 16h10"/><path d="M8 12h.01"/><rect width="20" height="16" x="2" y="4" rx="2"/></svg><span>Hotkeys &amp; Media Keys</span></button>
+        <button class="page-link" data-page="livequeue" type="button" title="Living Queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15V6"/><path d="M18.5 18a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5Z"/><path d="M12 12H3"/><path d="M16 6H3"/><path d="M12 18H3"/></svg><span>Living Queue</span></button>
         <span class="pages-sep"></span>
         <button class="page-link" data-page="toaster" type="button" title="Toaster"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M10 4v4"/><path d="M2 8h20"/><path d="M6 4v4"/></svg><span>Toaster</span></button>
         <button class="page-link" data-page="wrapper" type="button" title="The Wrapper"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M3 15h18"/></svg><span>The Wrapper</span></button>
@@ -418,6 +419,65 @@
           longer get them while Roon is connected. Volume does the same with Volume Up,
           Volume Down and Mute, instead of the Windows volume; hold a key to keep going. A
           zone with a fixed volume leaves the volume keys with Windows.
+        </p>
+        </details>
+      </section>
+      </div>
+
+      <div class="page" data-page="livequeue" hidden>
+      <!-- The living queue (livequeue.rs): zones that carry on where the
+           listener was when play is pressed on them. A switch for the whole
+           thing, then how each zone takes part -->
+      <section class="card livequeue-card" data-new="living-queue">
+        <div class="card-head">
+          <h2>Living Queue</h2>
+          <div class="switch-group" id="living-queue-group">
+            <span class="switch-label label-off">Off</span>
+            <label class="switch">
+              <input type="checkbox" id="living-queue" />
+              <span class="slider"></span>
+            </label>
+            <span class="switch-label label-on">On</span>
+          </div>
+          <!-- It runs on the Hearts & Library link: said here, and the
+               switch greyed, while that is off -->
+          <span id="lq-requires" class="lq-requires" hidden>Requires Hearts &amp; Library</span>
+        </div>
+        <p class="muted lq-lead">Press play on another zone to carry on where you were.</p>
+        <p id="lq-status" class="lq-status" hidden></p>
+        <div id="lq-track" class="lq-track" hidden>
+          <p id="lq-track-message" class="lq-track-message"></p>
+          <p id="lq-track-file" class="lq-track-file" hidden></p>
+          <div id="lq-track-actions" class="lq-track-actions">
+            <button id="lq-track-pick" class="small" type="button" title="Point Toasted at the folder Roon keeps your music in. It puts the track there for you.">Choose music folder</button>
+            <button id="lq-track-reveal" class="small" type="button" title="Opens the folder with the file in it, for copying into your Roon music folder">Show the file</button>
+            <button id="lq-track-check" class="small" type="button" title="Has Roon rescan its music folders and looks for the track again">Check again</button>
+          </div>
+        </div>
+        <div id="lq-zones" class="lq-zones"></div>
+        <p id="lq-error" class="error" hidden></p>
+        <!-- What these do: folded away until its "Legend" line is clicked -->
+        <details class="legend">
+          <summary>Legend</summary>
+        <p>
+          <strong>Living Queue:</strong> One queue that follows you. Zones that take part all
+          carry the queue of whichever one is playing. Press play on another of them and it
+          carries on at the same song and the same second, and the zone you left is paused.
+          Toasted has to be running for it to work, with Hearts &amp; Library switched on
+          (Roon Core).
+        </p>
+        <p>
+          <strong>Off:</strong> The zone takes no part. Toasted never touches its queue.
+        </p>
+        <p>
+          <strong>Mirrored:</strong> The zone always shows the song that's playing, ready to
+          carry on. Its queue is replaced at every song change, which can keep the zone's
+          device awake for as long as music plays on another zone that takes part.
+        </p>
+        <p>
+          <strong>Hide Current:</strong> The zone is left alone, so its device can sleep. Once
+          the music has moved on from the song it was left in, it shows a silent Living Queue
+          track in its place. Press play on it and it jumps to the song and second you were at.
         </p>
         </details>
       </section>

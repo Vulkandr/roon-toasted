@@ -278,7 +278,7 @@ fn read_in_background(app: &AppHandle) {
 /// Windows' folder picker (IFileOpenDialog with FOS_PICKFOLDERS); None
 /// when cancelled.
 #[cfg(windows)]
-fn pick_folder() -> Result<Option<String>, String> {
+pub(crate) fn pick_folder() -> Result<Option<String>, String> {
     use windows::core::PWSTR;
     use windows::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED};
     use windows::Win32::UI::Shell::{FileOpenDialog, IFileOpenDialog, FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, SIGDN_FILESYSPATH};
@@ -309,7 +309,7 @@ fn pick_folder() -> Result<Option<String>, String> {
 }
 
 #[cfg(not(windows))]
-fn pick_folder() -> Result<Option<String>, String> {
+pub(crate) fn pick_folder() -> Result<Option<String>, String> {
     Err("Choosing a folder works on Windows only.".into())
 }
 

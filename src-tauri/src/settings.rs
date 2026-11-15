@@ -175,6 +175,21 @@ pub struct AppSettings {
     /// The "new" highlights in Settings that have been seen (hovered), by
     /// name (settings.js, `data-new`).
     pub seen_new: Vec<String>,
+    /// The living queue (livequeue.rs): zones that take part carry on,
+    /// when play is pressed on them, at the song and second the listener
+    /// was at on another one. Off unless switched on.
+    pub living_queue: bool,
+    /// How each zone takes part in the living queue, by zone id:
+    /// "mirrored" (its queue is kept on the playing song) or "hide" (left
+    /// alone until play is pressed on it). A zone not listed takes no part.
+    pub living_queue_zones: std::collections::BTreeMap<String, String>,
+    /// The names those zones went by when last seen: a phone's zone is
+    /// only there while its Roon app is open, and Settings still lists it.
+    pub living_queue_names: std::collections::BTreeMap<String, String>,
+    /// The music folder chosen on the Living Queue page, for when none of
+    /// Roon's can be reached from here by itself: where the silent Living
+    /// Queue track is put (silenttrack.rs).
+    pub living_queue_folder: String,
 }
 
 impl Default for AppSettings {
@@ -231,6 +246,10 @@ impl Default for AppSettings {
             wrapper_stage: serde_json::Value::Object(Default::default()),
             last_version: None,
             seen_new: Vec::new(),
+            living_queue: false,
+            living_queue_zones: Default::default(),
+            living_queue_names: Default::default(),
+            living_queue_folder: String::new(),
         }
     }
 }
@@ -425,6 +444,14 @@ pub fn save(path: &Path, settings: &AppSettings) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| e.to_string())
 }
 
+/// Keeps the music folder chosen on the Living Queue page.
+pub(crate) fn set_living_queue_folder(app: &AppHandle, folder: String) -> Result<(), String> {
+    let path = path(app).ok_or("Couldn't find the app data folder.")?;
+    let mut settings = load(&path);
+    settings.living_queue_folder = folder;
+    save(&path, &settings)
+}
+
 /// Current settings (defaults for anything never changed).
 #[tauri::command]
 pub fn get_settings(app: AppHandle) -> AppSettings {
@@ -523,6 +550,7 @@ pub fn update_settings(app: AppHandle, changes: serde_json::Value, shared: Optio
     }
     save(&path, &updated)?;
     crate::unstick::set_enabled(updated.skip_stuck);
+    crate::livequeue::set_config(&updated);
     if updated.start_with_windows != before.start_with_windows {
         crate::autostart::apply(&app);
     }
