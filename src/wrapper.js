@@ -12935,6 +12935,8 @@ WRAPPED_PAGES.settings = async function () {
   lqRows.className = "settings-lq-zones";
   // (phones with the companion app: Roon ARC as a zone, companion.rs, under a divider, Off or Hide Current)
   let lqPhones = await invoke("companion_devices").catch(() => []);
+  // (pairing in dev builds only while the companion app is unreleased: a release says "Coming soon")
+  const lqPairing = await invoke("companion_open").catch(() => false);
   let lqPairCode = null;
   const lqArcModes = [
     ["off", "Off", "ARC takes no part."],
@@ -12983,7 +12985,7 @@ WRAPPED_PAGES.settings = async function () {
   const paintLqPhones = () => {
     const divider = document.createElement("div");
     divider.className = "settings-lq-divider";
-    divider.textContent = "Roon ARC, through the companion app";
+    divider.textContent = lqPairing || lqPhones.length ? "Roon ARC, through the companion app" : "Roon ARC";
     lqRows.append(divider);
     for (const phone of lqPhones) {
       const mode = lqNow.zones[phone.zoneId] === "hide" ? "hide" : "off";
@@ -13018,6 +13020,15 @@ WRAPPED_PAGES.settings = async function () {
       side.append(pills, forget);
       const line = cardRow(lqRows, `ARC on ${phone.name}`, statusLine(lqPhoneLine(phone, mode)), side);
       line.classList.toggle("away", !phone.online);
+    }
+    if (!lqPairing) {
+      if (!lqPhones.length) {
+        const soon = document.createElement("div");
+        soon.className = "settings-lq-pair";
+        soon.textContent = "Coming soon";
+        lqRows.append(soon);
+      }
+      return;
     }
     const pair = document.createElement("div");
     pair.className = "settings-lq-pair";
@@ -13192,7 +13203,8 @@ WRAPPED_PAGES.settings = async function () {
   });
   lqSetLink(lqLink);
   const lqZonesNow = (payload) => {
-    lqLive = [...(payload?.zones || [])].sort((a, b) => a.name.localeCompare(b.name));
+    // (ARC on a phone is in the player's zones too, but has its own place on this page, under the divider)
+    lqLive = (payload?.zones || []).filter((z) => !z.zoneId.startsWith("arc:")).sort((a, b) => a.name.localeCompare(b.name));
     paintLq();
   };
   invoke("roon_zones").then(lqZonesNow).catch(() => paintLq());

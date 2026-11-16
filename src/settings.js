@@ -1543,6 +1543,8 @@ const lqTrackActions = document.querySelector("#lq-track-actions");
 // under a divider, Off or Hide Current only.
 let lqPhones = [];
 let lqPairCode = null;
+// (false until the app says this build pairs phones: dev builds only for now)
+let lqPairing = false;
 const lqPhonesBox = document.querySelector("#lq-phones");
 const LQ_ARC_MODES = LQ_MODES_ARC();
 function LQ_MODES_ARC() {
@@ -1666,7 +1668,8 @@ function setLivingQueueZone(id, name, mode) {
 lqSwitch.addEventListener("change", () => saveLivingQueue({ livingQueue: lqSwitch.checked }));
 
 function showLivingQueueLive(payload) {
-  lqLive = [...(payload?.zones || [])].sort((a, b) => a.name.localeCompare(b.name));
+  // (ARC on a phone is in the player's zones too, but has its own place on this page, under the divider)
+  lqLive = (payload?.zones || []).filter((z) => !z.zoneId.startsWith("arc:")).sort((a, b) => a.name.localeCompare(b.name));
   showLivingQueueZones();
 }
 
@@ -1693,7 +1696,7 @@ function showLivingQueuePhones() {
   lqPhonesBox.classList.toggle("off", !lqSettings.on);
   const divider = document.createElement("div");
   divider.className = "lq-divider";
-  divider.textContent = "Roon ARC, through the companion app";
+  divider.textContent = lqPairing || lqPhones.length ? "Roon ARC, through the companion app" : "Roon ARC";
   lqPhonesBox.append(divider);
   for (const phone of lqPhones) {
     const mode = lqSettings.zones[phone.zoneId] === "hide" ? "hide" : "off";
@@ -1750,7 +1753,17 @@ function showLivingQueuePhones() {
     line.append(text, side);
     lqPhonesBox.append(line);
   }
-  // Pairing: the code in force, or a new one when it has run out
+  // Pairing: the code in force, or a new one when it has run out (dev builds only while the companion
+  // app is unreleased: a release says "Coming soon", or nothing when a phone was paired before)
+  if (!lqPairing) {
+    if (!lqPhones.length) {
+      const soon = document.createElement("div");
+      soon.className = "lq-pair";
+      soon.textContent = "Coming soon";
+      lqPhonesBox.append(soon);
+    }
+    return;
+  }
   const pair = document.createElement("div");
   pair.className = "lq-pair";
   const text = document.createElement("span");
@@ -1779,9 +1792,10 @@ async function lqShowPairCode(fresh) {
   }
 }
 
-invoke("companion_devices")
-  .then((phones) => {
+Promise.all([invoke("companion_devices"), invoke("companion_open").catch(() => false)])
+  .then(([phones, open]) => {
     lqPhones = phones;
+    lqPairing = !!open;
     showLivingQueuePhones();
   })
   .catch((err) => console.error(err));

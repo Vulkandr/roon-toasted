@@ -259,7 +259,10 @@ public class Companion {
         MediaMetadata m = c0 == null ? null : c0.getMetadata();
         PlaybackState s = c0 == null ? null : c0.getPlaybackState();
         boolean onSilent = Handoff.isSilent(m) && s != null && (s.getState() == PlaybackState.STATE_PLAYING || s.getState() == PlaybackState.STATE_BUFFERING);
-        if (!Handoff.isSilent(m)) handedOff = false;
+        // (once per press of play: armed again whenever ARC isn't playing the silent track; never for the
+        // silent track the companion itself just put ARC on, "hide")
+        if (!onSilent) handedOff = false;
+        if (handoff.hiding()) return;
         if (!onSilent || handedOff || !"hide".equals(mode) && paired()) return;
         handedOff = true;
         // (a fresh word from Toasted first, when it can be reached: what home is on, to the second)
@@ -338,6 +341,10 @@ public class Companion {
             PlaybackState s = c.getPlaybackState();
             boolean playing = s != null && s.getState() == PlaybackState.STATE_PLAYING;
             long actions = s == null ? 0 : s.getActions();
+            if ("hide".equals(what)) {
+                handoff.hide();
+                return;
+            }
             switch (what) {
                 case "pause":
                     go.pause();

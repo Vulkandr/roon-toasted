@@ -877,6 +877,7 @@ pub fn run() {
             silenttrack::living_queue_track_status,
             companion::companion_devices,
             companion::companion_pair_code,
+            companion::companion_open,
             companion::companion_forget,
             silenttrack::living_queue_track_check,
             silenttrack::living_queue_track_pick,

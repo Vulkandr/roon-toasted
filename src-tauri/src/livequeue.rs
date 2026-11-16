@@ -79,6 +79,10 @@ const RETRY: Duration = Duration::from_secs(5);
 const AFTER_TAKEOVER: Duration = Duration::from_secs(4);
 /// The least time between two loads of the same zone's queue.
 const BETWEEN_LOADS: Duration = Duration::from_secs(6);
+/// ARC still showing the old song this long after the phone was asked to hide it: asked again.
+const HIDE_AGAIN: Duration = Duration::from_secs(20);
+/// How many times the phone is asked to hide ARC for one song here.
+const HIDE_TRIES: u32 = 3;
 
 /// The living queue's part of the settings.
 #[derive(Clone, Default, PartialEq)]
@@ -132,6 +136,10 @@ struct Run {
     loaded: HashMap<String, Instant>,
     /// Each phone's ARC state as last seen (companion.rs).
     arc_states: HashMap<String, String>,
+    /// The song here each ARC was last put on the silent track for, when it was last asked, and how many
+    /// times (asked again after a while when ARC still shows the old song; forgotten once ARC plays or
+    /// shows the song here, so the same song coming round again counts afresh).
+    arc_hidden: HashMap<String, (String, Instant, u32)>,
     /// What each zone here was on when ARC took over: pressing play on one
     /// still there resumes that song, which is carrying on from ARC, not
     /// music of its own.
@@ -382,7 +390,7 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
     if title.is_empty() || is_silent(&title) {
         return;
     }
-    let seen = (title, leader.queue_items_remaining);
+    let seen = (title.clone(), leader.queue_items_remaining);
     if run.seen.as_ref() != Some(&seen) {
         run.seen = Some(seen);
         run.dirty = Some(Instant::now());
@@ -397,6 +405,37 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
             run.retry = None;
         } else {
             run.retry = Some(Instant::now() + RETRY);
+        }
+    }
+    // ARC on Hide Current (it can't be mirrored): once what it shows is no longer the song here, the
+    // phone puts it on the silent track, paused. Pressing play on that in ARC is the handoff. (Once this
+    // song is copied, the playlist included: putting ARC on the silent track makes it fetch the playlist
+    // again, so its copy holds this song by the time play is pressed.)
+    if run.dirty.is_none() && run.hold_off.is_none_or(|at| Instant::now() >= at) {
+        for arc in &arcs {
+            let busy = arc.online && (arc.state == "playing" || arc.state == "buffering");
+            if busy || is_silent(&arc.title) || same_text(&arc.title, &title) {
+                run.arc_hidden.remove(&arc.zone_id);
+                continue;
+            }
+            if !arc.online {
+                continue;
+            }
+            let tries = match run.arc_hidden.get(&arc.zone_id) {
+                Some((song, _, _)) if !same_text(song, &title) => 0,
+                Some((_, at, tries)) if *tries >= HIDE_TRIES || at.elapsed() < HIDE_AGAIN => continue,
+                Some((_, _, tries)) => *tries,
+                None => 0,
+            };
+            println!(
+                "[livequeue] ARC on \"{}\" shows \"{}\" while \"{}\" is on \"{title}\": the phone puts it on the silent track{}",
+                arc.name,
+                arc.title,
+                leader.name,
+                if tries > 0 { format!(" (asked again, {} of {HIDE_TRIES})", tries + 1) } else { String::new() }
+            );
+            crate::companion::command(&arc.zone_id, "hide");
+            run.arc_hidden.insert(arc.zone_id.clone(), (title.clone(), Instant::now(), tries + 1));
         }
     }
 }

@@ -89,6 +89,104 @@ class Handoff {
             say("the silent track is on; Toasted can't be asked, so the playlist's first song, from its start");
         }
         connect(() -> findPlaylist(() -> watch()));
+        // (a handoff left marked running would block every later one and every hide)
+        final long mine = began;
+        main.postDelayed(() -> {
+            if (running && began == mine) stop("the handoff didn't finish within 30 s; given up");
+        }, 30000);
+    }
+
+    /** Until when the silent track playing is the companion's own doing ("hide"), not a press of play. */
+    long hideUntil;
+
+    boolean hiding() {
+        return SystemClock.elapsedRealtime() < hideUntil;
+    }
+
+    /**
+     * Hide Current for ARC: the song at home moved on, so ARC is put on the playlist's silent first row,
+     * paused (it's silent, so nothing is heard while it starts). Playing it also makes ARC fetch the
+     * playlist again, so its copy is fresh by the time play is pressed, which starts the handoff.
+     */
+    void hide() {
+        long now = SystemClock.elapsedRealtime();
+        if (running && now - began < 30000) {
+            say("asked to hide, but a handoff is running (started " + (now - began) / 1000 + " s ago); skipped");
+            return;
+        }
+        if (running) Log.w(TAG, "a handoff was still marked running after " + (now - began) / 1000 + " s; cleared");
+        running = false;
+        hideUntil = now + 15000;
+        began = now;
+        boolean linked = browser != null && browser.isConnected() && aa != null;
+        say("asked to hide: " + (linked ? "connected already" : linking ? "waiting for the connection being made" : "connecting first"));
+        if (linked) hideNow();
+        else linkNow(this::hideNow);
+    }
+
+    void hideNow() {
+        hideUntil = SystemClock.elapsedRealtime() + 15000;
+        findPlaylist(() -> children(playlist, list -> {
+            MediaBrowser.MediaItem silent = null;
+            int rows = 0;
+            if (list != null) {
+                for (MediaBrowser.MediaItem item : list) {
+                    rows++;
+                    if (isTrack(item) && silentRow(item)) {
+                        silent = item;
+                        break;
+                    }
+                }
+            }
+            if (silent == null) {
+                say("couldn't find the silent track in ARC's copy of the Living Queue playlist (" + (list == null ? "no answer" : rows + " rows") + ")");
+                return;
+            }
+            final MediaController.TransportControls go = aa.getTransportControls();
+            hideUntil = SystemClock.elapsedRealtime() + 15000;
+            // (paused once ARC reports the silent track: a pause sent before ARC has started it gets lost)
+            awaited = String.valueOf(silent.getDescription().getTitle()).trim();
+            whenAwaited = () -> {
+                go.pause();
+                say("home moved on: ARC is on the silent track, paused; press play in ARC to carry on");
+                c.sendSoon();
+            };
+            say("putting ARC on the silent track (" + silent.getMediaId() + ")");
+            go.playFromMediaId(silent.getMediaId(), silent.getDescription().getExtras());
+            // Watched every half second until ARC has sat paused on the silent track for 2 s (paused again if it
+            // rolled on playing); from then on a press of play there is the person's, the handoff.
+            final long hid = hideUntil;
+            final long[] pausedSince = {0};
+            final Runnable[] settle = new Runnable[1];
+            settle[0] = () -> {
+                if (aa == null || hideUntil != hid || running) return;
+                PlaybackState st = aa.getPlaybackState();
+                boolean silentNow = isSilent(aa.getMetadata());
+                int state = st == null ? PlaybackState.STATE_NONE : st.getState();
+                long now = SystemClock.elapsedRealtime();
+                if (silentNow && state == PlaybackState.STATE_PAUSED) {
+                    if (pausedSince[0] == 0) pausedSince[0] = now;
+                    if (now - pausedSince[0] >= 2000) {
+                        hideUntil = 0;
+                        Log.i(TAG, "handoff +" + (now - began) + " ms: ARC sits paused on the silent track; play there now hands over");
+                        return;
+                    }
+                } else {
+                    pausedSince[0] = 0;
+                    if (silentNow && state == PlaybackState.STATE_PLAYING && whenAwaited == null) go.pause();
+                }
+                if (now < hid) main.postDelayed(settle[0], 500);
+            };
+            main.postDelayed(settle[0], 500);
+            main.postDelayed(() -> {
+                if (whenAwaited != null && !running) {
+                    awaited = null;
+                    whenAwaited = null;
+                    MediaMetadata m = aa == null ? null : aa.getMetadata();
+                    say("ARC didn't report the silent track within 10 s (it shows " + (m == null ? "nothing" : "\"" + m.getString(MediaMetadata.METADATA_KEY_TITLE) + "\"") + ")");
+                }
+            }, 10000);
+        }));
     }
 
     /**

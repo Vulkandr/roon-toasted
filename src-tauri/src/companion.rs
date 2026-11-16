@@ -312,8 +312,11 @@ fn zone_id(device: &Device) -> String {
     format!("arc:{}", device.id)
 }
 
-/// The paired phones and what each last said.
+/// The paired phones and what each last said (for the Living Queue pages).
 pub fn devices(app: &AppHandle) -> Vec<DeviceView> {
+    if preview_soon() {
+        return Vec::new();
+    }
     let heard = HEARD.lock().unwrap();
     load_devices(app)
         .iter()
@@ -334,9 +337,35 @@ fn tell_page(app: &AppHandle) {
     let _ = app.emit("companion-devices", devices(app));
 }
 
+/// Whether phones can be paired: dev builds only while the companion app is unreleased ("Coming soon" on the
+/// Living Queue pages). A release still serves phones paired before.
+pub fn open() -> bool {
+    cfg!(debug_assertions) && !preview_soon()
+}
+
+/// Dev switch: the pages as a new user of a release sees them (no pairing, no phones listed; phones paired
+/// before still work). On while a file named `companion-soon` is in the app data folder, or with
+/// TOASTED_COMPANION_SOON=1 set.
+fn preview_soon() -> bool {
+    std::env::var_os("TOASTED_COMPANION_SOON").is_some() || SOON_FILE.lock().unwrap().as_ref().is_some_and(|f| f.exists())
+}
+
+/// Where the dev switch's file goes (set in start).
+static SOON_FILE: Mutex<Option<PathBuf>> = Mutex::new(None);
+
 /// Starts listening (in setup); runs for the life of the app.
 pub fn start(app: &AppHandle) {
-    remember_names(&load_devices(app));
+    let paired = load_devices(app);
+    remember_names(&paired);
+    *SOON_FILE.lock().unwrap() = app.path().app_data_dir().ok().map(|d| d.join("companion-soon"));
+    if cfg!(debug_assertions) {
+        println!("[companion] pairing {} (dev build{})", if open() { "open" } else { "shown as Coming soon" }, if preview_soon() { ", the Coming soon preview is on" } else { "" });
+    }
+    if !open() && paired.is_empty() {
+        // (nothing to listen for: no phone can pair, so no network listener, and no firewall question)
+        println!("[companion] coming soon: not listening (no phone paired)");
+        return;
+    }
     let tcp = app.clone();
     tauri::async_runtime::spawn(async move {
         loop {
@@ -616,6 +645,12 @@ pub fn companion_devices(app: AppHandle) -> Vec<DeviceView> {
 
 /// A pairing code for the Living Queue page: the one in force, or a new one
 /// (`fresh`). Answers the code and the seconds it has left.
+/// Whether this build pairs phones (see open()): the Living Queue pages show "Coming soon" otherwise.
+#[tauri::command]
+pub fn companion_open() -> bool {
+    open()
+}
+
 #[tauri::command]
 pub fn companion_pair_code(fresh: bool) -> serde_json::Value {
     let mut pairing = PAIRING.lock().unwrap();
