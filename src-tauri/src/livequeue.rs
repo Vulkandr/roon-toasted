@@ -48,6 +48,23 @@ use crate::zones::{ZoneView, Zones};
 const SONGS: usize = 25;
 /// What the making of the silent track and its playlist (silenttrack.rs)
 /// is at: not asked for, under way, or done (well or not).
+/// The zone here that leads, as the phones are told it (companion.rs): what
+/// a handoff to ARC carries on from.
+#[derive(Clone, serde::Serialize)]
+pub struct LeaderNow {
+    pub zone: String,
+    pub title: String,
+    pub artist: String,
+    pub seconds: f64,
+    pub state: String,
+}
+
+static LEADER: Mutex<Option<LeaderNow>> = Mutex::new(None);
+
+pub fn leader_now() -> Option<LeaderNow> {
+    LEADER.lock().unwrap().clone()
+}
+
 static SETUP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
 const SETUP_DONE: u8 = 2;
 /// How long the leader's song and queue must have stood still before
@@ -113,6 +130,12 @@ struct Run {
     setup_asked: bool,
     /// When each zone's queue was last loaded.
     loaded: HashMap<String, Instant>,
+    /// Each phone's ARC state as last seen (companion.rs).
+    arc_states: HashMap<String, String>,
+    /// What each zone here was on when ARC took over: pressing play on one
+    /// still there resumes that song, which is carrying on from ARC, not
+    /// music of its own.
+    left_on: HashMap<String, String>,
     /// Nothing is copied before this (see AFTER_TAKEOVER).
     hold_off: Option<Instant>,
 }
@@ -161,8 +184,34 @@ pub fn start(app: &AppHandle) {
         // (dev build, for now: what the Core tells about where its music is kept, a moment after the link is up)
         let mut storage_told: Option<Instant> = None;
         let mut storage_done = !cfg!(debug_assertions);
+        // (dev build, for now: every zone the library link knows of, the private ones too, told when one
+        // comes, goes or changes state; for finding ARC)
+        let mut zones_seen: HashMap<String, String> = HashMap::new();
+        let mut zones_look = Instant::now();
         loop {
             tick.tick().await;
+            if cfg!(debug_assertions) && zones_look.elapsed() >= Duration::from_secs(2) {
+                zones_look = Instant::now();
+                if let Some(client) = app.state::<Library>().client() {
+                    let now: HashMap<String, String> = client.zone_report().into_iter().collect();
+                    let short = |m: &str| -> String {
+                        m.split("; ").filter(|f| ["Name:", "State:", "PrivateToMachineId:", "NowPlaying:", "ZoneId:"].iter().any(|k| f.starts_with(k))).collect::<Vec<_>>().join("; ")
+                    };
+                    for (oid, members) in &now {
+                        match zones_seen.get(oid) {
+                            None => println!("[livequeue] zones: new {oid}: {members}"),
+                            Some(before) if short(before) != short(members) => println!("[livequeue] zones: {oid} now: {}", short(members)),
+                            _ => {}
+                        }
+                    }
+                    for oid in zones_seen.keys().filter(|o| !now.contains_key(*o)) {
+                        println!("[livequeue] zones: gone {oid}: {}", short(&zones_seen[oid]));
+                    }
+                    zones_seen = now;
+                } else {
+                    zones_seen.clear();
+                }
+            }
             if !storage_done {
                 if let Some(client) = app.state::<Library>().client() {
                     let since = *storage_told.get_or_insert_with(Instant::now);
@@ -223,8 +272,22 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
     }
     run.states = members.iter().map(|z| (z.zone_id.clone(), z.state)).collect();
 
+    // ARC on the phones taking part (through the companion app), and the one that just started playing
+    let arcs: Vec<crate::companion::ArcNow> = crate::companion::arcs().into_iter().filter(|a| run.config.zones.get(&a.zone_id).is_some_and(|m| m == "hide")).collect();
+    // (started: it plays now and didn't before; on the silent track, the companion's handoff, counts as not
+    // playing, its state kept as "silent:<state>")
+    let arc_started = arcs
+        .iter()
+        .find(|a| a.playing() && !is_silent(&a.title) && run.arc_states.get(&a.zone_id).is_some_and(|before| before != "playing"))
+        .cloned();
+    run.arc_states = arcs
+        .iter()
+        .map(|a| (a.zone_id.clone(), if !a.online { "away".into() } else if is_silent(&a.title) { format!("silent:{}", a.state) } else { a.state.clone() }))
+        .collect();
+
     // The leader: kept while its zone is there; without one, the zone that is playing
-    if run.leader.as_ref().is_some_and(|id| !members.iter().any(|z| &z.zone_id == id)) {
+    let here = |id: &String| members.iter().any(|z| &z.zone_id == id) || arcs.iter().any(|a| &a.zone_id == id);
+    if run.leader.as_ref().is_some_and(|id| !here(id)) {
         println!("[livequeue] the leading zone is gone");
         run.leader = None;
         run.seen = None;
@@ -234,9 +297,69 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
             println!("[livequeue] \"{}\" leads, on \"{}\"", z.name, title_of(z));
             run.leader = Some(z.zone_id.clone());
             run.seen = None;
+        } else if let Some(a) = arcs.iter().find(|a| a.playing() && !is_silent(&a.title)) {
+            println!("[livequeue] ARC on \"{}\" leads, on \"{}\"", a.name, a.title);
+            run.left_on = members.iter().map(|z| (z.zone_id.clone(), title_of(z))).collect();
+            run.leader = Some(a.zone_id.clone());
+            run.seen = None;
         }
     }
-    let Some(leader_id) = run.leader.clone() else { return };
+    let Some(leader_id) = run.leader.clone() else {
+        *LEADER.lock().unwrap() = None;
+        return;
+    };
+    *LEADER.lock().unwrap() = members.iter().find(|z| z.zone_id == leader_id).and_then(|z| {
+        let n = z.now_playing.as_ref()?;
+        Some(LeaderNow { zone: z.name.clone(), title: n.title.clone(), artist: n.artist.clone(), seconds: z.seek_position.unwrap_or(0.0), state: z.state.to_string() })
+    });
+
+    // ARC started playing while another zone led: it leads now, and the zone left is paused
+    if let Some(arc) = arc_started.filter(|a| a.zone_id != leader_id) {
+        println!("[livequeue] ARC on \"{}\" started (on \"{}\") while another zone led; it leads now", arc.name, arc.title);
+        if let Some(left) = members.iter().find(|z| z.zone_id == leader_id) {
+            if going(left.state) {
+                pause_zone(app, left);
+            }
+        } else if leader_id.starts_with("arc:") {
+            crate::companion::command(&leader_id, "pause");
+        }
+        run.left_on = members.iter().map(|z| (z.zone_id.clone(), title_of(z))).collect();
+        run.leader = Some(arc.zone_id.clone());
+        run.seen = None;
+        run.hold_off = Some(Instant::now() + AFTER_TAKEOVER);
+        return;
+    }
+    // ARC leads: a zone here that starts carries on from it; otherwise the zones here follow ARC's song
+    if leader_id.starts_with("arc:") {
+        let Some(arc) = arcs.iter().find(|a| a.zone_id == leader_id).cloned() else { return };
+        if let Some(starter) = starters.first() {
+            take_over_from_arc(app, client, run, &arc, starter).await;
+            let now = app.state::<Zones>().payload_now().zones;
+            run.states = now.iter().filter(|z| run.config.zones.contains_key(&z.zone_id)).map(|z| (z.zone_id.clone(), z.state)).collect();
+            return;
+        }
+        if arc.title.is_empty() || is_silent(&arc.title) {
+            return;
+        }
+        let seen = (arc.title.clone(), None);
+        if run.seen.as_ref() != Some(&seen) {
+            run.seen = Some(seen);
+            run.dirty = Some(Instant::now());
+            run.retry = None;
+        }
+        let due = run.dirty.is_some_and(|since| since.elapsed() >= SETTLE)
+            && run.retry.is_none_or(|at| Instant::now() >= at)
+            && run.hold_off.is_none_or(|at| Instant::now() >= at);
+        if due {
+            if copy_from_arc(app, client, run, &arc, &members).await {
+                run.dirty = None;
+                run.retry = None;
+            } else {
+                run.retry = Some(Instant::now() + RETRY);
+            }
+        }
+        return;
+    }
     // (the silent track and its playlist were just made: everything is copied again, with them)
     if SETUP.compare_exchange(SETUP_DONE, 0, std::sync::atomic::Ordering::SeqCst, std::sync::atomic::Ordering::SeqCst).is_ok() {
         run.dirty = Some(Instant::now());
@@ -281,22 +404,33 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
 /// The leader's songs, the playing one first; none when the queue hasn't
 /// caught up with what the zone says is playing.
 async fn songs_of(client: &LibraryClient, leader: &ZoneView) -> Vec<QueueSong> {
-    let songs = match client.queue_songs(&leader.zone_id, None, 0).await {
-        Ok(songs) => songs,
+    let (songs, report) = match client.queue_songs_report(&leader.zone_id, None, 0, false).await {
+        Ok(got) => got,
         Err(e) => {
             println!("[livequeue] the queue of \"{}\" could not be read: {e:?}", leader.name);
             return Vec::new();
         }
     };
-    let ahead: Vec<QueueSong> = songs.into_iter().filter(|s| !s.played && !s.skipped).take(SONGS).collect();
-    match ahead.first() {
-        Some(first) if first.title == title_of(leader) => ahead,
-        Some(first) => {
-            println!("[livequeue] the queue of \"{}\" starts at \"{}\", not at \"{}\" yet", leader.name, first.title, title_of(leader));
-            Vec::new()
-        }
-        None => Vec::new(),
+    // From the song the Core marks as playing on (a radio song can come marked played as well); without
+    // one, the songs not played yet
+    let ahead: Vec<QueueSong> = match songs.iter().position(|s| s.current) {
+        Some(at) => songs[at..].iter().take(SONGS).cloned().collect(),
+        None => songs.iter().filter(|s| !s.played && !s.skipped).take(SONGS).cloned().collect(),
+    };
+    let why = match ahead.first() {
+        Some(first) if first.title == title_of(leader) => return ahead,
+        Some(first) => format!("starts at \"{}\", not at \"{}\" yet", first.title, title_of(leader)),
+        None => format!("has nothing from \"{}\" on ({} songs in it; {report})", title_of(leader), songs.len()),
+    };
+    // (said once per song and zone, not at every retry)
+    static TOLD: Mutex<String> = Mutex::new(String::new());
+    let key = format!("{}|{}", leader.zone_id, title_of(leader));
+    let mut told = TOLD.lock().unwrap();
+    if *told != key {
+        *told = key;
+        println!("[livequeue] the queue of \"{}\" {why}; trying again", leader.name);
     }
+    Vec::new()
 }
 
 /// Copies the leader's songs to the mirrored zones and the playlist, and
@@ -559,4 +693,192 @@ async fn land(app: &AppHandle, transport: &Transport, target: &ZoneView, second:
         println!("[livequeue] pickup: \"{}\" is at {at:.0} s, not there yet", target.name);
     }
     println!("[livequeue] pickup: \"{}\" never took the seek", target.name);
+}
+
+/// Pauses a zone, without waiting for the answer (it takes about half a second).
+fn pause_zone(app: &AppHandle, zone: &ZoneView) {
+    let Ok(transport) = app.state::<Zones>().transport() else { return };
+    let (id, name) = (zone.zone_id.clone(), zone.name.clone());
+    tauri::async_runtime::spawn(async move {
+        let pause = transport.control(&id, ControlAction::Pause).await;
+        println!("[livequeue] pause of \"{name}\": {pause:?}");
+    });
+}
+
+fn same_text(a: &str, b: &str) -> bool {
+    a.trim().eq_ignore_ascii_case(b.trim())
+}
+
+/// One artist line names the other (ARC and a search can join several artists differently).
+fn same_artist(a: &str, b: &str) -> bool {
+    let (a, b) = (a.trim().to_lowercase(), b.trim().to_lowercase());
+    !a.is_empty() && !b.is_empty() && (a.contains(&b) || b.contains(&a) || a.split([',', '/', '&']).next().map(str::trim) == b.split([',', '/', '&']).next().map(str::trim))
+}
+
+/// ARC's song as Roon songs to play, with what comes after it when that is
+/// known: from the Living Queue playlist when ARC is playing from it (that
+/// song and the ones under it), else the song alone, found by a search.
+async fn songs_for_arc(client: &LibraryClient, arc: &crate::companion::ArcNow) -> (Vec<String>, Vec<String>, &'static str) {
+    if let Ok(lists) = client.playlists() {
+        if let Some(list) = lists.into_iter().find(|p| p.name.trim().eq_ignore_ascii_case(crate::silenttrack::PLAYLIST)) {
+            if let Ok(entries) = client.playlist_tracks(&list.handle).await {
+                let rows: Vec<_> = entries.iter().filter(|e| !is_silent(&e.entry.track.title)).collect();
+                if let Some(at) = rows.iter().position(|e| same_text(&e.entry.track.title, &arc.title) && same_artist(&e.entry.track.artist, &arc.artist)) {
+                    let rows = &rows[at..rows.len().min(at + SONGS)];
+                    return (
+                        rows.iter().map(|e| e.entry.handle.clone()).collect(),
+                        rows.iter().map(|e| e.entry.track.title.clone()).collect(),
+                        "from the Living Queue playlist",
+                    );
+                }
+            }
+        }
+    }
+    let query = format!("{} {}", arc.title, arc.artist.split([',', '/', '&']).next().unwrap_or("").trim());
+    match client.search(query.trim(), 25).await {
+        Ok(hits) => {
+            let mut fits: Vec<_> = hits.tracks.into_iter().filter(|t| same_text(&t.title, &arc.title) && same_artist(&t.artist, &arc.artist)).collect();
+            // (the copy in the library first)
+            fits.sort_by_key(|t| !t.in_library);
+            match fits.first() {
+                Some(t) => (vec![t.handle.clone()], vec![t.title.clone()], "found by a search, the song alone"),
+                None => (Vec::new(), Vec::new(), "not found by a search"),
+            }
+        }
+        Err(e) => {
+            println!("[livequeue] the search for \"{query}\" failed: {e:?}");
+            (Vec::new(), Vec::new(), "the search failed")
+        }
+    }
+}
+
+/// A zone here started while ARC led: it carries on from ARC's song and
+/// second (or it brought music of its own), and ARC is paused.
+async fn take_over_from_arc(app: &AppHandle, client: &LibraryClient, run: &mut Run, arc: &crate::companion::ArcNow, starter: &ZoneView) {
+    let seen = Instant::now();
+    let on = title_of(starter);
+    let second = arc.second_at(seen);
+    println!(
+        "[livequeue] \"{}\" started ({}, on \"{on}\") while ARC on \"{}\" leads ({}, on \"{}\" at {second:.0} s)",
+        starter.name, starter.state, arc.name, arc.state, arc.title
+    );
+    crate::companion::command(&arc.zone_id, "pause");
+    let held = run.holds.get(&starter.zone_id).cloned();
+    let resumed = run.left_on.get(&starter.zone_id).is_some_and(|t| !t.is_empty() && same_text(t, &on));
+    let ours = resumed || is_silent(&on) || same_text(&on, &arc.title) || matches!(&held, Some(Holds::Songs(t)) if t.first() == Some(&on));
+    run.left_on.clear();
+    run.leader = Some(starter.zone_id.clone());
+    run.seen = None;
+    run.holds.remove(&starter.zone_id);
+    run.dirty = Some(Instant::now());
+    run.retry = None;
+    run.hold_off = Some(Instant::now() + AFTER_TAKEOVER);
+    if !ours {
+        println!("[livequeue] \"{}\" brought music of its own; it leads now", starter.name);
+        return;
+    }
+    if arc.title.is_empty() {
+        return;
+    }
+    let transport = match app.state::<Zones>().transport() {
+        Ok(t) => t,
+        Err(e) => {
+            println!("[livequeue] {e}");
+            return;
+        }
+    };
+    if same_text(&on, &arc.title) {
+        println!("[livequeue] pickup from ARC: \"{}\" is on the song, moving it to {second:.0} s", starter.name);
+        land(app, &transport, starter, second, seen).await;
+        return;
+    }
+    let (handles, _, how) = songs_for_arc(client, arc).await;
+    if handles.is_empty() {
+        println!("[livequeue] pickup from ARC: \"{}\" {how}; \"{}\" is left as it is", arc.title, starter.name);
+        return;
+    }
+    let cleared = client.queue_clear(&starter.zone_id).await;
+    let played = client.play_tracks_how(&starter.zone_id, &handles, PlayHow::Now).await;
+    println!(
+        "[livequeue] pickup from ARC: \"{}\" ({how}), {} song(s); queue cleared: {cleared:?}, played now: {played:?}, {} ms after the start was seen",
+        arc.title,
+        handles.len(),
+        seen.elapsed().as_millis()
+    );
+    let waiting = Instant::now();
+    while waiting.elapsed() < Duration::from_secs(6) {
+        if zone(app, &starter.zone_id).is_some_and(|z| same_text(&title_of(&z), &arc.title) && going(z.state)) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    match zone(app, &starter.zone_id) {
+        Some(z) if same_text(&title_of(&z), &arc.title) => land(app, &transport, starter, second, seen).await,
+        z => println!("[livequeue] pickup from ARC: \"{}\" never got to \"{}\" (it is on \"{}\")", starter.name, arc.title, z.as_ref().map(title_of).unwrap_or_default()),
+    }
+}
+
+/// ARC leads: its song (and the ones after it, when it plays from the
+/// Living Queue playlist) loaded into the mirrored zones here, and the hide
+/// zones given the silent track once what they show isn't ARC's song. The
+/// playlist is left as it is. False when it should be tried again.
+async fn copy_from_arc(app: &AppHandle, client: &LibraryClient, run: &mut Run, arc: &crate::companion::ArcNow, members: &[&ZoneView]) -> bool {
+    let began = Instant::now();
+    let (handles, titles, how) = songs_for_arc(client, arc).await;
+    if handles.is_empty() {
+        println!("[livequeue] ARC's \"{}\" {how}; the zones here are left as they are", arc.title);
+        return true;
+    }
+    let mut done = Vec::new();
+    let mut waiting = false;
+    for z in members {
+        let Some(now) = zone(app, &z.zone_id) else { continue };
+        if going(now.state) {
+            continue;
+        }
+        let hide = run.config.zones.get(&z.zone_id).is_some_and(|m| m == "hide");
+        let (give, holds) = if hide {
+            let Some(silent) = run.silent.clone() else { continue };
+            match run.holds.get(&z.zone_id) {
+                Some(Holds::Silent) => continue,
+                Some(Holds::Songs(held)) if held.first() == titles.first() => continue,
+                _ => {}
+            }
+            // (one that still shows the song it was left in, ARC's song before this one, keeps it until now)
+            if run.left_on.get(&z.zone_id).is_some_and(|t| same_text(t, &title_of(&now))) && same_text(&title_of(&now), &arc.title) {
+                continue;
+            }
+            (vec![silent], Holds::Silent)
+        } else {
+            if run.holds.get(&z.zone_id) == Some(&Holds::Songs(titles.clone())) || same_text(&title_of(&now), &arc.title) && titles.len() == 1 {
+                continue;
+            }
+            (handles.clone(), Holds::Songs(titles.clone()))
+        };
+        if run.loaded.get(&z.zone_id).is_some_and(|at| at.elapsed() < BETWEEN_LOADS) {
+            waiting = true;
+            continue;
+        }
+        run.loaded.insert(z.zone_id.clone(), Instant::now());
+        if let Err(e) = client.queue_clear(&z.zone_id).await {
+            println!("[livequeue] the queue of \"{}\" could not be cleared: {e:?}", z.name);
+            continue;
+        }
+        match client.play_tracks_how(&z.zone_id, &give, PlayHow::Queue).await {
+            Ok(()) => {
+                done.push(format!("\"{}\" ({})", z.name, if hide { "the silent track".to_string() } else { format!("{} songs", give.len()) }));
+                run.holds.insert(z.zone_id.clone(), holds);
+            }
+            Err(e) => println!("[livequeue] the songs could not be added to the queue of \"{}\": {e:?}", z.name),
+        }
+    }
+    println!(
+        "[livequeue] ARC on \"{}\" is on \"{}\" ({how}), {} song(s) in {} ms; zones: {}",
+        arc.name,
+        arc.title,
+        handles.len(),
+        began.elapsed().as_millis(),
+        if done.is_empty() { "none to load".to_string() } else { done.join(", ") },
+    );
+    !waiting
 }

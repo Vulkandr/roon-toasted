@@ -1539,6 +1539,22 @@ const lqTrackBox = document.querySelector("#lq-track");
 const lqTrackMessage = document.querySelector("#lq-track-message");
 const lqTrackFile = document.querySelector("#lq-track-file");
 const lqTrackActions = document.querySelector("#lq-track-actions");
+// Phones with the companion app: Roon ARC as a zone (companion.rs), shown
+// under a divider, Off or Hide Current only.
+let lqPhones = [];
+let lqPairCode = null;
+const lqPhonesBox = document.querySelector("#lq-phones");
+const LQ_ARC_MODES = LQ_MODES_ARC();
+function LQ_MODES_ARC() {
+  return [
+    ["off", "Off", "ARC takes no part."],
+    [
+      "hide",
+      "Hide Current",
+      "ARC is left alone. Tap the Living Queue playlist in ARC and it carries on at the song and second you were at. (Mirrored can't be offered for ARC: changing its queue from outside starts it playing.)",
+    ],
+  ];
+}
 const LQ_NO_TRACK = "Not available yet: Hide Current needs the silent Living Queue track in your Roon library. See the note at the top of this page.";
 
 function lqStateLine(mode, zone) {
@@ -1554,7 +1570,8 @@ function showLivingQueueZones() {
   lqZones.classList.toggle("off", !lqSettings.on);
   // (the zones Roon has, by name, then the ones that took part and are away)
   const rows = lqLive.map((zone) => ({ id: zone.zoneId, name: zone.name, zone }));
-  for (const id of Object.keys(lqSettings.zones)) {
+  // (ARC on a phone has its own place, under the divider)
+  for (const id of Object.keys(lqSettings.zones).filter((id) => !id.startsWith("arc:"))) {
     if (!rows.some((row) => row.id === id)) rows.push({ id, name: lqSettings.names[id] || "A zone that's gone", zone: null });
   }
   if (!rows.length) {
@@ -1653,6 +1670,126 @@ function showLivingQueueLive(payload) {
   showLivingQueueZones();
 }
 
+function lqClock(ms) {
+  const s = Math.max(0, Math.round((ms || 0) / 1000));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+function lqPhoneLine(phone, mode) {
+  const arc = phone.arc;
+  const song = arc && arc.title ? `${arc.title} at ${lqClock(arc.positionMs)}` : "";
+  if (!phone.online) {
+    if (!phone.lastSeen) return "Not heard from yet. Open the companion app on the phone.";
+    return song ? `Away, last on ${song}` : "Away";
+  }
+  if (mode === "hide" && lqTrack.state !== "ready") return "Waiting for the Living Queue track";
+  if (!arc || !arc.title || arc.state === "none" || arc.state === "stopped") return "Connected, ARC isn't playing";
+  const state = { playing: "Playing", paused: "Paused", buffering: "Loading" }[arc.state] || "Connected";
+  return `${state}, ${song}`;
+}
+
+function showLivingQueuePhones() {
+  lqPhonesBox.replaceChildren();
+  lqPhonesBox.classList.toggle("off", !lqSettings.on);
+  const divider = document.createElement("div");
+  divider.className = "lq-divider";
+  divider.textContent = "Roon ARC, through the companion app";
+  lqPhonesBox.append(divider);
+  for (const phone of lqPhones) {
+    const mode = lqSettings.zones[phone.zoneId] === "hide" ? "hide" : "off";
+    const line = document.createElement("div");
+    line.className = "lq-zone";
+    line.classList.toggle("away", !phone.online);
+    const text = document.createElement("div");
+    text.className = "lq-zone-text";
+    const name = document.createElement("div");
+    name.className = "lq-zone-name";
+    name.textContent = `ARC on ${phone.name}`;
+    const state = document.createElement("div");
+    state.className = "lq-zone-state";
+    state.textContent = lqPhoneLine(phone, mode);
+    text.append(name, state);
+    const side = document.createElement("div");
+    side.style.display = "flex";
+    side.style.alignItems = "center";
+    const pills = document.createElement("div");
+    pills.className = "seg-pills";
+    for (const [value, label, hint] of LQ_ARC_MODES) {
+      const pill = document.createElement("button");
+      pill.type = "button";
+      pill.className = "seg-pill";
+      pill.textContent = label;
+      pill.title = hint;
+      if (value !== "off") pill.classList.add("on-side");
+      pill.classList.toggle("selected", value === mode);
+      const blocked = value === "hide" && lqSettings.on && lqTrack.state !== "ready";
+      if (blocked) {
+        pill.classList.add("unavailable");
+        pill.title = LQ_NO_TRACK;
+      }
+      pill.addEventListener("click", () => {
+        if (!blocked) setLivingQueueZone(phone.zoneId, phone.name, value);
+      });
+      pills.append(pill);
+    }
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "small lq-forget";
+    forget.textContent = "Forget";
+    forget.title = "Unpairs the phone. It has to be paired again to take part.";
+    forget.addEventListener("click", async () => {
+      try {
+        lqPhones = await invoke("companion_forget", { zoneId: phone.zoneId });
+        showLivingQueuePhones();
+      } catch (err) {
+        lqError.textContent = String(err);
+        lqError.hidden = false;
+      }
+    });
+    side.append(pills, forget);
+    line.append(text, side);
+    lqPhonesBox.append(line);
+  }
+  // Pairing: the code in force, or a new one when it has run out
+  const pair = document.createElement("div");
+  pair.className = "lq-pair";
+  const text = document.createElement("span");
+  const code = document.createElement("span");
+  code.className = "lq-pair-code";
+  const fresh = document.createElement("button");
+  fresh.type = "button";
+  fresh.className = "small";
+  fresh.textContent = "New code";
+  fresh.addEventListener("click", () => lqShowPairCode(true));
+  text.append(lqPhones.length ? "Pair another phone: in the companion app, enter " : "Pair a phone: in the companion app, enter ", code);
+  pair.append(text, fresh);
+  lqPhonesBox.append(pair);
+  const shown = lqPairCode && lqPairCode.until > Date.now() ? lqPairCode.code : "";
+  code.textContent = shown ? `${shown.slice(0, 3)} ${shown.slice(3)}` : "...";
+  if (!shown) lqShowPairCode(false);
+}
+
+async function lqShowPairCode(fresh) {
+  try {
+    const got = await invoke("companion_pair_code", { fresh });
+    lqPairCode = { code: got.code, until: Date.now() + got.seconds * 1000 };
+    showLivingQueuePhones();
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+invoke("companion_devices")
+  .then((phones) => {
+    lqPhones = phones;
+    showLivingQueuePhones();
+  })
+  .catch((err) => console.error(err));
+listen("companion-devices", (event) => {
+  lqPhones = event.payload || [];
+  showLivingQueuePhones();
+});
+
 function showLivingQueueTrack(track) {
   lqTrack = track || lqTrack;
   const working = lqTrack.state === "working";
@@ -1664,6 +1801,7 @@ function showLivingQueueTrack(track) {
   lqTrackFile.hidden = !needed || !lqTrack.file;
   lqTrackActions.hidden = !needed;
   showLivingQueueZones();
+  showLivingQueuePhones();
 }
 
 for (const [id, command] of [

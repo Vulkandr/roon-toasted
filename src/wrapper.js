@@ -12933,16 +12933,141 @@ WRAPPED_PAGES.settings = async function () {
   lqTrackBox.className = "settings-lq-track";
   const lqRows = document.createElement("div");
   lqRows.className = "settings-lq-zones";
+  // (phones with the companion app: Roon ARC as a zone, companion.rs, under a divider, Off or Hide Current)
+  let lqPhones = await invoke("companion_devices").catch(() => []);
+  let lqPairCode = null;
+  const lqArcModes = [
+    ["off", "Off", "ARC takes no part."],
+    [
+      "hide",
+      "Hide Current",
+      "ARC is left alone. Tap the Living Queue playlist in ARC and it carries on at the song and second you were at. (Mirrored can't be offered for ARC: changing its queue from outside starts it playing.)",
+    ],
+  ];
+  const lqClock = (ms) => {
+    const s = Math.max(0, Math.round((ms || 0) / 1000));
+    return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  };
+  const lqPhoneLine = (phone, mode) => {
+    const arc = phone.arc;
+    const song = arc && arc.title ? `${arc.title} at ${lqClock(arc.positionMs)}` : "";
+    if (!phone.online) {
+      if (!phone.lastSeen) return "Not heard from yet. Open the companion app on the phone.";
+      return song ? `Away, last on ${song}` : "Away";
+    }
+    if (mode === "hide" && lqTrack.state !== "ready") return "Waiting for the Living Queue track";
+    if (!arc || !arc.title || arc.state === "none" || arc.state === "stopped") return "Connected, ARC isn't playing";
+    const state = { playing: "Playing", paused: "Paused", buffering: "Loading" }[arc.state] || "Connected";
+    return `${state}, ${song}`;
+  };
+  const saveLqZone = async (id, name, value) => {
+    const zones = { ...lqNow.zones };
+    const names = { ...lqNow.names };
+    if (value === "off") {
+      delete zones[id];
+      delete names[id];
+    } else {
+      zones[id] = value;
+      names[id] = name;
+    }
+    try {
+      await invoke("update_settings", { changes: { livingQueueZones: zones, livingQueueNames: names }, shared: true });
+      lqNow.zones = zones;
+      lqNow.names = names;
+      paintLq();
+      wrappedToast("Saved");
+    } catch (err) {
+      wrappedToast(String(err));
+    }
+  };
+  const paintLqPhones = () => {
+    const divider = document.createElement("div");
+    divider.className = "settings-lq-divider";
+    divider.textContent = "Roon ARC, through the companion app";
+    lqRows.append(divider);
+    for (const phone of lqPhones) {
+      const mode = lqNow.zones[phone.zoneId] === "hide" ? "hide" : "off";
+      const pills = document.createElement("div");
+      pills.className = "wrapped-tabs small";
+      for (const [value, label, hint] of lqArcModes) {
+        const pill = document.createElement("button");
+        pill.className = `wrapped-tab${value === mode ? " selected" : ""}`;
+        pill.textContent = label;
+        const blocked = value === "hide" && lqNow.on && lqLink && lqTrack.state !== "ready";
+        if (blocked) pill.classList.add("unavailable");
+        hoverTip(pill, blocked ? "Not available yet: Hide Current needs the silent Living Queue track in your Roon library. See the note at the top of this card." : hint);
+        pill.addEventListener("click", () => {
+          if (value !== mode && !blocked) saveLqZone(phone.zoneId, phone.name, value);
+        });
+        pills.append(pill);
+      }
+      const forget = document.createElement("button");
+      forget.className = "wrapped-button small settings-lq-forget";
+      forget.textContent = "Forget";
+      hoverTip(forget, "Unpairs the phone. It has to be paired again to take part.");
+      forget.addEventListener("click", async () => {
+        try {
+          lqPhones = await invoke("companion_forget", { zoneId: phone.zoneId });
+          paintLq();
+        } catch (err) {
+          wrappedToast(String(err));
+        }
+      });
+      const side = document.createElement("div");
+      side.className = "settings-lq-side";
+      side.append(pills, forget);
+      const line = cardRow(lqRows, `ARC on ${phone.name}`, statusLine(lqPhoneLine(phone, mode)), side);
+      line.classList.toggle("away", !phone.online);
+    }
+    const pair = document.createElement("div");
+    pair.className = "settings-lq-pair";
+    const text = document.createElement("span");
+    const code = document.createElement("span");
+    code.className = "settings-lq-pair-code";
+    const shown = lqPairCode && lqPairCode.until > Date.now() ? lqPairCode.code : "";
+    code.textContent = shown ? `${shown.slice(0, 3)} ${shown.slice(3)}` : "...";
+    text.append(lqPhones.length ? "Pair another phone: in the companion app, enter " : "Pair a phone: in the companion app, enter ", code);
+    const fresh = document.createElement("button");
+    fresh.className = "wrapped-button small";
+    fresh.textContent = "New code";
+    fresh.addEventListener("click", () => lqFetchCode(true));
+    pair.append(text, fresh);
+    lqRows.append(pair);
+    if (!shown) lqFetchCode(false);
+  };
+  const lqFetchCode = async (fresh) => {
+    try {
+      const got = await invoke("companion_pair_code", { fresh });
+      lqPairCode = { code: got.code, until: Date.now() + got.seconds * 1000 };
+      paintLq();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+  // (a change made elsewhere: in Toasted's Settings, or from the phone's own switch)
+  const unlistenLqSettings = await listen("settings-changed", (event) => {
+    if (ticket !== wrappedTicket) return unlistenLqSettings();
+    const s = event.payload || {};
+    lqNow.on = !!s.livingQueue;
+    lqNow.zones = { ...(s.livingQueueZones || {}) };
+    lqNow.names = { ...(s.livingQueueNames || {}) };
+    if (lqSetLink) lqSetLink(!!s.libraryControls);
+    else paintLq();
+  });
+  const unlistenPhones = await listen("companion-devices", (event) => {
+    if (ticket !== wrappedTicket) return unlistenPhones();
+    lqPhones = event.payload || [];
+    paintLq();
+  });
   const paintLq = () => {
     lqRows.replaceChildren();
     lqRows.classList.toggle("off", !lqNow.on || !lqLink);
     const rows = lqLive.map((zone) => ({ id: zone.zoneId, name: zone.name, zone }));
-    for (const id of Object.keys(lqNow.zones)) {
+    for (const id of Object.keys(lqNow.zones).filter((id) => !id.startsWith("arc:"))) {
       if (!rows.some((row) => row.id === id)) rows.push({ id, name: lqNow.names[id] || "A zone that's gone", zone: null });
     }
     if (!rows.length) {
       lqRows.append(statusLine("No zones yet. They show here once Roon is connected."));
-      return;
     }
     for (const row of rows) {
       const mode = lqNow.zones[row.id] || "off";
@@ -12982,6 +13107,7 @@ WRAPPED_PAGES.settings = async function () {
       const line = cardRow(lqRows, row.name, statusLine(state), pills);
       line.classList.toggle("away", !row.zone);
     }
+    paintLqPhones();
   };
   const lqSwitch = toastedPills(
     [

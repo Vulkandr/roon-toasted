@@ -9006,6 +9006,45 @@ body.wrapped-column-moving * {
   pointer-events: none;
 }
 
+/* Roon ARC, through the companion app: under a divider of its own */
+.settings-lq-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-lq-divider::before,
+.settings-lq-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.settings-lq-forget {
+  margin-left: 8px;
+}
+
+.settings-lq-pair {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.settings-lq-pair-code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: var(--text);
+  user-select: text;
+}
+
 /* Hide Current while the silent track it needs isn't in Roon's library */
 .settings-lq-zones .wrapped-tab.unavailable {
   opacity: 0.4;

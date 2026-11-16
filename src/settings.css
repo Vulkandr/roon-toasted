@@ -1592,6 +1592,45 @@ button:disabled {
   margin-top: 10px;
 }
 
+/* Roon ARC, through the companion app: under a divider of its own */
+.lq-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lq-divider::before,
+.lq-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.lq-pair {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0 2px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.lq-pair-code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 15px;
+  letter-spacing: 1px;
+  color: var(--text);
+  user-select: text;
+}
+
+.lq-zone .lq-forget {
+  margin-left: 8px;
+}
+
 .lq-empty {
   padding: 10px 0;
   font-size: 13px;

@@ -1183,6 +1183,41 @@ impl LibraryClient {
         Ok(())
     }
 
+    /// Every Zone object the graph holds, the official API's list or not
+    /// (a zone can be private to one machine, as the phone's own zone of a
+    /// Roon app is): one line per zone, every member but the large ones.
+    pub fn zone_report(&self) -> Vec<(String, String)> {
+        let g = self.inner.graph.lock().unwrap();
+        let show = |v: &Value| -> String {
+            let text = match v {
+                Value::Str(s) => format!("{s:?}"),
+                Value::Bytes(b) => format!("{} bytes", b.len()),
+                Value::Ref(r) => match g.get(*r) {
+                    Some(o) => {
+                        let title = o.str_field("Title").or_else(|| o.str_field("Name")).map(|t| format!(" {t:?}")).unwrap_or_default();
+                        format!("-> {} #{r}{title}", o.short_type())
+                    }
+                    None => format!("-> #{r}"),
+                },
+                Value::Inline(i) => format!("inline, {} members", i.fields.len()),
+                other => format!("{other:?}"),
+            };
+            text.chars().take(120).collect()
+        };
+        let mut out = Vec::new();
+        for z in g.find_by_type("Zone") {
+            let mut members: Vec<String> = z
+                .fields
+                .iter()
+                .filter(|(k, _)| !k.contains("WaveformData"))
+                .map(|(k, v)| format!("{}: {}", k.rsplit("::").next().unwrap_or(k), show(v)))
+                .collect();
+            members.sort();
+            out.push((format!("#{}", z.oid), members.join("; ")));
+        }
+        out
+    }
+
     /// What the graph holds about where the Core keeps music (its storage
     /// locations and folders), one line per object: the type and every
     /// member, for working out where a file can be put for Roon to find.

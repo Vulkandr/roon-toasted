@@ -250,6 +250,9 @@ struct Inner {
     picked_zone_id: Option<String>,
     /// The zone queue.rs is currently following.
     queue_zone_id: Option<String>,
+    /// Roon ARC on paired phones, as zones (companion.rs): ids `arc:<device>`.
+    /// Roon sends no zone for ARC; these are made from what the phones report.
+    arcs: BTreeMap<String, ZoneView>,
 }
 
 /// Zone state, stored in Tauri's managed state.
@@ -277,6 +280,7 @@ impl Zones {
 
     fn payload(inner: &Inner) -> ZonesPayload {
         let mut zones: Vec<ZoneView> = inner.zones.values().cloned().collect();
+        zones.extend(inner.arcs.values().cloned());
         zones.sort_by_key(|z| z.name.to_lowercase());
         // A volume the media keys are moving shows where they've sent it
         // (Roon reports it a few steps at a time; see mediakeys.rs)
@@ -293,7 +297,7 @@ impl Zones {
         let selected_zone_id = inner
             .picked_zone_id
             .clone()
-            .filter(|id| inner.zones.contains_key(id))
+            .filter(|id| inner.zones.contains_key(id) || inner.arcs.contains_key(id))
             .or_else(|| {
                 zones
                     .iter()
@@ -332,9 +336,27 @@ impl Zones {
             crate::discover::zones_updated(app, &payload);
             crate::mediakeys::zones_updated(app, &payload);
             if let Some((core, zone_id)) = queue_change {
-                crate::queue::follow(app, core, zone_id);
+                // (ARC's queue isn't Roon's to follow)
+                crate::queue::follow(app, core, zone_id.filter(|id| !id.starts_with("arc:")));
             }
         }
+    }
+
+    /// ARC's position on a phone, without resending every zone (as Roon's seeks).
+    pub fn arc_seek(&self, zone_id: &str, seconds: f64) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            let Some(z) = inner.arcs.get_mut(zone_id) else { return };
+            z.seek_position = Some(seconds);
+        }
+        if let Some(app) = self.app.get() {
+            let _ = app.emit("roon-seek", SeekPayload { zone_id: zone_id.to_string(), seek_position: Some(seconds) });
+        }
+    }
+
+    /// ARC on the paired phones, as zones (companion.rs), replacing the ones before.
+    pub fn set_arcs(&self, arcs: Vec<ZoneView>) {
+        self.update(|inner| inner.arcs = arcs.into_iter().map(|z| (z.zone_id.clone(), z)).collect());
     }
 
     /// Sends the zones to the pages again as they are now (something that
@@ -468,6 +490,14 @@ pub async fn roon_control(
     zone_id: String,
     action: String,
 ) -> Result<(), String> {
+    // (ARC on a phone: the companion app does it, told with its next word with Toasted)
+    if zone_id.starts_with("arc:") {
+        if !["play", "pause", "playpause", "stop", "next", "previous"].contains(&action.as_str()) {
+            return Err(format!("Unknown action: {action}"));
+        }
+        crate::companion::command(&zone_id, if action == "stop" { "pause" } else { &action });
+        return Ok(());
+    }
     let action = match action.as_str() {
         "play" => ControlAction::Play,
         "pause" => ControlAction::Pause,
@@ -487,6 +517,10 @@ pub async fn roon_control(
 /// Jumps to a position (in seconds) in the current track.
 #[tauri::command]
 pub async fn roon_seek(zones: State<'_, Zones>, zone_id: String, seconds: f64) -> Result<(), String> {
+    if zone_id.starts_with("arc:") {
+        crate::companion::command(&zone_id, &format!("seek:{}", (seconds.max(0.0) * 1000.0).round() as i64));
+        return Ok(());
+    }
     zones
         .transport()?
         .seek(&zone_id, SeekMode::Absolute, seconds.max(0.0).round() as i64)

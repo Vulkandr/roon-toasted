@@ -44,6 +44,7 @@ mod icon;
 mod launch;
 mod library;
 mod livequeue;
+mod companion;
 mod silenttrack;
 mod mediakeys;
 mod update;
@@ -642,6 +643,7 @@ pub fn run() {
             // The status check other apps (the Stream Deck plugin) use to see
             // that Roon: Toasted is running (see status.rs)
             step("status", || status::start(app.handle()));
+            step("companion", || companion::start(app.handle()));
 
             // The toast, the taskbar widget and the "Enable Wrapper" button
             // are shown straight through Windows, which skips Tauri's
@@ -873,6 +875,9 @@ pub fn run() {
             musicfolder::wrapped_music_folder_rescan,
             musicfolder::wrapped_music_folder_status,
             silenttrack::living_queue_track_status,
+            companion::companion_devices,
+            companion::companion_pair_code,
+            companion::companion_forget,
             silenttrack::living_queue_track_check,
             silenttrack::living_queue_track_pick,
             silenttrack::living_queue_track_reveal,
