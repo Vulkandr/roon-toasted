@@ -32,3 +32,8 @@ symbols/
 # Temporary debug output from the Wrapper (goes away with the debug logging)
 skin-log.txt
 skin-none.bmp
+
+# The companion app's build output and signing keys (keys stay private)
+companion/build/
+companion/*.keystore
+companion/*.jks
