@@ -739,6 +739,8 @@ pub fn run() {
 
             // Square corners while in a Zonekeeper zone (see zonekeeper.rs)
             step("zonekeeper", || zonekeeper::start(app.handle()));
+            // The play history's copy follows the music (wrapped.rs)
+            step("plays", || wrapped::watch_plays(app.handle()));
 
             // After switching Cores (the app restarts itself), bring Settings
             // back so the new connection can be seen

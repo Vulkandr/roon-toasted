@@ -6,12 +6,26 @@
       {
         "title": "What's new",
         "items": [
+          ["Living Queue", "One queue that follows you between zones. Press play on another zone that takes part and it carries on at the same song and second, and the zone you left is paused. It is off by default: turn it on under Settings > Living Queue, in Toasted or in Wrapped, and choose for each zone whether it takes part. It needs Hearts & Library."],
+          ["Living Queue: Mirrored and Hide Current", "A Mirrored zone always shows the playing song with the next 24 after it, so you can see what's coming on any of them. A Hide Current zone is left alone so its device can sleep, and shows a short silent \"Living Queue\" track once the music has moved on. Press play on it and it jumps to the song and second you were at. Previous works on a zone that took over, going back through the 5 songs before."],
+          ["Living Queue: what it's doing", "A line under the switch says what the living queue is doing right now: waiting for a zone to play, following a zone and its song, or paused. Toasted makes the silent track itself and puts it in your Roon music folder. If it can't reach that folder, the page says so and offers Choose music folder, Show the file and Check again."],
+          ["Roon ARC", "Roon ARC is listed on the Living Queue page as \"Coming soon\". It will take part through a companion app for Android, in a later release."],
+          ["History keeps up with what you play", "Wrapped's History used to show new plays only after you pressed \"Check for new plays\", or when something else read them. It now picks up each play a few seconds after the song ends or is skipped, and the History page shows it without a click. Top artists, albums and tracks follow along."],
           ["Unavailable songs", "A song Roon can no longer play, because its file is gone or the streaming service dropped it, now says \"Unavailable\" in red as it does in Roon, and its row is dimmed. This shows in playlists, the queue, album pages and an artist's Tracks. Clicking such a song does nothing. In a playlist the X still takes it out."]
+        ]
+      },
+      {
+        "title": "Changes",
+        "items": [
+          ["Favorites and songs found in a Discover list", "Plays from a Discover Weekly or Library Rediscover list used to never count toward your all-time favorites on Home. Now they wait only until you play the song some other way. From then on every play of it counts, the first one from the list too. A song you only ever hear in the lists still doesn't count, so the lists can't push their own picks up your favorites."]
         ]
       },
       {
         "title": "Fixes",
         "items": [
+          ["Library Rediscover and Discover Weekly", "Songs Discover Weekly brought you, once added to your library, came back in Library Rediscover as artists you had \"never played\". Those artists are no longer treated as never played."],
+          ["Library Rediscover across profiles", "Library Rediscover for one profile could include artists from another profile's recent Discover lists, since the library is shared. Artists on another profile's lists of the last 28 days are now left out."],
+          ["Adding to the queue after Play Now", "After playing something with Play Now, adding a song to the queue failed until Toasted was restarted."],
           ["Hearts missing from the Tracks page", "A song hearted on an album page, in a playlist or from the player didn't show up under the Tracks page's hearts filter until the library was read again, and a song newly added to your library didn't show on the Tracks page at all until then. The same went for taking a heart off. Wrapped's copy of your library now hears of every heart and every added song as it happens."],
           ["Hearts missing in playlists", "In a playlist, a hearted song from Qobuz or TIDAL showed an empty heart. Playlists now read each song's heart from your library."],
           ["Playlist songs that aren't in your library", "In a playlist, a song that isn't in your library showed a heart that did nothing when clicked. It now shows a +, which adds the song to your library, as on an album page."]

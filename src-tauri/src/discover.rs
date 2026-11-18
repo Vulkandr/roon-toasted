@@ -1652,7 +1652,6 @@ pub struct TasteArtist {
 /// year's a little more, a hearted artist 20 more), heaviest first.
 pub(crate) async fn home_favorites(app: &AppHandle, client: &LibraryClient) -> (Vec<(String, f64)>, HashMap<String, Heard>) {
     let now = now_ms();
-    // (plays from the lists don't count, as for the lists themselves)
     let every: Vec<(String, String, String, String, i64)> = app.state::<Discover>().with_store(app, |s| {
         s.weekly
             .iter()
@@ -1661,7 +1660,19 @@ pub(crate) async fn home_favorites(app: &AppHandle, client: &LibraryClient) -> (
             .flat_map(|(w, b)| b.tracks.iter().map(move |t| (format!("{}@{}", w.name(), b.built_at), t.track_id.clone(), t.artist.clone(), t.title.clone(), b.built_at)))
             .collect()
     });
-    let ctx = Context { from_lists: plays_from_lists(app, &every), intent: intent_from_recents(client, now).await, ..Default::default() };
+    // For the favorites a song's plays from a list wait only until the song is played some other way (on
+    // its own, from its album, from another playlist): from then on they all count, the first one too. A
+    // song found in a list and then played 30 times has 31 listens; one only ever heard in the lists has
+    // none, so the lists don't push their own picks up the favorites.
+    let mut from_lists = plays_from_lists(app, &every);
+    app.state::<Wrapped>().with_plays(app, |plays| {
+        let song = |p: &roon_library::Play| (p.artist.to_lowercase(), p.title.to_lowercase());
+        let elsewhere: HashSet<(String, String)> = plays.iter().filter(|p| !from_lists.contains(&(p.played_at, p.title.to_lowercase()))).map(song).collect();
+        for p in plays.iter().filter(|p| elsewhere.contains(&song(p))) {
+            from_lists.remove(&(p.played_at, p.title.to_lowercase()));
+        }
+    });
+    let ctx = Context { from_lists, intent: intent_from_recents(client, now).await, ..Default::default() };
     let heard = history_by_artist(app, now, &ctx);
     // (not the last few weeks, which is what Discover Weekly works from:
     // every listen ever counts, and a hearted artist counts as well played)
@@ -3064,7 +3075,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1274;
+pub const BUILD: u32 = 1276;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).

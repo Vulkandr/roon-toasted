@@ -1130,6 +1130,57 @@ pub async fn history_catch_up(app: &AppHandle) -> Result<usize, String> {
     Ok(added)
 }
 
+/// Keeps the copy current while music plays: Roon writes a play down when a song ends or is skipped, so
+/// whenever a zone moves off a song (to the next one, or to nothing) the plays newer than the copy are
+/// read 4 s later, and again at 10 s and 25 s while none has come (the Core has been seen to take up to a
+/// second after the song changed here, and a zone the living queue reloads changes song with no play to
+/// find). The pages hear of new plays the way they hear of a sync ("wrapped-history", done), and show
+/// them.
+pub fn watch_plays(app: &AppHandle) {
+    use std::time::{Duration, Instant};
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // (zone -> the song it was on)
+        let mut on: HashMap<String, String> = HashMap::new();
+        // (when to read, and which try that is)
+        const TRIES: [u64; 3] = [4, 10, 25];
+        let mut due: Option<(Instant, usize)> = None;
+        let mut left = Instant::now();
+        let mut tick = tokio::time::interval(Duration::from_secs(2));
+        loop {
+            tick.tick().await;
+            let zones = app.state::<crate::zones::Zones>().payload_now().zones;
+            let mut now: HashMap<String, String> = HashMap::new();
+            for z in zones {
+                if let Some(np) = &z.now_playing {
+                    now.insert(z.zone_id.clone(), format!("{}|{}|{}", np.title, np.artist_full, np.album));
+                }
+            }
+            // (a zone that left a song: for another, or for none)
+            if on.iter().any(|(zone, song)| now.get(zone) != Some(song)) {
+                left = Instant::now();
+                due = Some((left + Duration::from_secs(TRIES[0]), 0));
+            }
+            on = now;
+            let Some((at, n)) = due else { continue };
+            if Instant::now() < at {
+                continue;
+            }
+            due = None;
+            match history_catch_up(&app).await {
+                Ok(0) => due = TRIES.get(n + 1).map(|after| (left + Duration::from_secs(*after), n + 1)),
+                Ok(_) => {
+                    let status = app.state::<Wrapped>().status(&app);
+                    let _ = app.emit("wrapped-history", Progress { loaded: status.plays, wanted: status.plays, done: true, added: None, error: None, status: Some(status), profile: None });
+                    // (artists new to the history get their tags)
+                    crate::tags::fill_missing(&app);
+                }
+                Err(e) => println!("[wrapped] history after a song: {e}"),
+            }
+        }
+    });
+}
+
 /// The newest plays in the copy, `limit` from `offset`.
 #[tauri::command]
 pub fn wrapped_history_recent(app: AppHandle, limit: Option<usize>, offset: Option<usize>, oldest: Option<bool>) -> Vec<PlayRow> {
