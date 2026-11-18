@@ -250,6 +250,9 @@ pub struct AudioQuality {
 #[serde(rename_all = "camelCase")]
 pub struct AlbumTrack {
     /// Names this track to `set_track_favorite` / `add_track`; valid for this session only.
+    /// Roon shows it as "Unavailable": its file is gone, or the streaming service dropped it.
+    #[serde(default)]
+    pub unavailable: bool,
     pub handle: String,
     pub title: String,
     pub track_number: Option<i32>,
@@ -530,6 +533,9 @@ pub struct RadioSeeds {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TopTrack {
+    /// Roon shows it as "Unavailable": its file is gone, or the streaming service dropped it.
+    #[serde(default)]
+    pub unavailable: bool,
     pub handle: String,
     /// Roon's track id (as the history and the queue know the song).
     pub track_id: Option<String>,
@@ -565,6 +571,9 @@ pub struct TopTrack {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryTrack {
+    /// Roon shows it as "Unavailable": its file is gone, or the streaming service dropped it.
+    #[serde(default)]
+    pub unavailable: bool,
     pub title: String,
     pub artist: String,
     pub album: String,
@@ -618,6 +627,9 @@ pub struct LibraryTrack {
 #[serde(rename_all = "camelCase")]
 pub struct TrackEntry {
     pub handle: String,
+    /// False for a song of a playlist (or tag) that isn't in the library: it gets a + where the others
+    /// have a heart.
+    pub in_library: bool,
     #[serde(flatten)]
     pub track: LibraryTrack,
 }
@@ -717,6 +729,9 @@ impl Default for MixOptions {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueSong {
+    /// Roon shows it as "Unavailable": its file is gone, or the streaming service dropped it.
+    #[serde(default)]
+    pub unavailable: bool,
     pub handle: String,
     pub title: String,
     pub artist: String,
@@ -1451,6 +1466,29 @@ impl LibraryClient {
             self.resolve_library_track(library_id);
         }
         obj
+    }
+
+    /// A song as a list shows it, with its hearts and bans read off the library's own object: a streaming
+    /// song in a playlist is a "metadata" object, which doesn't carry them (a hearted one showed an empty
+    /// heart there).
+    fn describe_listed(&self, g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]>) -> LibraryTrack {
+        let mut out = describe_library_track(g, t, profile);
+        if let Some(state) = self.library_track_object(g, t).filter(|s| s.oid != t.oid) {
+            out.favorite = read_state(state.field("IsFavorite"), profile);
+            out.hearted_by = state_profiles(state.field("IsFavorite"));
+            out.banned_by = state_profiles(state.field("IsBanned"));
+        }
+        out
+    }
+
+    /// A song of the library by its handle, as the library's copy keeps it (None when it isn't in the
+    /// library): for adding a song just hearted or added to a copy read before it was.
+    pub fn library_track(&self, handle: &str) -> Option<LibraryTrack> {
+        let oid: u64 = handle.parse().ok()?;
+        let g = self.inner.graph.lock().unwrap();
+        let t = g.get(oid).filter(|t| t.has_field("LibraryTrackId"))?;
+        let profile = self.profile_sooid(&g);
+        Some(self.describe_listed(&g, t, profile.as_deref()))
     }
 
     /// Asks the Core for the library's track object; the answer lands in the graph and triggers a Track event.
@@ -3042,6 +3080,7 @@ impl LibraryClient {
             let t = g.get(track).filter(|t| t.has_field("Title"))?;
             let album = g.deref(t.field("Album"));
             Some(QueueSong {
+                unavailable: track_unavailable(&g, t),
                 handle: t.oid.to_string(),
                 title: t.str_field("Title").unwrap_or_default().to_string(),
                 artist: strip_credit_markup(album.and_then(|a| a.str_field("PerformedBy")).unwrap_or_default()),
@@ -3369,6 +3408,25 @@ impl LibraryClient {
                 && items.iter().all(|i| g.get(*i).and_then(|it| g.deref(it.field("Track"))).is_some_and(|t| t.has_field("Title")))
         };
         self.wait_until(Duration::from_secs(6), ready).await;
+        // The streaming songs' library objects, which carry their hearts: asked for here, and waited for a
+        // moment, so that the hearts are right the first time the playlist is opened
+        let wanted: Vec<u64> = {
+            let g = self.inner.graph.lock().unwrap();
+            let items = g.get(query).and_then(|q| q.items.clone()).unwrap_or_default();
+            items
+                .into_iter()
+                .filter_map(|i| g.deref(g.get(i)?.field("Track")))
+                .filter(|t| self.library_track_object(&g, t).is_none())
+                .filter_map(|t| t.long_field("LibraryTrackId"))
+                .collect()
+        };
+        if !wanted.is_empty() {
+            self.wait_until(Duration::from_millis(2500), |g| {
+                let known = self.inner.library_tracks.lock().unwrap();
+                wanted.iter().all(|id| known.get(id).is_some_and(|oid| g.get(*oid).is_some()))
+            })
+            .await;
+        }
         let g = self.inner.graph.lock().unwrap();
         let profile = self.profile_sooid(&g);
         let items = g.get(query).and_then(|q| q.items.clone()).unwrap_or_default();
@@ -3379,7 +3437,7 @@ impl LibraryClient {
                 let track = g.deref(item.field("Track"))?;
                 Some(PlaylistEntry {
                     item_handle: item.oid.to_string(),
-                    entry: TrackEntry { handle: track.oid.to_string(), track: describe_library_track(&g, track, profile.as_deref()) },
+                    entry: TrackEntry { handle: track.oid.to_string(), in_library: track.has_field("LibraryTrackId"), track: self.describe_listed(&g, track, profile.as_deref()) },
                 })
             })
             .collect())
@@ -3527,7 +3585,7 @@ impl LibraryClient {
             match kind {
                 "Album" => out.albums.push(describe_album_card(&g, o, profile.as_deref())),
                 "Performer" => out.artists.push(describe_artist_card(&g, o, profile.as_deref())),
-                _ => out.tracks.push(TrackEntry { handle: o.oid.to_string(), track: describe_library_track(&g, o, profile.as_deref()) }),
+                _ => out.tracks.push(TrackEntry { handle: o.oid.to_string(), in_library: o.has_field("LibraryTrackId"), track: self.describe_listed(&g, o, profile.as_deref()) }),
             }
         }
         Ok(out)
@@ -3585,7 +3643,7 @@ impl LibraryClient {
                     added_at,
                     album: (kind == "album").then(|| describe_album_card(&g, o, profile.as_deref())),
                     artist: (kind == "artist").then(|| describe_artist_card(&g, o, profile.as_deref())),
-                    track: (kind == "track").then(|| TrackEntry { handle: o.oid.to_string(), track: describe_library_track(&g, o, profile.as_deref()) }),
+                    track: (kind == "track").then(|| TrackEntry { handle: o.oid.to_string(), in_library: o.has_field("LibraryTrackId"), track: self.describe_listed(&g, o, profile.as_deref()) }),
                 })
             })
             .collect();
@@ -3953,6 +4011,7 @@ impl LibraryClient {
                 let album_title = album.and_then(|a| a.str_field("Title")).unwrap_or_default().to_string();
                 let flagged = album.and_then(|a| a.field("IsLive")).and_then(Value::as_bool) == Some(true);
                 TopTrack {
+                    unavailable: track_unavailable(&g, t),
                     handle: t.oid.to_string(),
                     image_key: album.and_then(|a| image_key(&g, a, "Image")),
                     track_id: t.long_field("TrackId").map(|id| id.to_string()),
@@ -4011,6 +4070,7 @@ impl LibraryClient {
             };
             for t in tracks.iter().filter(proper).take(per_album) {
                 out.push(TopTrack {
+                    unavailable: t.unavailable,
                     handle: t.handle.clone(),
                     image_key: album.image_key.clone(),
                     track_id: t.track_id.map(|id| id.to_string()),
@@ -4076,6 +4136,7 @@ impl LibraryClient {
         usable
             .into_iter()
             .map(|t| TopTrack {
+                unavailable: t.unavailable,
                 handle: t.handle.clone(),
                     image_key: album.image_key.clone(),
                 track_id: t.track_id.map(|id| id.to_string()),
@@ -4740,6 +4801,7 @@ impl LibraryClient {
             let ids = [t.long_field("TrackId"), t.long_field("LibraryTrackId")];
             let state_obj = self.library_track_object(&g, t).unwrap_or(t);
             out.push(AlbumTrack {
+                unavailable: track_unavailable(&g, t),
                 handle: oid.to_string(),
                 title: t.str_field("Title").unwrap_or_default().to_string(),
                 track_number: t.field("TrackNumber").and_then(Value::as_int),
@@ -5018,6 +5080,7 @@ impl LibraryClient {
         let profile = self.profile_sooid(&g);
         let state_obj = self.library_track_object(&g, t).unwrap_or(t);
         Some(AlbumTrack {
+            unavailable: track_unavailable(&g, t),
             handle: oid.to_string(),
             title: t.str_field("Title").unwrap_or_default().to_string(),
             track_number: t.field("TrackNumber").and_then(Value::as_int),
@@ -5400,6 +5463,16 @@ fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) 
     }
 }
 
+/// Whether Roon shows this song as "Unavailable": the Core marks it deleted (its file is gone), or sent it
+/// whole without IsAvailable (a flag that is false is left out; only counted where the song's type has the
+/// member at all, and the song came with its title).
+fn track_unavailable(g: &ObjectGraph, t: &RoonObject) -> bool {
+    if t.field("IsDeleted").and_then(Value::as_bool) == Some(true) {
+        return true;
+    }
+    t.has_field("Title") && !t.has_field("IsAvailable") && g.types.get(&t.type_id).is_some_and(|d| d.members.iter().any(|m| m.name.ends_with("::IsAvailable")))
+}
+
 fn describe_library_track(g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]>) -> LibraryTrack {
     let album = g.deref(t.field("Album"));
     let performer = album.and_then(|a| g.deref(a.field("MainPerformers"))).and_then(|list| list.items.as_ref()?.first().copied());
@@ -5409,6 +5482,7 @@ fn describe_library_track(g: &ObjectGraph, t: &RoonObject, profile: Option<&[u8]
         .or_else(|| album.and_then(|a| a.str_field("PerformedBy")))
         .unwrap_or_default();
     LibraryTrack {
+        unavailable: track_unavailable(g, t),
         title: t.str_field("Title").unwrap_or_default().to_string(),
         artist: strip_credit_markup(artist),
         album: album.and_then(|a| a.str_field("Title")).unwrap_or_default().to_string(),

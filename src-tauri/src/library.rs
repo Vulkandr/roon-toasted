@@ -571,11 +571,13 @@ pub fn library_track(library: State<'_, Library>, zone_id: String) -> Result<Opt
 #[tauri::command]
 pub async fn library_heart(app: AppHandle, zone_id: String, favorite: bool) -> Result<TrackInfo, String> {
     let add = add_mode(&app);
-    over_reconnect(&app, |client| {
+    let track = over_reconnect(&app, |client| {
         let zone_id = zone_id.clone();
         async move { client.set_favorite(&zone_id, favorite, Some(add)).await }
     })
-    .await
+    .await?;
+    tell_copy_of(&app, track.library_track_id.as_ref()).await;
+    Ok(track)
 }
 
 /// Bans the zone's current track for the profile in use, or lifts its ban
@@ -659,11 +661,13 @@ pub async fn library_track_ban(app: AppHandle, handle: String, banned: bool, son
 #[tauri::command]
 pub async fn library_add(app: AppHandle, zone_id: String, mode: Option<AddMode>) -> Result<TrackInfo, String> {
     let add = mode.unwrap_or_else(|| add_mode(&app));
-    over_reconnect(&app, |client| {
+    let track = over_reconnect(&app, |client| {
         let zone_id = zone_id.clone();
         async move { client.add_to_library(&zone_id, add).await }
     })
-    .await
+    .await?;
+    tell_copy_of(&app, track.library_track_id.as_ref()).await;
+    Ok(track)
 }
 
 /// Hearts or un-hearts the album of the zone's current track (it must be in the library).
@@ -692,7 +696,27 @@ pub async fn library_track_heart(app: AppHandle, handle: String, favorite: bool)
     if favorite {
         client.add_track(&handle).await.map_err(describe)?;
     }
-    client.set_track_favorite(&handle, favorite).await.map_err(describe)
+    let track = client.set_track_favorite(&handle, favorite).await.map_err(describe)?;
+    tell_copy(&app, &client, &handle);
+    Ok(track)
+}
+
+/// Wrapped's copy of the library, which the Tracks page and its hearts filter read, hears of a song
+/// hearted, un-hearted or added, wherever that was done (an album page, a playlist, the player, the
+/// Toaster): its hearts, and the song itself when it came into the library after the copy was read.
+fn tell_copy(app: &AppHandle, client: &LibraryClient, handle: &str) {
+    if let Some(track) = client.library_track(handle) {
+        crate::wrapped::library_copy_put(app, track);
+    }
+}
+
+/// The same for the zone's playing song, known by the library's id for it.
+async fn tell_copy_of(app: &AppHandle, library_track_id: Option<&String>) {
+    let Some(id) = library_track_id.and_then(|id| id.parse::<u64>().ok()) else { return };
+    let Some(client) = app.state::<Library>().client() else { return };
+    if let Ok(handle) = client.track_by_id(id).await {
+        tell_copy(app, &client, &handle);
+    }
 }
 
 /// Adds one album track to the library by its handle.
@@ -700,7 +724,9 @@ pub async fn library_track_heart(app: AppHandle, handle: String, favorite: bool)
 pub async fn library_track_add(app: AppHandle, handle: String) -> Result<AlbumTrack, String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
-    client.add_track(&handle).await.map_err(describe)
+    let track = client.add_track(&handle).await.map_err(describe)?;
+    tell_copy(&app, &client, &handle);
+    Ok(track)
 }
 
 /// The playing artist's discography, each album with a session handle.

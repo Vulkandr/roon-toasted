@@ -9118,3 +9118,41 @@ body.wrapped-column-moving * {
   gap: 8px;
   margin-top: 10px;
 }
+
+/* A song Roon shows as "Unavailable" (wrapper.js, markUnavailable): the red word over its title, the rest of
+   the row dimmed, nothing on it to click but a playlist's X */
+.unavailable-tag {
+  display: block;
+  color: #e5484d;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.unavailable,
+.unavailable .link {
+  cursor: default;
+}
+
+.unavailable .unavailable-title {
+  color: var(--muted);
+  text-decoration: none;
+}
+
+.unavailable > *:not(.unavailable-title):not(:has(.unavailable-tag)):not(.wrapped-row-remove) {
+  opacity: 0.45;
+}
+
+.unavailable :has(> .unavailable-title) > *:not(.unavailable-title) {
+  opacity: 0.45;
+}
+
+.unavailable > *:not(.wrapped-row-remove) {
+  pointer-events: none;
+}
+
+.unavailable .queue-play,
+.unavailable .wrapped-track-play,
+.unavailable .wrapped-artist-track-play {
+  visibility: hidden;
+}

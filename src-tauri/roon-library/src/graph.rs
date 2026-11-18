@@ -291,8 +291,9 @@ impl ObjectGraph {
                 let _ = self.define_type(&mut r);
                 None
             }
-            push::PUSHOBJ | push::UPDATEOBJ => self.push_object(&mut r, true).ok(),
-            push::PUSHSTUB => self.push_object(&mut r, false).ok(),
+            push::PUSHOBJ => self.push_object(&mut r, true, true).ok(),
+            push::UPDATEOBJ => self.push_object(&mut r, true, false).ok(),
+            push::PUSHSTUB => self.push_object(&mut r, false, false).ok(),
             _ => None,
         }
     }
@@ -311,7 +312,11 @@ impl ObjectGraph {
         Ok(())
     }
 
-    fn push_object(&mut self, r: &mut Reader, populate: bool) -> ReadResult<u64> {
+    /// `whole`: a first push of the object (PUSHOBJ), which is all of it. An update (UPDATEOBJ) has been
+    /// all of it too whenever one was looked at (a song going unavailable and coming back, 36 and 37
+    /// members), but it is only taken for that when it brings more than half of what is held, in case
+    /// the Core also sends a change on its own.
+    fn push_object(&mut self, r: &mut Reader, populate: bool, whole: bool) -> ReadResult<u64> {
         let oid = r.flex_long()?;
         let type_id = r.flex_int()?;
         let def = self.types.get(&type_id).cloned();
@@ -321,6 +326,9 @@ impl ObjectGraph {
         let mut structs = None;
         let mut ints = None;
         let mut strings = None;
+        // The true/false members this object's type has, when all of it was read: the ones an update
+        // leaves out are false now (see below)
+        let mut flags: Option<Vec<String>> = None;
 
         if populate {
             if let Some(def) = &def {
@@ -393,7 +401,9 @@ impl ObjectGraph {
                     }
                 } else {
                     // A field we can't finish reading ends the object; keep what we have.
-                    let _ = self.read_sparse_fields(r, def, &mut fields);
+                    if self.read_sparse_fields(r, def, &mut fields) == Ok(true) {
+                        flags = Some(def.members.iter().filter(|m| matches!(m.prop_type, PropertyType::Bool | PropertyType::NullableBool)).map(|m| m.name.clone()).collect());
+                    }
                 }
             }
         }
@@ -401,6 +411,17 @@ impl ObjectGraph {
         match self.objects.get_mut(&oid) {
             Some(existing) => {
                 if populate {
+                    // The whole object leaves out what is false (or null): a flag it left out went false,
+                    // and must not keep the `true` an earlier push gave it (a song that stopped being
+                    // available came without IsAvailable, and one that came back without IsDeleted). A
+                    // change sent on its own says nothing about the rest.
+                    if let Some(flags) = flags.as_ref().filter(|_| whole || fields.len() * 2 > existing.fields.len()) {
+                        for name in flags {
+                            if !fields.contains_key(name) {
+                                existing.fields.remove(name);
+                            }
+                        }
+                    }
                     existing.fields.extend(fields);
                     if items.is_some() {
                         existing.items = items;
@@ -435,14 +456,16 @@ impl ObjectGraph {
         Ok(oid)
     }
 
-    fn read_sparse_fields(&self, r: &mut Reader, def: &TypeDef, into: &mut HashMap<String, Value>) -> ReadResult<()> {
+    /// The members an object came with. True when it was read to its end (so what is missing was left
+    /// out by the Core), false when it stopped at a member this can't read.
+    fn read_sparse_fields(&self, r: &mut Reader, def: &TypeDef, into: &mut HashMap<String, Value>) -> ReadResult<bool> {
         loop {
             let idx = r.flex_int()?;
             if idx == 0 {
-                return Ok(());
+                return Ok(true);
             }
             let Some(member) = def.members.get(idx as usize - 1) else {
-                return Ok(()); // an index we don't know: we can't tell how long its value is
+                return Ok(false); // an index we don't know: we can't tell how long its value is
             };
             let value = self.read_value(r, member.prop_type)?;
             into.insert(member.name.clone(), value);
@@ -670,6 +693,42 @@ mod tests {
         let t = g.get(2375439).unwrap();
         assert_eq!(t.str_field("Title"), Some("Collapsing Skies"));
         assert_eq!(t.field("IsFavorite").unwrap().as_bytes().unwrap().len(), 21);
+
+        // A flag the Core leaves out of a push of the whole object went false; an update of what
+        // changed leaves the others alone
+        deftype(
+            &mut g,
+            11,
+            "Sooloos.Broker.Api.TrackLite2",
+            &[
+                ("string Sooloos.Broker.Api.TrackLite::Title", PropertyType::String),
+                ("bool Sooloos.Broker.Api.TrackLite::IsAvailable", PropertyType::Bool),
+                ("bool Sooloos.Broker.Api.TrackLite::IsDeleted", PropertyType::Bool),
+            ],
+        );
+        let mut w = Writer::new();
+        w.long(77).flex_int(11).flex_int(1).string(Some("Living Queue")).flex_int(2).boolean(true).flex_int(0);
+        g.ingest(&frame(push::PUSHOBJ, w.into_bytes()));
+        let mut w = Writer::new();
+        w.long(77).flex_int(11).flex_int(1).string(Some("Living Queue")).flex_int(3).boolean(true).flex_int(0);
+        g.ingest(&frame(push::PUSHOBJ, w.into_bytes()));
+        let t = g.get(77).unwrap();
+        assert!(!t.has_field("IsAvailable"));
+        assert_eq!(t.field("IsDeleted").and_then(Value::as_bool), Some(true));
+        let mut w = Writer::new();
+        w.long(77).flex_int(11).flex_int(2).boolean(true).flex_int(0);
+        g.ingest(&frame(push::UPDATEOBJ, w.into_bytes()));
+        let t = g.get(77).unwrap();
+        assert_eq!(t.field("IsDeleted").and_then(Value::as_bool), Some(true));
+        assert_eq!(t.field("IsAvailable").and_then(Value::as_bool), Some(true));
+        assert_eq!(t.str_field("Title"), Some("Living Queue"));
+        // (an update that brings the object whole, as the Core's do: the flag it leaves out is cleared)
+        let mut w = Writer::new();
+        w.long(77).flex_int(11).flex_int(1).string(Some("Living Queue")).flex_int(2).boolean(true).flex_int(0);
+        g.ingest(&frame(push::UPDATEOBJ, w.into_bytes()));
+        let t = g.get(77).unwrap();
+        assert!(!t.has_field("IsDeleted"));
+        assert_eq!(t.field("IsAvailable").and_then(Value::as_bool), Some(true));
 
         // DataList pushes exactly as the Core sent them
         g.ingest(&frame(push::PUSHOBJ, hexbytes("8193c45d843e00")));

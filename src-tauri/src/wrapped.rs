@@ -1174,6 +1174,40 @@ pub struct PlayRow {
 
 /// A heart changed on a song (Tracks, History): the library copy follows,
 /// so the pages show it until the next read from Roon.
+/// A song hearted, un-hearted or added somewhere in the app, as the Core has it now: the copy's entry
+/// takes its hearts, and a song the copy doesn't have yet (added since the library was last read) joins
+/// it, so the Tracks page and its hearts filter show it without waiting for the next read.
+pub fn library_copy_put(app: &AppHandle, track: roon_library::LibraryTrack) {
+    if track.track_id.is_none() {
+        return;
+    }
+    let copy = app.state::<LibraryCopy>();
+    let changed = copy.with_store(app, |s| {
+        // (no copy read yet: the first read brings everything)
+        if s.synced_at.is_none() {
+            return false;
+        }
+        let mut found = false;
+        let mut changed = false;
+        for t in s.tracks.iter_mut().filter(|t| t.track_id == track.track_id) {
+            found = true;
+            changed |= t.favorite != track.favorite || t.hearted_by != track.hearted_by;
+            t.favorite = track.favorite;
+            t.hearted_by = track.hearted_by.clone();
+        }
+        if !found {
+            s.tracks.push(track);
+            changed = true;
+        }
+        changed
+    });
+    if changed {
+        if let Some(path) = LibraryCopy::path(app) {
+            copy.with_store(app, |s| write_json(&path, s));
+        }
+    }
+}
+
 #[tauri::command]
 pub fn wrapped_library_favorite(app: AppHandle, track_id: u64, favorite: bool) {
     let copy = app.state::<LibraryCopy>();

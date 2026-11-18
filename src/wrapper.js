@@ -4602,6 +4602,7 @@ function playedRow(song) {
   } else {
     copy.querySelector(".queue-play")?.remove();
   }
+  if (song.unavailable) markUnavailable(copy, copy.querySelector(".queue-item-title"));
   return copy;
 }
 
@@ -4621,6 +4622,10 @@ async function queueStart() {
 // is open or not (it takes a moment, so it's ready by the time it opens),
 // and again when the panel opens
 let queueHistory = [];
+// (the songs still to come that Roon shows as "Unavailable", by title and length: the Roon API's queue,
+// which the rows after the playing one come from, doesn't say)
+let queueUnavailable = new Set();
+const queueSongKey = (title, length) => `${title}|${length ?? ""}`;
 let historyFor = "";
 let historyZone = "";
 let historyTimer = null;
@@ -4636,14 +4641,17 @@ function loadQueueHistory(force = false) {
     if (historyZone !== zone.zoneId) {
       historyZone = zone.zoneId;
       queueHistory = [];
+      queueUnavailable = new Set();
     }
     try {
       // (a queue begun in Roon, with no start noted: its last 30 items)
       const songs = await invoke("library_queue_songs", { zoneId: zone.zoneId, start: await queueStart(), recent: 30 });
       queueHistory = songs.filter((s) => s.played);
+      queueUnavailable = new Set(songs.filter((s) => !s.played && s.unavailable).map((s) => queueSongKey(s.title, s.lengthSeconds)));
     } catch (err) {
       console.warn("library_queue_songs", err);
       queueHistory = [];
+      queueUnavailable = new Set();
     }
     paintPrevious();
     if (queue) renderQueue(queue, true);
@@ -4717,7 +4725,13 @@ function renderQueue(payload, fromHistory = false) {
     nowLabel.textContent = "Now playing";
     rows.push(nowLabel);
   }
-  rows.push(...payload.items.map((item, i) => queueRow(item, i === 0)));
+  rows.push(
+    ...payload.items.map((item, i) => {
+      const row = queueRow(item, i === 0);
+      if (i > 0 && queueUnavailable.has(queueSongKey(item.title, item.length))) markUnavailable(row, row.querySelector(".queue-item-title"));
+      return row;
+    }),
+  );
   queueList.replaceChildren(...rows);
   updateQueueMore();
   // The playing song near the top with the two rows before it in view (as
@@ -9291,6 +9305,7 @@ function wrappedArtistTracks(box, card, ticket) {
     length.className = "wrapped-track-length";
     length.textContent = song.lengthSeconds ? formatTime(song.lengthSeconds) : "";
     row.append(play, text, length);
+    if (song.unavailable) markUnavailable(row, name);
     return row;
   };
   const show = async () => {
@@ -9372,12 +9387,14 @@ function libraryTrackRow(t, opts) {
   if (t.albumId != null) album.addEventListener("click", () => openWrappedPage({ page: "album", albumId: t.albumId }));
   // The heart works on the copy's state and asks Roon for the handle on a
   // click (the row then remembers Roon's answer)
-  const heart = wrappedHeart({ inLibrary: true, favorite: t.favorite }, async (favorite) => {
+  // (a playlist's or tag's song that isn't in the library says so, `inLibrary` false: it has a + that adds
+  // it, as on an album page; the Tracks page's songs, from the library's copy, are all in it)
+  const heart = wrappedHeart({ inLibrary: t.inLibrary !== false, favorite: t.favorite }, async (favorite) => {
     const handle = t.handle ?? (await invoke("library_track_handle", { trackId: t.trackId }));
-    const next = await invoke("library_track_heart", { handle, favorite });
+    const next = t.inLibrary === false ? await invoke("library_track_add", { handle }) : await invoke("library_track_heart", { handle, favorite });
+    t.inLibrary = next.inLibrary;
     t.favorite = next.favorite;
-    if (t.trackId != null) invoke("wrapped_library_favorite", { trackId: t.trackId, favorite: next.favorite }).catch(() => {});
-    return { inLibrary: true, favorite: next.favorite };
+    return { inLibrary: next.inLibrary, favorite: next.favorite };
   });
   const length = document.createElement("span");
   length.className = "wrapped-track-length";
@@ -9443,7 +9460,30 @@ function libraryTrackRow(t, opts) {
   }
   if (opts.extra) opts.extra(row);
   wholeRowOpens(row, title);
+  if (t.unavailable) markUnavailable(row, title);
   return row;
+}
+
+// A song Roon shows as "Unavailable" (its file is gone, or the streaming service dropped it; client.rs,
+// track_unavailable): the same red word over its title, the row dimmed, and a click on it does nothing
+// (but a playlist's X, which takes it out)
+function markUnavailable(row, title) {
+  if (!title || row.classList.contains("unavailable")) return;
+  row.classList.add("unavailable");
+  title.classList.add("unavailable-title");
+  const tag = document.createElement("span");
+  tag.className = "unavailable-tag";
+  tag.textContent = "Unavailable";
+  title.prepend(tag);
+  row.addEventListener(
+    "click",
+    (event) => {
+      if (event.target.closest?.(".wrapped-row-remove")) return;
+      event.stopImmediatePropagation();
+      event.preventDefault();
+    },
+    true,
+  );
 }
 
 // A click anywhere on a song's row (not on its buttons or links) does what
@@ -14847,6 +14887,7 @@ function trackRows(tracks, album = {}) {
     length.className = "wrapped-track-length";
     length.textContent = track.lengthSeconds ? formatTime(track.lengthSeconds) : "";
     row.append(length);
+    if (track.unavailable) markUnavailable(row, title);
     rows.push(row);
   }
   return rows;

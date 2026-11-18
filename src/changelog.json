@@ -1,5 +1,25 @@
 [
   {
+    "version": "1.7.0",
+    "date": "2026-11-18",
+    "sections": [
+      {
+        "title": "What's new",
+        "items": [
+          ["Unavailable songs", "A song Roon can no longer play, because its file is gone or the streaming service dropped it, now says \"Unavailable\" in red as it does in Roon, and its row is dimmed. This shows in playlists, the queue, album pages and an artist's Tracks. Clicking such a song does nothing. In a playlist the X still takes it out."]
+        ]
+      },
+      {
+        "title": "Fixes",
+        "items": [
+          ["Hearts missing from the Tracks page", "A song hearted on an album page, in a playlist or from the player didn't show up under the Tracks page's hearts filter until the library was read again, and a song newly added to your library didn't show on the Tracks page at all until then. The same went for taking a heart off. Wrapped's copy of your library now hears of every heart and every added song as it happens."],
+          ["Hearts missing in playlists", "In a playlist, a hearted song from Qobuz or TIDAL showed an empty heart. Playlists now read each song's heart from your library."],
+          ["Playlist songs that aren't in your library", "In a playlist, a song that isn't in your library showed a heart that did nothing when clicked. It now shows a +, which adds the song to your library, as on an album page."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.6.1",
     "date": "2026-11-14",
     "sections": [
