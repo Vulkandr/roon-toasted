@@ -67,6 +67,9 @@ const SIG_PERFORMER_TOP_TRACKS: &str = "Sooloos.Broker.Api.Library::GetOneBoxPer
 const SIG_GET_RECENTS: &str = "Sooloos.Broker.Api.Library::GetRecents(Sooloos.Broker.Api.Profile, string, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.RecentItem>>)";
 const SIG_QUEUE_ITEMS: &str = "Sooloos.Broker.Api.Queue::GetItems(Base.ResultCallback<System.Collections.Generic.IList<Sooloos.Broker.Api.TransportItem>>)";
 const SIG_QUEUE_REMOVE_ALL: &str = "Sooloos.Broker.Api.Queue::RemoveAll()";
+const SIG_QUEUE_MOVE_ITEMS: &str = "Sooloos.Broker.Api.Queue::MoveItems(System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.TransportItem>, Sooloos.Broker.Api.InsertionPoint, Sooloos.Broker.Api.TransportItem, Base.ResultCallback)";
+/// InsertionPoint: Beginning 0, End 1, After 2, Before 3.
+const INSERT_BEFORE: u32 = 3;
 const SIG_QUEUE_PLAY_FROM_ID: &str = "Sooloos.Broker.Api.Queue::PlayFromHere(long)";
 const SIG_FORCE_SCAN: &str = "Sooloos.Broker.Api.Locations::ForceScan(Sooloos.Broker.Api.Location, Base.ResultCallback)";
 const SIG_PLAY_TRACKS: &str = "Sooloos.Broker.Api.Transport::PlayTracks(Sooloos.Broker.Api.Zone, System.Sooid, Sooloos.Broker.Api.PlayParameters, System.Collections.Generic.IEnumerable<Sooloos.Broker.Api.TrackBase>, Base.ResultCallback<Sooloos.Broker.Api.PlayFeedback>)";
@@ -3623,6 +3626,32 @@ impl LibraryClient {
         args.long(item_id);
         self.inner.remoting.call_no_reply(queue, SIG_QUEUE_PLAY_FROM_ID, args.as_bytes()).map_err(LibraryError::from)?;
         Ok(())
+    }
+
+    /// Moves the queue's last `count` items to just before its first one
+    /// (Queue::MoveItems, Before): songs added at the end of a freshly loaded
+    /// queue put ahead of the song it starts on, to be the ones Previous goes
+    /// back to. Answers how many items the queue held.
+    pub async fn queue_move_last_to_front(&self, zone_id: &str, count: usize) -> Result<usize, LibraryError> {
+        let queue = self.queue_object(zone_id)?;
+        let items = self.queue_items(queue).await?;
+        if count == 0 || items.len() <= count {
+            return Ok(items.len());
+        }
+        let first = items[0];
+        let moved = &items[items.len() - count..];
+        let mut list = Writer::new();
+        list.flex_int(moved.len() as u32);
+        for i in moved {
+            list.long(*i);
+        }
+        let mut args = Writer::new();
+        args.flex_int(list.len() as u32).bytes(list.as_bytes()).flex_int(INSERT_BEFORE).long(first);
+        let res = self.inner.remoting.call(queue, SIG_QUEUE_MOVE_ITEMS, args.as_bytes()).await?;
+        if !res.success() {
+            return Err(RemotingError::Failed { method: "Queue::MoveItems".into(), status: res.status }.into());
+        }
+        Ok(items.len())
     }
 
     /// Empties the zone's queue (Queue::RemoveAll), played items too.

@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use roon_api::{ControlAction, SeekMode, Transport};
 use roon_library::{LibraryClient, PlayHow, QueueSong};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::library::Library;
 use crate::settings::AppSettings;
@@ -63,6 +63,45 @@ static LEADER: Mutex<Option<LeaderNow>> = Mutex::new(None);
 
 pub fn leader_now() -> Option<LeaderNow> {
     LEADER.lock().unwrap().clone()
+}
+
+/// What the living queue is doing, for the line under the switch on both Living Queue pages (event
+/// `living-queue-status`, command `living_queue_status`).
+#[derive(Clone, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Status {
+    /// "off", "waiting", "following" or "paused".
+    pub state: &'static str,
+    pub leader: String,
+    pub title: String,
+    /// Songs in the leader's queue after the playing one, when known.
+    pub after: Option<usize>,
+    /// The second line: the last thing it did, or what it keeps in step.
+    pub note: String,
+    /// The note is a problem (shown in amber).
+    pub warn: bool,
+}
+
+static STATUS: Mutex<Option<Status>> = Mutex::new(None);
+
+#[tauri::command]
+pub fn living_queue_status() -> Status {
+    STATUS.lock().unwrap().clone().unwrap_or(Status { state: "off", ..Default::default() })
+}
+
+/// How long the line tells of a pickup or a takeover before it goes back to what it keeps in step.
+const NOTE_FOR: Duration = Duration::from_secs(10);
+
+/// The leader's queue: how many songs come after the playing one, by zone and song (songs_of).
+static AFTER: Mutex<Option<(String, String, usize)>> = Mutex::new(None);
+/// How many of the songs before the playing one a mirrored zone is given too, for Previous.
+const BEFORE: usize = 5;
+/// The leader's songs before the playing one (up to BEFORE, oldest first), by zone and song (songs_of).
+static PLAYED: Mutex<Option<(String, String, Vec<QueueSong>)>> = Mutex::new(None);
+
+fn clock(seconds: f64) -> String {
+    let s = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
 }
 
 static SETUP: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
@@ -146,6 +185,10 @@ struct Run {
     left_on: HashMap<String, String>,
     /// Nothing is copied before this (see AFTER_TAKEOVER).
     hold_off: Option<Instant>,
+    /// The last thing it did, for the status line, until when it is told.
+    note: Option<(String, Instant)>,
+    /// A zone the last copy couldn't load (told until a copy loads everything).
+    trouble: Option<String>,
 }
 
 fn title_of(zone: &ZoneView) -> String {
@@ -239,6 +282,7 @@ pub fn start(app: &AppHandle) {
                     println!("[livequeue] off");
                 }
                 run = Run::default();
+                tell(&app, Status { state: "off", ..Default::default() });
                 continue;
             }
             let Some(client) = app.state::<Library>().client() else {
@@ -247,6 +291,7 @@ pub fn start(app: &AppHandle) {
                     println!("[livequeue] the library link is down; waiting for it");
                     run = Run::default();
                 }
+                tell(&app, Status { state: "off", ..Default::default() });
                 continue;
             };
             if config != run.config {
@@ -257,8 +302,70 @@ pub fn start(app: &AppHandle) {
             // (the silent track: looked for as soon as the living queue is on and the link is up)
             ask_setup(&app, &mut run);
             step(&app, &client, &mut run).await;
+            let now = status_of(&app, &client, &run);
+            tell(&app, now);
         }
     });
+}
+
+/// Sends the status to the pages when it changed.
+fn tell(app: &AppHandle, status: Status) {
+    let mut last = STATUS.lock().unwrap();
+    if last.as_ref() != Some(&status) {
+        *last = Some(status.clone());
+        drop(last);
+        let _ = app.emit("living-queue-status", status);
+    }
+}
+
+/// What the line under the switch says, from how things stand.
+fn status_of(app: &AppHandle, client: &LibraryClient, run: &Run) -> Status {
+    let all = app.state::<Zones>().payload_now().zones;
+    let members: Vec<&ZoneView> = all.iter().filter(|z| run.config.zones.contains_key(&z.zone_id) && client.zone_ids().contains(&z.zone_id)).collect();
+    let Some(leader_id) = run.leader.as_ref() else {
+        return Status { state: "waiting", note: keeps(run, &members, None), ..Default::default() };
+    };
+    let (leader, title, playing) = if leader_id.starts_with("arc:") {
+        match crate::companion::arcs().into_iter().find(|a| &a.zone_id == leader_id) {
+            Some(a) => (format!("ARC on {}", a.name), a.title.clone(), a.playing()),
+            None => return Status { state: "waiting", note: keeps(run, &members, None), ..Default::default() },
+        }
+    } else {
+        match members.iter().find(|z| &z.zone_id == leader_id) {
+            Some(z) => (z.name.clone(), title_of(z), going(z.state)),
+            None => return Status { state: "waiting", note: keeps(run, &members, None), ..Default::default() },
+        }
+    };
+    let after = AFTER.lock().unwrap().as_ref().filter(|(zone, song, _)| zone == leader_id && same_text(song, &title)).map(|(_, _, n)| *n);
+    let (note, warn) = match (&run.note, &run.trouble) {
+        (Some((text, until)), _) if Instant::now() < *until => (text.clone(), false),
+        (_, Some(trouble)) => (trouble.clone(), true),
+        _ => (keeps(run, &members, Some(leader_id)), false),
+    };
+    Status { state: if playing { "following" } else { "paused" }, leader, title, after, note, warn }
+}
+
+/// What it keeps in step: "2 zones mirrored, 1 hidden, playlist up to date".
+fn keeps(run: &Run, members: &[&ZoneView], leader: Option<&String>) -> String {
+    let others = |mode: &str| run.config.zones.iter().filter(|(id, m)| m.as_str() == mode && Some(*id) != leader && (id.starts_with("arc:") || members.iter().any(|z| &z.zone_id == *id))).count();
+    let (mirrored, hidden) = (others("mirrored"), others("hide"));
+    let mut parts = Vec::new();
+    if mirrored > 0 {
+        parts.push(format!("{mirrored} zone{} mirrored", if mirrored == 1 { "" } else { "s" }));
+    }
+    if hidden > 0 {
+        parts.push(format!("{hidden}{} hidden", if mirrored > 0 { String::new() } else if hidden == 1 { " zone".into() } else { " zones".into() }));
+    }
+    if leader.is_some() && run.silent.is_some() {
+        parts.push(if run.dirty.is_none() { "playlist up to date".into() } else { "updating the playlist".into() });
+    }
+    if parts.is_empty() {
+        "No other zone taking part is here right now".into()
+    } else {
+        let text = parts.join(", ");
+        let mut c = text.chars();
+        c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+    }
 }
 
 /// One look at the zones, and whatever follows from it.
@@ -328,9 +435,15 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
             if going(left.state) {
                 pause_zone(app, left);
             }
+            // (left in ARC's song, it holds the songs after it already: not loaded again for ARC)
+            if same_text(&title_of(left), &arc.title) && run.songs.first().is_some_and(|s| same_text(&s.title, &arc.title)) {
+                run.holds.insert(left.zone_id.clone(), Holds::Songs(run.songs.iter().map(|s| s.title.clone()).collect()));
+            }
         } else if leader_id.starts_with("arc:") {
             crate::companion::command(&leader_id, "pause");
         }
+        let from = members.iter().find(|z| z.zone_id == leader_id).map(|z| z.name.clone()).unwrap_or_else(|| "another zone".into());
+        run.note = Some((format!("ARC on {} took over from {from}", arc.name), Instant::now() + NOTE_FOR));
         run.left_on = members.iter().map(|z| (z.zone_id.clone(), title_of(z))).collect();
         run.leader = Some(arc.zone_id.clone());
         run.seen = None;
@@ -443,7 +556,7 @@ async fn step(app: &AppHandle, client: &LibraryClient, run: &mut Run) {
 /// The leader's songs, the playing one first; none when the queue hasn't
 /// caught up with what the zone says is playing.
 async fn songs_of(client: &LibraryClient, leader: &ZoneView) -> Vec<QueueSong> {
-    let (songs, report) = match client.queue_songs_report(&leader.zone_id, None, 0, false).await {
+    let (songs, report) = match client.queue_songs_report(&leader.zone_id, None, BEFORE, false).await {
         Ok(got) => got,
         Err(e) => {
             println!("[livequeue] the queue of \"{}\" could not be read: {e:?}", leader.name);
@@ -456,6 +569,38 @@ async fn songs_of(client: &LibraryClient, leader: &ZoneView) -> Vec<QueueSong> {
         Some(at) => songs[at..].iter().take(SONGS).cloned().collect(),
         None => songs.iter().filter(|s| !s.played && !s.skipped).take(SONGS).cloned().collect(),
     };
+    // (for the status line: all the songs after the playing one, not only the ones copied)
+    if let Some(first) = ahead.first() {
+        let total = match songs.iter().position(|s| s.current) {
+            Some(at) => songs.len() - at - 1,
+            None => songs.iter().filter(|s| !s.played && !s.skipped).count().saturating_sub(1),
+        };
+        *AFTER.lock().unwrap() = Some((leader.zone_id.clone(), first.title.clone(), total));
+        // (skipped ones too: Next marks the song left as skipped, and Previous goes back to it all the same)
+        let before: Vec<QueueSong> = match songs.iter().position(|s| s.current) {
+            Some(at) => songs[at.saturating_sub(BEFORE)..at].to_vec(),
+            None => Vec::new(),
+        };
+        // (dev, while Previous on a mirrored zone is being worked out: what the leader's queue holds before the
+        // playing song, once per song)
+        static TOLD_BEFORE: Mutex<String> = Mutex::new(String::new());
+        let key = format!("{}|{}", leader.zone_id, first.title);
+        let mut told = TOLD_BEFORE.lock().unwrap();
+        if *told != key {
+            *told = key;
+            println!(
+                "[livequeue] the queue of \"{}\": {} song(s) before \"{}\" ({} played, {} skipped), {} given for Previous; {report}",
+                leader.name,
+                songs.iter().position(|s| s.current).unwrap_or(0),
+                first.title,
+                songs.iter().filter(|s| s.played).count(),
+                songs.iter().filter(|s| s.skipped).count(),
+                before.len()
+            );
+        }
+        drop(told);
+        *PLAYED.lock().unwrap() = Some((leader.zone_id.clone(), first.title.clone(), before));
+    }
     let why = match ahead.first() {
         Some(first) if first.title == title_of(leader) => return ahead,
         Some(first) => format!("starts at \"{}\", not at \"{}\" yet", first.title, title_of(leader)),
@@ -488,6 +633,15 @@ async fn copy(app: &AppHandle, client: &LibraryClient, run: &mut Run, leader: &Z
     let playlist = sync_playlist(client, run).await;
 
     let mut done = Vec::new();
+    let mut trouble = None;
+    // (the songs before the playing one, for Previous on a mirrored zone)
+    let before: Vec<String> = PLAYED
+        .lock()
+        .unwrap()
+        .as_ref()
+        .filter(|(zone, song, _)| zone == &leader.zone_id && song == &first)
+        .map(|(_, _, list)| list.iter().map(|s| s.handle.clone()).collect())
+        .unwrap_or_default();
     for z in members.iter().filter(|z| z.zone_id != leader.zone_id) {
         // (as it is right now: a zone that is playing is never touched)
         let Some(now) = zone(app, &z.zone_id) else { continue };
@@ -519,16 +673,25 @@ async fn copy(app: &AppHandle, client: &LibraryClient, run: &mut Run, leader: &Z
         run.loaded.insert(z.zone_id.clone(), Instant::now());
         if let Err(e) = client.queue_clear(&z.zone_id).await {
             println!("[livequeue] the queue of \"{}\" could not be cleared: {e:?}", z.name);
+            trouble = Some(format!("Couldn't load {} last time; it gets the next song", z.name));
             continue;
         }
         match client.play_tracks_how(&z.zone_id, &give, PlayHow::Queue).await {
             Ok(()) => {
-                done.push(format!("\"{}\" ({})", z.name, if hide { "the silent track".to_string() } else { format!("{} songs", give.len()) }));
+                let mut extra = String::new();
+                if !hide && !before.is_empty() {
+                    extra = format!(", {}", with_played(app, client, z, &before, &first).await);
+                }
+                done.push(format!("\"{}\" ({}{extra})", z.name, if hide { "the silent track".to_string() } else { format!("{} songs", give.len()) }));
                 run.holds.insert(z.zone_id.clone(), holds);
             }
-            Err(e) => println!("[livequeue] the songs could not be added to the queue of \"{}\": {e:?}", z.name),
+            Err(e) => {
+                println!("[livequeue] the songs could not be added to the queue of \"{}\": {e:?}", z.name);
+                trouble = Some(format!("Couldn't load {} last time; it gets the next song", z.name));
+            }
         }
     }
+    run.trouble = trouble.clone();
     println!(
         "[livequeue] \"{}\" is on \"{first}\", {} songs copied in {} ms; zones: {}; playlist: {playlist}",
         leader.name,
@@ -536,8 +699,39 @@ async fn copy(app: &AppHandle, client: &LibraryClient, run: &mut Run, leader: &Z
         began.elapsed().as_millis(),
         if done.is_empty() { "none to load".to_string() } else { done.join(", ") },
     );
-    // (a zone loaded only moments ago gets its turn at the next try)
+    // (a zone loaded only moments ago gets its turn at the next try; one that failed, with the next song)
     !waiting
+}
+
+/// Gives a mirrored zone, just loaded with the leader's songs, the songs before the playing one too: added
+/// at the end, then moved ahead of the song it starts on (Queue::MoveItems), where Previous goes back to
+/// them. Says how it went, for the log.
+async fn with_played(app: &AppHandle, client: &LibraryClient, z: &ZoneView, before: &[String], first: &str) -> String {
+    if let Err(e) = client.play_tracks_how(&z.zone_id, before, PlayHow::Queue).await {
+        return format!("the {} before it not added: {e:?}", before.len());
+    }
+    // (the Core lists the added items a moment later)
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    if let Err(e) = client.queue_move_last_to_front(&z.zone_id, before.len()).await {
+        return format!("the {} before it added at the end, not moved: {e:?}", before.len());
+    }
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let on = zone(app, &z.zone_id).map(|now| title_of(&now)).unwrap_or_default();
+    let queue = match client.queue_songs_report(&z.zone_id, None, BEFORE + 2, false).await {
+        Ok((songs, _)) => {
+            let at = songs.iter().position(|s| s.current);
+            format!(
+                "queue now {} songs, the current one {} (\"{}\"), {} played before it",
+                songs.len(),
+                at.map(|i| format!("at {}", i + 1)).unwrap_or_else(|| "not marked".into()),
+                at.map(|i| songs[i].title.clone()).unwrap_or_default(),
+                songs.iter().filter(|s| s.played).count()
+            )
+        }
+        Err(e) => format!("queue not read: {e:?}"),
+    };
+    let can = zone(app, &z.zone_id).map(|now| now.can_previous).unwrap_or(false);
+    format!("{} before it moved ahead; the zone shows \"{on}\"{}; previous allowed: {can}; {queue}", before.len(), if same_text(&on, first) { "" } else { " (not the song!)" })
 }
 
 /// The same song, as far as a queue's song and a playlist's can be told to be.
@@ -669,6 +863,17 @@ async fn take_over(app: &AppHandle, client: &LibraryClient, run: &mut Run, leade
                 Some(z) if title_of(&z) == leading => {
                     land(app, &transport, starter, second, seen).await;
                     carried = true;
+                    // (and the songs before it, for Previous, once it plays at the right second)
+                    let before: Vec<String> = PLAYED
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .filter(|(zone, song, _)| zone == &leader.zone_id && song == &leading)
+                        .map(|(_, _, list)| list.iter().map(|s| s.handle.clone()).collect())
+                        .unwrap_or_default();
+                    if !before.is_empty() {
+                        println!("[livequeue] pickup: \"{}\": {}", starter.name, with_played(app, client, starter, &before, &leading).await);
+                    }
                 }
                 z => println!("[livequeue] pickup: \"{}\" never got to \"{leading}\" (it is on \"{}\")", starter.name, z.as_ref().map(title_of).unwrap_or_default()),
             }
@@ -676,6 +881,10 @@ async fn take_over(app: &AppHandle, client: &LibraryClient, run: &mut Run, leade
     } else {
         println!("[livequeue] \"{}\" brought music of its own; it leads now", starter.name);
     }
+    run.note = Some((
+        if carried { format!("{} picked up from {} at {}", starter.name, leader.name, clock(second)) } else { format!("{} started music of its own and leads now", starter.name) },
+        Instant::now() + NOTE_FOR,
+    ));
     run.holds.remove(&starter.zone_id);
     // The zone left is paused in the song the new leader carries on, with the same songs after it. A mirrored
     // one is not loaded again for as long as those stay the songs; a hide one keeps showing the song until
@@ -812,6 +1021,10 @@ async fn take_over_from_arc(app: &AppHandle, client: &LibraryClient, run: &mut R
     run.dirty = Some(Instant::now());
     run.retry = None;
     run.hold_off = Some(Instant::now() + AFTER_TAKEOVER);
+    run.note = Some((
+        if ours { format!("{} picked up from ARC on {} at {}", starter.name, arc.name, clock(second)) } else { format!("{} started music of its own and leads now", starter.name) },
+        Instant::now() + NOTE_FOR,
+    ));
     if !ours {
         println!("[livequeue] \"{}\" brought music of its own; it leads now", starter.name);
         return;
@@ -889,7 +1102,9 @@ async fn copy_from_arc(app: &AppHandle, client: &LibraryClient, run: &mut Run, a
             }
             (vec![silent], Holds::Silent)
         } else {
-            if run.holds.get(&z.zone_id) == Some(&Holds::Songs(titles.clone())) || same_text(&title_of(&now), &arc.title) && titles.len() == 1 {
+            // (already holding these songs, as far as both lists go: the zone ARC took over from, say)
+            let holding = matches!(run.holds.get(&z.zone_id), Some(Holds::Songs(held)) if !held.is_empty() && held.iter().zip(&titles).all(|(a, b)| same_text(a, b)));
+            if holding || same_text(&title_of(&now), &arc.title) && titles.len() == 1 {
                 continue;
             }
             (handles.clone(), Holds::Songs(titles.clone()))

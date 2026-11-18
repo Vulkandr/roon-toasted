@@ -9051,6 +9051,34 @@ body.wrapped-column-moving * {
   cursor: not-allowed;
 }
 
+/* What the living queue is doing (livequeue.rs) */
+.settings-lq-status {
+  margin: 4px 0 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 13px;
+}
+
+.settings-lq-status[hidden] {
+  display: none;
+}
+
+.settings-lq-status b {
+  font-weight: 600;
+}
+
+.settings-lq-status .settings-lq-status-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.settings-lq-status .settings-lq-status-note.warn {
+  color: var(--warn);
+}
+
 /* The silent track's setup: what is in the way, and the ways out */
 .settings-lq-track {
   margin: 4px 0 10px;

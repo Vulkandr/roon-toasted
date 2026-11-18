@@ -300,7 +300,7 @@ function render(payload) {
   length.textContent = formatTime(np?.length);
   updatePosition(np ? zone.seekPosition : 0);
 
-  previousBtn.disabled = !zone?.canPrevious;
+  paintPrevious();
   nextBtn.disabled = !zone?.canNext;
   // (after a PC restart Roon can report a loaded zone as stopped with play
   // "not allowed", though play works, as Dialed Up's key shows: with
@@ -325,6 +325,18 @@ function render(payload) {
   renderOutput(zone?.outputs[0]);
   renderLibrary();
   for (const wave of Object.values(waves)) wave.setPlaying(zone?.state === "playing");
+}
+
+// Previous: lit where Roon allows it, and where the queue has songs before the playing one that Roon won't go
+// back to (skipped ones, a Mirrored zone's from the living queue: zones.rs, roon_control, plays them itself)
+function paintPrevious() {
+  let history = false;
+  try {
+    history = !!zone?.nowPlaying && historyZone === zone.zoneId && queueHistory.some((s) => s.itemId != null);
+  } catch {
+    // (the queue's history isn't set up yet this early in the page's start)
+  }
+  previousBtn.disabled = !zone?.canPrevious && !history;
 }
 
 function showText(t, a, b) {
@@ -2193,6 +2205,13 @@ function barChanged(slider) {
 
 // (the player's size, not the canvas's: the canvas is sized from it)
 new ResizeObserver(layoutStage).observe(stage);
+// A piece sized by what it holds (the controls, say) is placed again when that changes: a button that hides
+// for a moment (nothing playing while a queue is reloaded) would otherwise leave it placed for its smaller
+// size, growing to one side once the button is back
+const pieceSizeWatcher = new ResizeObserver(() => {
+  if (!stage.hidden) layoutStage();
+});
+for (const id of PIECE_IDS) if (PIECES[id].kind === "auto") pieceSizeWatcher.observe(pieces[id]);
 // In the player bar the sliders stretch with the window (narrow windows
 // shorten them), and the canvas behind a drawn bar has to follow
 new ResizeObserver(() => {
@@ -4626,6 +4645,7 @@ function loadQueueHistory(force = false) {
       console.warn("library_queue_songs", err);
       queueHistory = [];
     }
+    paintPrevious();
     if (queue) renderQueue(queue, true);
   }, 400);
 }
@@ -12931,6 +12951,33 @@ WRAPPED_PAGES.settings = async function () {
   let lqTrack = await invoke("living_queue_track_status").catch(() => ({ state: "unknown", message: "", file: "" }));
   const lqTrackBox = document.createElement("div");
   lqTrackBox.className = "settings-lq-track";
+  // (the line under the switch: what the living queue is doing, livequeue.rs)
+  const lqStatusBox = document.createElement("div");
+  lqStatusBox.className = "settings-lq-status";
+  lqStatusBox.hidden = true;
+  const paintLqStatus = (st) => {
+    lqStatusBox.hidden = !st || st.state === "off";
+    if (lqStatusBox.hidden) return;
+    const songs = (n) => `${n} song${n === 1 ? "" : "s"}`;
+    const parts =
+      st.state === "waiting"
+        ? [["Waiting for a zone taking part to play."]]
+        : st.state === "paused"
+          ? [["Paused on "], [st.leader, true], [`: ${st.title}. Press play on any zone taking part to carry on.`]]
+          : [["Following "], [st.leader, true], [`: ${st.title}${st.after != null ? `, ${songs(st.after)} after it` : ""}`]];
+    lqStatusBox.replaceChildren();
+    for (const [text, bold] of parts) {
+      const part = document.createElement(bold ? "b" : "span");
+      part.textContent = text;
+      lqStatusBox.append(part);
+    }
+    if (st.note) {
+      const note = document.createElement("span");
+      note.className = `settings-lq-status-note${st.warn ? " warn" : ""}`;
+      note.textContent = st.note;
+      lqStatusBox.append(note);
+    }
+  };
   const lqRows = document.createElement("div");
   lqRows.className = "settings-lq-zones";
   // (phones with the companion app: Roon ARC as a zone, companion.rs, under a divider, Off or Hide Current)
@@ -13195,7 +13242,12 @@ WRAPPED_PAGES.settings = async function () {
     }
     paintLq();
   };
-  lqCard.append(lqTrackBox, lqRows);
+  lqCard.append(lqStatusBox, lqTrackBox, lqRows);
+  paintLqStatus(await invoke("living_queue_status").catch(() => null));
+  const unlistenLqStatus = await listen("living-queue-status", (event) => {
+    if (ticket !== wrappedTicket) return unlistenLqStatus();
+    paintLqStatus(event.payload);
+  });
   const unlistenLqTrack = await listen("living-queue-track", (event) => {
     if (ticket !== wrappedTicket) return unlistenLqTrack();
     lqTrack = event.payload;

@@ -486,6 +486,7 @@ pub fn roon_select_zone(zones: State<'_, Zones>, zone_id: String) -> Result<(), 
 /// Playback: "play", "pause", "playpause", "stop", "next" or "previous".
 #[tauri::command]
 pub async fn roon_control(
+    app: AppHandle,
     zones: State<'_, Zones>,
     zone_id: String,
     action: String,
@@ -497,6 +498,28 @@ pub async fn roon_control(
         }
         crate::companion::command(&zone_id, if action == "stop" { "pause" } else { &action });
         return Ok(());
+    }
+    // Previous by the queue's order where songs before the playing one were never played here (a Mirrored
+    // zone given them by the living queue: Roon counts them as skipped and won't go back to them, and once a
+    // song has played, its Previous follows what played last, so going back would bounce between two songs):
+    // the start of the song after 3 s, as Roon does; before that, the song before it in the queue
+    if action == "previous" {
+        let now = zones.payload_now().zones.into_iter().find(|z| z.zone_id == zone_id);
+        if let Some(z) = now.filter(|z| z.now_playing.is_some()) {
+            if let Some(client) = app.state::<crate::library::Library>().client() {
+                if let Ok(songs) = client.queue_songs(&zone_id, None, 5).await {
+                    let at = songs.iter().position(|s| s.current).unwrap_or(0);
+                    let skipped = songs[..at].iter().any(|s| s.skipped);
+                    let before = if at > 0 { songs[at - 1].item_id } else { None };
+                    if let Some(item) = before.filter(|_| skipped || !z.can_previous) {
+                        if z.seek_position.unwrap_or(0.0) > 3.0 {
+                            return zones.transport()?.seek(&zone_id, SeekMode::Absolute, 0).await.map_err(|e| e.to_string());
+                        }
+                        return client.queue_play_from(&zone_id, item).await.map_err(|e| format!("{e:?}"));
+                    }
+                }
+            }
+        }
     }
     let action = match action.as_str() {
         "play" => ControlAction::Play,

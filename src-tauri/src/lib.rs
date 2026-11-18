@@ -464,6 +464,46 @@ fn hide_window(window: WebviewWindow) {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// Dev builds: waits (up to 10 s) for another copy of this same program to be gone, then a moment more for
+/// its WebView2 to let go. A rebuild starts the new copy while the old one is still closing.
+#[cfg(all(debug_assertions, windows))]
+fn wait_for_old_copy() {
+    use windows::core::PWSTR;
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::ProcessStatus::EnumProcesses;
+    use windows::Win32::System::Threading::{GetCurrentProcessId, OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION};
+
+    let Ok(me) = std::env::current_exe() else { return };
+    let mine = unsafe { GetCurrentProcessId() };
+    let others = || -> bool {
+        let mut ids = vec![0u32; 4096];
+        let mut got = 0u32;
+        if unsafe { EnumProcesses(ids.as_mut_ptr(), (ids.len() * 4) as u32, &mut got) }.is_err() {
+            return false;
+        }
+        ids.truncate(got as usize / 4);
+        ids.into_iter().filter(|id| *id != 0 && *id != mine).any(|id| unsafe {
+            let Ok(handle) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, id) else { return false };
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let same = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len).is_ok()
+                && std::path::Path::new(&String::from_utf16_lossy(&buf[..len as usize])) == me;
+            let _ = CloseHandle(handle);
+            same
+        })
+    };
+    if !others() {
+        return;
+    }
+    println!("[dev] the copy this one replaces is still closing; waiting for it");
+    let began = std::time::Instant::now();
+    while others() && began.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    println!("[dev] went on after {} ms", began.elapsed().as_millis());
+}
+
 pub fn run() {
     // Started only to save a snapshot of a stuck copy (see applog.rs)
     if let Some(code) = applog::dump_mode() {
@@ -471,6 +511,10 @@ pub fn run() {
     }
     // A crash is logged, with a snapshot, before the app closes
     applog::install_crash_handler();
+    // (dev builds: the copy a rebuild replaces may still be closing; started over it, this one would hand
+    // itself to that one and quit, or find WebView2 still busy with it)
+    #[cfg(all(debug_assertions, windows))]
+    wait_for_old_copy();
 
     // Warnings from libraries (like roon-api) into the log file, and in dev
     // builds the terminal too; but not Symphonia's MP3 decoder's at the
@@ -878,6 +922,7 @@ pub fn run() {
             companion::companion_devices,
             companion::companion_pair_code,
             companion::companion_open,
+            livequeue::living_queue_status,
             companion::companion_forget,
             silenttrack::living_queue_track_check,
             silenttrack::living_queue_track_pick,

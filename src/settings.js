@@ -1673,6 +1673,36 @@ function showLivingQueueLive(payload) {
   showLivingQueueZones();
 }
 
+// The line under the switch: what the living queue is doing (livequeue.rs, event living-queue-status)
+function lqStatusParts(st) {
+  const songs = (n) => `${n} song${n === 1 ? "" : "s"}`;
+  if (st.state === "waiting") return [["Waiting for a zone taking part to play."]];
+  if (st.state === "paused") return [["Paused on "], [st.leader, true], [`: ${st.title}. Press play on any zone taking part to carry on.`]];
+  return [["Following "], [st.leader, true], [`: ${st.title}${st.after != null ? `, ${songs(st.after)} after it` : ""}`]];
+}
+
+function showLivingQueueStatus(st) {
+  lqStatus.hidden = !st || st.state === "off";
+  if (lqStatus.hidden) return;
+  lqStatus.replaceChildren();
+  for (const [text, bold] of lqStatusParts(st)) {
+    const part = document.createElement(bold ? "b" : "span");
+    part.textContent = text;
+    lqStatus.append(part);
+  }
+  if (st.note) {
+    const note = document.createElement("span");
+    note.className = `lq-status-note${st.warn ? " warn" : ""}`;
+    note.textContent = st.note;
+    lqStatus.append(note);
+  }
+}
+
+invoke("living_queue_status")
+  .then(showLivingQueueStatus)
+  .catch((err) => console.error(err));
+listen("living-queue-status", (event) => showLivingQueueStatus(event.payload));
+
 function lqClock(ms) {
   const s = Math.max(0, Math.round((ms || 0) / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;

@@ -722,6 +722,36 @@ struct Context {
     from_lists: HashSet<(i64, String)>,
     /// Lower-cased artist: 0.0 up to 1.0, by how recently.
     intent: HashMap<String, f64>,
+    /// Artists Discover Weekly brought to this profile (lower-cased, every list kept and past): never
+    /// "never played" for Library Rediscover, whose plays from the lists don't count as listening.
+    brought: HashSet<String>,
+    /// Artists on other profiles' lists of the last OTHERS_REST_DAYS (lower-cased): Library Rediscover
+    /// leaves them out, as the library is shared.
+    elsewhere: HashSet<String>,
+}
+
+/// How long an artist on another profile's list stays out of this profile's Library Rediscover.
+const OTHERS_REST_DAYS: i64 = 28;
+
+/// The artists on other profiles' lists built since `since` (their files beside this profile's).
+fn artists_elsewhere(app: &AppHandle, since: i64) -> HashSet<String> {
+    let mine = Discover::path(app);
+    let dir = app.path().app_data_dir().unwrap_or_default();
+    let mut out = HashSet::new();
+    let Ok(entries) = std::fs::read_dir(&dir) else { return out };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or_default().to_string();
+        if path == mine || !name.starts_with("wrapped-discover-") || !name.ends_with(".json") || name == "wrapped-discover-before-profiles.json" {
+            continue;
+        }
+        let Some(theirs) = crate::wrapped::read_json::<Store>(&path) else { continue };
+        for b in theirs.weekly.iter().chain(theirs.rediscover.iter()).filter(|b| b.built_at >= since) {
+            out.extend(b.tracks.iter().map(|t| t.artist.to_lowercase()).filter(|a| !a.is_empty()));
+        }
+        out.extend(theirs.past.iter().filter(|p| p.built_at >= since && !p.artist.is_empty()).map(|p| p.artist.to_lowercase()));
+    }
+    out
 }
 
 /// The plays that came from a Discover list: a song of a list, played
@@ -1631,7 +1661,7 @@ pub(crate) async fn home_favorites(app: &AppHandle, client: &LibraryClient) -> (
             .flat_map(|(w, b)| b.tracks.iter().map(move |t| (format!("{}@{}", w.name(), b.built_at), t.track_id.clone(), t.artist.clone(), t.title.clone(), b.built_at)))
             .collect()
     });
-    let ctx = Context { from_lists: plays_from_lists(app, &every), intent: intent_from_recents(client, now).await };
+    let ctx = Context { from_lists: plays_from_lists(app, &every), intent: intent_from_recents(client, now).await, ..Default::default() };
     let heard = history_by_artist(app, now, &ctx);
     // (not the last few weeks, which is what Discover Weekly works from:
     // every listen ever counts, and a hearted artist counts as well played)
@@ -2649,7 +2679,8 @@ async fn pick_rediscover(app: &AppHandle, client: &LibraryClient, _key: &str, re
         return Err("Wrapped has no copy of your library's artists yet (Wrapped's Settings reads it).".into());
     }
     let mut jitter = Jitter::new();
-    let open = |k: &str| !recently.contains(k) && !said.down.contains(k) && k != "various artists";
+    // (and not what another profile's lists had lately: the library is shared)
+    let open = |k: &str| !recently.contains(k) && !said.down.contains(k) && k != "various artists" && !ctx.elsewhere.contains(k);
 
     // Fine Tuning: tier 2 names the library artists whose music answers
     // the requests; their songs open the list (the whole list when the
@@ -2701,11 +2732,13 @@ async fn pick_rediscover(app: &AppHandle, client: &LibraryClient, _key: &str, re
             Some(h) if now - h.last_played >= 365 * DAY_MS && h.listens >= OLD_FAVORITE_LISTENS && h.listens * 2 >= h.plays => {
                 old.push(((h.listens as f64).ln() * (0.75 + 0.5 * jitter.next()), artist.name.clone(), h.listens, h.last_played));
             }
-            None => {
+            // (not an artist Discover Weekly brought: played from its list, it was heard all the same)
+            None if !ctx.brought.contains(&k) => {
                 if let Some(id) = artist.performer_id {
                     never.push((artist.name.clone(), id));
                 }
             }
+            None => {}
             Some(_) => {}
         }
     }
@@ -3031,7 +3064,7 @@ fn status(app: &AppHandle) -> DiscoverStatus {
 /// A build number for the title bar, bumped by hand with each push: it
 /// comes from Rust so it only changes when the app was really rebuilt
 /// (page files reload on their own in a dev build).
-pub const BUILD: u32 = 1259;
+pub const BUILD: u32 = 1268;
 
 /// The build number, for a dev build's title bar only (a release shows
 /// none).
@@ -3304,8 +3337,12 @@ async fn build(app: &AppHandle, which: Which) -> Result<(), String> {
     // (Recent Activity is the profile in use's: a list made in the
     // background for another profile goes without it)
     let intent = if for_profile_in_use(app) { intent_from_recents(&client, now_ms()).await } else { HashMap::new() };
-    let ctx = Context { from_lists: plays_from_lists(app, &every), intent };
+    let brought_by_weekly: HashSet<String> = every.iter().filter(|e| e.0.starts_with(&format!("{}@", Which::Weekly.name()))).map(|e| e.2.to_lowercase()).filter(|a| !a.is_empty()).collect();
+    let ctx = Context { from_lists: plays_from_lists(app, &every), intent, brought: brought_by_weekly, elsewhere: artists_elsewhere(app, now_ms() - OTHERS_REST_DAYS * DAY_MS) };
     note(format!("{} plays came from the Discover lists and don't count as listening", ctx.from_lists.len()));
+    if which == Which::Rediscover {
+        note(format!("{} artists Discover Weekly brought aren't \"never played\"; {} artists on other profiles' lists of the last {OTHERS_REST_DAYS} days stay out", ctx.brought.len(), ctx.elsewhere.len()));
+    }
     // A song you never played carries no judgment: only the ones you did
     // play (even skipped) stay out, and only their artists rest for a
     // while. The rest of a list you didn't get to may come around again.

@@ -1503,6 +1503,25 @@ button:disabled {
   font-size: 13px;
 }
 
+.lq-status[hidden] {
+  display: none;
+}
+
+.lq-status b {
+  font-weight: 600;
+}
+
+.lq-status .lq-status-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.lq-status .lq-status-note.warn {
+  color: var(--warn);
+}
+
 .lq-zones {
   display: flex;
   flex-direction: column;
