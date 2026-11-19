@@ -260,6 +260,8 @@ pub struct WrappedSettings {
     /// Live albums and songs in what Wrapped picks for you (Home's rows,
     /// Discover's lists, Deep Dive, the radio); off by default.
     pub live_albums: bool,
+    /// The user's Roon tags on the songs of an album page; on by default.
+    pub track_tags: bool,
     /// Whose genres the Genres page shows: "wrapped" (Wrapped's own tags)
     /// or "roon" (Roon's genres).
     pub genres: String,
@@ -320,6 +322,7 @@ impl Default for WrappedSettings {
             page_size: "100".into(),
             side_menu: "roon".into(),
             live_albums: false,
+            track_tags: true,
             genres: "wrapped".into(),
             profile_general: HashMap::new(),
             profile_names: HashMap::new(),

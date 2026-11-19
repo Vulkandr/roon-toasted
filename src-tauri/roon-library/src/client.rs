@@ -248,6 +248,27 @@ pub struct AudioQuality {
     pub channels: Option<u32>,
 }
 
+/// One of the user's Roon tags on something (a song, an album): its name, and its handle for
+/// `tag_contents`, to open the tag itself (two tags can share a name).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TagRef {
+    pub name: String,
+    pub handle: String,
+}
+
+/// Roon's genres and the user's Roon tags for a zone's current song (see `playing_labels`): the album's
+/// tags and the song's own apart, and the song's title, to tell whose they are (the Core's word on what
+/// a zone plays can be a moment behind the zone's).
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlayingLabels {
+    pub genres: Vec<String>,
+    pub album_tags: Vec<TagRef>,
+    pub track_tags: Vec<TagRef>,
+    pub title: String,
+}
+
 /// One track of the playing album (see `album_tracks`).
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -270,6 +291,9 @@ pub struct AlbumTrack {
     /// The Core's ids (durable), to match against a zone's track later.
     pub track_id: Option<u64>,
     pub library_track_id: Option<u64>,
+    /// The user's Roon tags on this song (not its album's), A to Z.
+    #[serde(default)]
+    pub tags: Vec<TagRef>,
 }
 
 /// How to play something: now (the queue cleared, as Roon's Play Now),
@@ -341,6 +365,9 @@ pub struct AlbumCard {
     pub banned: bool,
     /// "local", "qobuz", "tidal", "streaming" or "other".
     pub source: String,
+    /// The user's Roon tags on the album itself, A to Z.
+    #[serde(default)]
+    pub tags: Vec<TagRef>,
 }
 
 /// An artist as a page header or a search hit (see `artist_card`).
@@ -4807,6 +4834,7 @@ impl LibraryClient {
             let ids = [t.long_field("TrackId"), t.long_field("LibraryTrackId")];
             let state_obj = self.library_track_object(&g, t).unwrap_or(t);
             out.push(AlbumTrack {
+                tags: track_tags(&g, t, state_obj),
                 unavailable: track_unavailable(&g, t),
                 handle: oid.to_string(),
                 title: t.str_field("Title").unwrap_or_default().to_string(),
@@ -4923,48 +4951,22 @@ impl LibraryClient {
     /// playing (Now Playing's Wrapped piece): the album's genres, and the
     /// tags on the track and on its album. With a line for the log on how
     /// the tags came, while this is new.
-    pub async fn playing_labels(&self, zone_id: &str) -> Result<(Vec<String>, Vec<String>, String), LibraryError> {
-        let (album, mut tags, said) = {
+    pub async fn playing_labels(&self, zone_id: &str) -> Result<PlayingLabels, LibraryError> {
+        let (album, title, album_tags, track_tags) = {
             let g = self.inner.graph.lock().unwrap();
             let track = self.require_track(&g, zone_id)?;
-            let library_track = self.library_track_object(&g, track);
+            let library_track = self.library_track_object(&g, track).unwrap_or(track);
             let album = track.ref_field("Album");
-            let mut tags: Vec<String> = Vec::new();
-            let mut said = Vec::new();
-            let holders = [("library track", library_track), ("track", Some(track)), ("album", album.and_then(|oid| g.get(oid)))];
-            for (what, holder) in holders {
-                let Some(holder) = holder else { continue };
-                let raw = holder.field("Tags");
-                let list = g.deref(raw);
-                let names: Vec<String> = list
-                    .and_then(|l| l.items.clone())
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter_map(|oid| g.get(oid).and_then(|t| t.str_field("Name")).map(str::to_string))
-                    .collect();
-                said.push(format!(
-                    "{what}: {}, {} items, names {names:?}",
-                    match raw {
-                        None => "no Tags field".to_string(),
-                        Some(Value::Ref(oid)) => format!("list {oid} {}", if list.is_some() { "here" } else { "not in the graph" }),
-                        Some(other) => format!("{other:?}").chars().take(60).collect(),
-                    },
-                    list.and_then(|l| l.items.as_ref().map(Vec::len)).unwrap_or(0)
-                ));
-                for name in names {
-                    if !tags.contains(&name) {
-                        tags.push(name);
-                    }
-                }
-            }
-            (album, tags, said.join("; "))
+            let album_tags = album.and_then(|oid| g.get(oid)).map(|a| tags_of(&g, a)).unwrap_or_default();
+            // (a tag on both shows once, with the album's)
+            let track_tags: Vec<TagRef> = track_tags(&g, track, library_track).into_iter().filter(|t| !album_tags.iter().any(|a| a.handle == t.handle)).collect();
+            (album, track.str_field("Title").unwrap_or_default().to_string(), album_tags, track_tags)
         };
-        tags.sort_by_key(|t| t.to_lowercase());
         let genres = match album {
             Some(oid) => self.album_facts(&oid.to_string()).await.map(|f| f.genres).unwrap_or_default(),
             None => Vec::new(),
         };
-        Ok((genres, tags, said))
+        Ok(PlayingLabels { genres, album_tags, track_tags, title })
     }
 
     /// Bans an album for the profile in use, or lifts the ban, by its
@@ -5086,6 +5088,7 @@ impl LibraryClient {
         let profile = self.profile_sooid(&g);
         let state_obj = self.library_track_object(&g, t).unwrap_or(t);
         Some(AlbumTrack {
+            tags: track_tags(&g, t, state_obj),
             unavailable: track_unavailable(&g, t),
             handle: oid.to_string(),
             title: t.str_field("Title").unwrap_or_default().to_string(),
@@ -5466,7 +5469,35 @@ fn describe_album_card(g: &ObjectGraph, a: &RoonObject, profile: Option<&[u8]>) 
         favorite: read_state(a.field("IsFavorite"), profile),
         banned: read_state(a.field("IsBanned"), profile),
         source: source_name(a.field("Source").and_then(Value::as_int)),
+        tags: tags_of(g, a),
     }
+}
+
+/// The user's Roon tags on an object (a song, an album): its Tags list, when the Core sent it, A to Z.
+fn tags_of(g: &ObjectGraph, holder: &RoonObject) -> Vec<TagRef> {
+    let mut tags: Vec<TagRef> = g
+        .deref(holder.field("Tags"))
+        .and_then(|l| l.items.clone())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|oid| g.get(oid).and_then(|t| t.str_field("Name")).map(|name| TagRef { name: name.to_string(), handle: oid.to_string() }))
+        .collect();
+    tags.sort_by_key(|t| t.name.to_lowercase());
+    tags
+}
+
+/// A song's own tags (on the library's object for it, and on the song as listed), A to Z.
+fn track_tags(g: &ObjectGraph, track: &RoonObject, library_track: &RoonObject) -> Vec<TagRef> {
+    let mut tags = tags_of(g, library_track);
+    if library_track.oid != track.oid {
+        for tag in tags_of(g, track) {
+            if !tags.iter().any(|t| t.handle == tag.handle) {
+                tags.push(tag);
+            }
+        }
+    }
+    tags.sort_by_key(|t| t.name.to_lowercase());
+    tags
 }
 
 /// Whether Roon shows this song as "Unavailable": the Core marks it deleted (its file is gone), or sent it

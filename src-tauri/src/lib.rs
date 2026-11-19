@@ -859,6 +859,7 @@ pub fn run() {
             library::library_track_heart,
             library::library_track_add,
             library::library_play_track,
+            library::library_play_tracks,
             library::library_album_by_id,
             library::library_artist_by_id,
             library::library_album_card,

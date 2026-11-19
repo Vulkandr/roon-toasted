@@ -819,20 +819,14 @@ pub async fn library_ban(app: AppHandle, zone_id: String, banned: bool, song: Op
     result
 }
 
-/// Roon's genres and the user's Roon tags for the zone's current track
-/// (Now Playing's Wrapped piece, when its Genres or Tags are switched on).
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PlayingLabels {
-    pub genres: Vec<String>,
-    pub tags: Vec<String>,
-}
-
+/// Roon's genres and the user's Roon tags for the zone's current track (Now Playing's Wrapped piece,
+/// when its Genres or Tags are switched on): the album's tags and the song's own apart, with the title
+/// of the song they were read for.
 #[tauri::command]
-pub async fn library_playing_labels(app: AppHandle, zone_id: String) -> Result<PlayingLabels, String> {
+pub async fn library_playing_labels(app: AppHandle, zone_id: String) -> Result<roon_library::PlayingLabels, String> {
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
-    let (genres, tags, _) = client.playing_labels(&zone_id).await.map_err(describe)?;
-    Ok(PlayingLabels { genres, tags })
+    client.playing_labels(&zone_id).await.map_err(describe)
 }
 
 /// Bans an artist for the profile in use, or lifts the ban (the Ban button
@@ -993,6 +987,15 @@ pub async fn library_play_track(app: AppHandle, zone_id: String, handle: String,
     let library = app.state::<Library>();
     let client = library.client().ok_or_else(|| not_ready(&library))?;
     client.play_track_how(&zone_id, &handle, how.unwrap_or_default()).await.map_err(describe)
+}
+
+/// Plays several songs (by their handles, in that order) on the zone: now, next, or at the end of the
+/// queue (an album page's checked songs).
+#[tauri::command]
+pub async fn library_play_tracks(app: AppHandle, zone_id: String, handles: Vec<String>, how: Option<roon_library::PlayHow>) -> Result<(), String> {
+    let library = app.state::<Library>();
+    let client = library.client().ok_or_else(|| not_ready(&library))?;
+    client.play_tracks_how(&zone_id, &handles, how.unwrap_or_default()).await.map_err(describe)
 }
 
 // --- Wrapped pages ---
