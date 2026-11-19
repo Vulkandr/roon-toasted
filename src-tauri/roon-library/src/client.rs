@@ -63,6 +63,9 @@ const SIG_GET_PERFORMER_LITE: &str = "Sooloos.Broker.Api.Library::GetPerformerLi
 const SIG_UNIFIED_SEARCH: &str = "Sooloos.Broker.Api.Library::UnifiedSearch(Sooloos.Broker.Api.SearchParameters, Base.ResultCallback<Sooloos.Broker.Api.UnifiedSearchResults>)";
 const SIG_GET_PERFORMER: &str = "Sooloos.Broker.Api.Library::GetPerformer(Sooloos.Broker.Api.PerformerBase, Base.ResultCallback<Sooloos.Broker.Api.Performer>)";
 const SIG_SIMILAR_PERFORMERS: &str = "Sooloos.Broker.Api.Library::GetOneBoxSimilarPerformers(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.PerformerWithExtras>>)";
+// (Roon 2.75, build 1725, replaced GetOneBoxPerformerTopTracks with this one: it returns a
+// PerformerTopTracks, whose Popular and InLibrary are the lists)
+const SIG_PERFORMER_TOP_TRACKS_V2: &str = "Sooloos.Broker.Api.Library::GetOneBoxPerformerTopTracksV2(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.PerformerTopTracks>)";
 const SIG_PERFORMER_TOP_TRACKS: &str = "Sooloos.Broker.Api.Library::GetOneBoxPerformerTopTracks(Sooloos.Broker.Api.PerformerLite, System.Sooid, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.TrackLite>>)";
 const SIG_GET_RECENTS: &str = "Sooloos.Broker.Api.Library::GetRecents(Sooloos.Broker.Api.Profile, string, Base.ResultCallback<Sooloos.Broker.Api.DataList<Sooloos.Broker.Api.RecentItem>>)";
 const SIG_QUEUE_ITEMS: &str = "Sooloos.Broker.Api.Queue::GetItems(Base.ResultCallback<System.Collections.Generic.IList<Sooloos.Broker.Api.TransportItem>>)";
@@ -4016,11 +4019,21 @@ impl LibraryClient {
         Ok((out, shape))
     }
 
-    /// An artist's top songs as Roon ranks them (GetOneBoxPerformerTopTracks),
-    /// with their albums' titles and live flags.
+    /// An artist's top songs as Roon ranks them (GetOneBoxPerformerTopTracksV2, or
+    /// GetOneBoxPerformerTopTracks on a Core older than Roon 2.75), with their albums'
+    /// titles and live flags.
     pub async fn top_tracks(&self, performer_handle: &str) -> Result<Vec<TopTrack>, LibraryError> {
         let oid: u64 = performer_handle.parse().map_err(|_| LibraryError::Unconfirmed(format!("bad artist handle {performer_handle}")))?;
-        let list = self.one_box(SIG_PERFORMER_TOP_TRACKS, "GetOneBoxPerformerTopTracks", Subject::Oid(oid)).await?;
+        let list = match self.one_box(SIG_PERFORMER_TOP_TRACKS_V2, "GetOneBoxPerformerTopTracksV2", Subject::Oid(oid)).await {
+            // (its Popular list: the same songs the older call gave)
+            Ok(Value::Inline(s)) => s.field("Popular").cloned().unwrap_or(Value::Null),
+            Ok(other) => {
+                let g = self.inner.graph.lock().unwrap();
+                g.deref(Some(&other)).and_then(|o| o.field("Popular")).cloned().unwrap_or(Value::Null)
+            }
+            // (a Core from before Roon 2.75 doesn't have it)
+            Err(_) => self.one_box(SIG_PERFORMER_TOP_TRACKS, "GetOneBoxPerformerTopTracks", Subject::Oid(oid)).await?,
+        };
         self.wait_for_lists(std::slice::from_ref(&list), None).await;
         // (and the songs' albums, for their titles and live flags)
         let albums: Vec<u64> = {

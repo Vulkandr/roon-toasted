@@ -1,5 +1,17 @@
 [
   {
+    "version": "1.7.1",
+    "date": "2026-11-19",
+    "sections": [
+      {
+        "title": "Fixes",
+        "items": [
+          ["Popular songs with Roon 2.75", "Roon 2.75 (build 1725) changed how it hands out an artist's best-known songs. With it, every artist page in Wrapped showed \"GetOneBoxPerformerTopTracks failed: MissingMethod\" where the Popular songs belong, and Discover Weekly and Deep Dive had no best-known songs to pick from for an artist. Toasted now asks the way Roon 2.75 expects, and still works with older Roon versions."]
+        ]
+      }
+    ]
+  },
+  {
     "version": "1.7.0",
     "date": "2026-11-19",
     "sections": [
