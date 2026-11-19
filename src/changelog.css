@@ -6,8 +6,16 @@
    bar and cards come from settings.css) */
 main.changelog {
   display: block;
-  max-width: 620px;
+  /* (its padding counts as part of its width: without that it was 48px wider than its window whenever
+     the window was narrower than 668px, and the page scrolled sideways) */
+  box-sizing: border-box;
+  max-width: 668px;
   padding: 20px 24px 28px;
+}
+
+/* (the page only ever scrolls up and down) */
+.page-scroll {
+  overflow-x: hidden;
 }
 
 main.changelog > h1 {

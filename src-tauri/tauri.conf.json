@@ -96,7 +96,7 @@
         "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --disable-lcd-text",
         "url": "changelog.html",
         "title": "Roon: Toasted Changelog",
-        "width": 640,
+        "width": 680,
         "height": 780,
         "minWidth": 460,
         "minHeight": 400,

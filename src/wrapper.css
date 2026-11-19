@@ -8756,8 +8756,17 @@ body.wrapped-column-moving * {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  padding: 8px 0;
+  padding: 8px 6px;
   border-bottom: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.wrapped-artist-track.clickable {
+  cursor: pointer;
+}
+
+.wrapped-artist-track.clickable:hover {
+  background: var(--hover);
 }
 
 .wrapped-artist-track-text {
@@ -9346,4 +9355,126 @@ body.zone-paused .wrapped-track-eq i {
   width: 15px;
   height: 15px;
   shape-rendering: geometricPrecision;
+}
+
+/* Pinned playlists (wrapper.js, pinDraggable): the pin on a side menu entry and on a Playlists row, and a
+   pinned one being dragged among the others */
+.pin-toggle {
+  display: none;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  /* (always at the far right of its entry, however short the name) */
+  margin-left: auto;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* (a playlist's entry in the side menu: its name runs up to a few pixels from the pin and the mark) */
+.wrapped-side-list {
+  gap: 4px;
+}
+
+.wrapped-side-list > svg:first-child {
+  margin-right: 6px;
+}
+
+.wrapped-side-list .playlist-mark {
+  margin-left: 2px;
+}
+
+/* What is being dragged, following the pointer (wrapper.js, dragGhost) */
+.drag-ghost {
+  position: fixed;
+  z-index: 9999;
+  margin: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  opacity: 0.94;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  overflow: hidden;
+}
+
+.pin-toggle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wrapped-side-btn:hover .pin-toggle,
+.pin-toggle.on {
+  display: inline-grid;
+}
+
+.pin-toggle.on,
+.pin-toggle:hover {
+  color: var(--accent);
+}
+
+.wrapped-pin {
+  color: var(--muted);
+  opacity: 0;
+}
+
+.wrapped-track:hover .wrapped-pin,
+.wrapped-pin.on {
+  opacity: 1;
+}
+
+.wrapped-pin.on,
+.wrapped-pin:hover {
+  color: var(--accent);
+}
+
+.pin-drag {
+  cursor: grab;
+  touch-action: none;
+}
+
+.pin-drag.dragging {
+  opacity: 0.45;
+}
+
+body.pin-moving,
+body.pin-moving * {
+  cursor: grabbing !important;
+  user-select: none;
+}
+
+.pin-drag.drop-before {
+  box-shadow: 0 -2px 0 var(--accent);
+}
+
+.pin-drag.drop-after {
+  box-shadow: 0 2px 0 var(--accent);
+}
+
+/* A Playlists section's heading, with the arrows that move the section up or down */
+.wrapped-playlists-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wrapped-playlists-arrows {
+  display: inline-flex;
+  gap: 2px;
+}
+
+.wrapped-playlists-arrow {
+  width: 24px;
+  height: 24px;
+  color: var(--muted);
+}
+
+.wrapped-playlists-arrow svg {
+  width: 15px;
+  height: 15px;
+}
+
+.wrapped-playlists-arrow:not(:disabled):hover {
+  color: var(--accent);
+}
+
+.wrapped-playlists-arrow:disabled {
+  opacity: 0.3;
 }

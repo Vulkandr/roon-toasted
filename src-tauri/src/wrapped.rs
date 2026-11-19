@@ -262,6 +262,14 @@ pub struct WrappedSettings {
     pub live_albums: bool,
     /// The user's Roon tags on the songs of an album page; on by default.
     pub track_tags: bool,
+    /// Playlists pinned to the top of the side menu and of the Playlists page, in the order the user
+    /// dragged them into: Roon's durable playlist ids (hex), or "name:<name>" for one without an id.
+    /// The profile in use's own: as `load` gives it, this is `pinned_by_profile`'s list for it.
+    pub pinned_playlists: Vec<String>,
+    /// Each profile's pinned playlists, by profile id.
+    pub pinned_by_profile: HashMap<String, Vec<String>>,
+    /// The order of the Playlists page's sections: "discover", "wrapped" and "other".
+    pub playlist_sections: Vec<String>,
     /// Whose genres the Genres page shows: "wrapped" (Wrapped's own tags)
     /// or "roon" (Roon's genres).
     pub genres: String,
@@ -323,6 +331,9 @@ impl Default for WrappedSettings {
             side_menu: "roon".into(),
             live_albums: false,
             track_tags: true,
+            pinned_playlists: Vec::new(),
+            pinned_by_profile: HashMap::new(),
+            playlist_sections: vec!["discover".into(), "wrapped".into(), "other".into()],
             genres: "wrapped".into(),
             profile_general: HashMap::new(),
             profile_names: HashMap::new(),
@@ -411,6 +422,7 @@ impl WrappedSettings {
         // (the profile in use, as the history copy has it: known before
         // the Core is reached too)
         if let Some(id) = self.history_profile.clone() {
+            self.pinned_playlists = self.pinned_by_profile.get(&id).cloned().unwrap_or_default();
             self.lastfm_user = self.lastfm_of(&id);
             self.discover_here = self.discover_on(&id);
             self.rescan_here = self.rescan_profiles.get(&id).copied().unwrap_or(true);
@@ -486,11 +498,18 @@ pub fn wrapped_settings_update(app: AppHandle, changes: serde_json::Value, share
     let mut value = serde_json::to_value(&saved).map_err(|e| e.to_string())?;
     let fields = value.as_object_mut().expect("settings serialize to an object");
     for (name, new) in changes {
-        if ["profileGeneral", "sharedGeneral", "historyProfile", "lastfmUsers", "lastfmRoon", "profileNames", "firstProfile", "discoverProfiles", "discoverHere", "rescanProfiles", "rescanHere", "rescannedAt"].contains(&name.as_str()) {
+        if ["pinnedByProfile", "profileGeneral", "sharedGeneral", "historyProfile", "lastfmUsers", "lastfmRoon", "profileNames", "firstProfile", "discoverProfiles", "discoverHere", "rescanProfiles", "rescanHere", "rescannedAt"].contains(&name.as_str()) {
             return Err(format!("{name} isn't changed directly."));
         }
         if !fields.contains_key(name) {
             return Err(format!("Unknown Wrapped setting: {name}"));
+        }
+        // (pinned playlists are the profile in use's own)
+        if let ("pinnedPlaylists", Some(id)) = (name.as_str(), &saved.history_profile) {
+            if let Some(all) = fields.get_mut("pinnedByProfile").and_then(|all| all.as_object_mut()) {
+                all.insert(id.clone(), new.clone());
+            }
+            continue;
         }
         // (a Last.fm username is the profile in use's own)
         if let ("lastfmUser", Some(id)) = (name.as_str(), &saved.history_profile) {

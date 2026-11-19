@@ -5131,6 +5131,120 @@ function playlistMark(kind) {
   return mark;
 }
 
+// Pinned playlists (Wrapped's settings, `pinnedPlaylists`): they lead the side menu and the Playlists page,
+// in the order they are dragged into; the others stay newest first. Known by Roon's own id for a playlist.
+const PIN_ICON =
+  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>';
+const playlistKey = (p) => p.playlistId || `name:${p.name}`;
+const pinnedPlaylistKeys = () => (Array.isArray(wrappedSettings?.pinnedPlaylists) ? wrappedSettings.pinnedPlaylists : []);
+// (where the Playlists page was scrolled to, kept over the redraw a pin or a move asks for)
+let playlistsScrollTo = null;
+async function savePinnedPlaylists(keys) {
+  try {
+    wrappedSettings = await invoke("wrapped_settings_update", { changes: { pinnedPlaylists: keys } });
+  } catch (err) {
+    return wrappedToast(String(err));
+  }
+  if (wrappedStack.at(-1)?.page === "playlists" && !wrapped.hidden) {
+    playlistsScrollTo = wrappedBody.scrollTop;
+    renderWrapped();
+  } else if (!wrappedSide.hidden) fillWrappedSide();
+}
+function togglePlaylistPin(p) {
+  const key = playlistKey(p);
+  const keys = pinnedPlaylistKeys();
+  const on = !keys.includes(key);
+  wrappedToast(on ? `Pinned ${p.name}` : `Unpinned ${p.name}`);
+  return savePinnedPlaylists(on ? [...keys, key] : keys.filter((k) => k !== key));
+}
+// What is being dragged, following the pointer: a copy of it, with its look (the copy is put on the page's
+// body, out of reach of the rules that go by where the original sits, so its own colors, border and font
+// are written onto it). `grab`: the pointerdown that began the drag. Returns `move(event)` and `remove()`.
+function dragGhost(el, grab) {
+  const box = el.getBoundingClientRect();
+  const look = getComputedStyle(el);
+  const ghost = el.cloneNode(true);
+  ghost.classList.remove("dragging", "drop", "drop-before", "drop-after");
+  ghost.classList.add("drag-ghost");
+  ghost.removeAttribute("title");
+  for (const name of ["background", "color", "border", "borderRadius", "font", "padding", "display", "alignItems", "gap", "textAlign", "letterSpacing", "textTransform"]) ghost.style[name] = look[name];
+  // (a see-through one would let the page show through the copy)
+  if (look.backgroundColor === "rgba(0, 0, 0, 0)") ghost.style.background = "var(--card)";
+  ghost.style.width = `${box.width}px`;
+  ghost.style.height = `${box.height}px`;
+  const [dx, dy] = [grab.clientX - box.left, grab.clientY - box.top];
+  const move = (e) => {
+    ghost.style.left = `${e.clientX - dx}px`;
+    ghost.style.top = `${e.clientY - dy}px`;
+  };
+  move(grab);
+  document.body.append(ghost);
+  return { move, remove: () => ghost.remove() };
+}
+
+// A pinned playlist's entry or row, dragged up or down among the other pinned ones (with the pointer: the
+// window hands the browser's own drags to Tauri, see columnDraggable)
+function pinDraggable(el, key) {
+  el.classList.add("pin-drag");
+  el.dataset.pinKey = key;
+  el.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || event.target.closest(".icon-btn, .pin-toggle")) return;
+    const startY = event.clientY;
+    let moving = false;
+    let over = null;
+    let ghost = null;
+    const clear = () => over?.classList.remove("drop-before", "drop-after");
+    const move = (e) => {
+      if (!moving && Math.abs(e.clientY - startY) < 5) return;
+      if (!moving) {
+        moving = true;
+        ghost = dragGhost(el, event);
+        el.classList.add("dragging");
+        document.body.classList.add("pin-moving");
+      }
+      ghost.move(e);
+      let best = null;
+      let gap = Infinity;
+      for (const other of el.parentElement.querySelectorAll(":scope > .pin-drag")) {
+        const box = other.getBoundingClientRect();
+        const off = Math.abs(e.clientY - (box.top + box.bottom) / 2);
+        if (off < gap) {
+          gap = off;
+          best = other;
+        }
+      }
+      const next = best && best !== el ? best : null;
+      if (next !== over) {
+        clear();
+        over = next;
+        // (it takes the place of the one it is dropped on: a line on the side it comes from)
+        if (over) over.classList.add(el.compareDocumentPosition(over) & Node.DOCUMENT_POSITION_FOLLOWING ? "drop-after" : "drop-before");
+      }
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
+      el.classList.remove("dragging");
+      document.body.classList.remove("pin-moving");
+      ghost?.remove();
+      clear();
+      if (!moving) return;
+      // (the click that ends a drag isn't one on the playlist)
+      const swallow = (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+      };
+      window.addEventListener("click", swallow, { capture: true, once: true });
+      setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 80);
+      if (over) savePinnedPlaylists(columnMoved(pinnedPlaylistKeys(), key, over.dataset.pinKey));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
+  });
+}
+
 async function openPlaylistMenu(anchor, tracksOf) {
   const say = (text) => (stage.hidden ? wrappedToast(text) : wrappedToastStage(text));
   let lists;
@@ -5554,7 +5668,13 @@ function monoEmoji(text) {
   return out;
 }
 
+// (the playlists as last read: the side menu is drawn from them at once, and again only if the Core's
+// answer differs, so it doesn't empty and jump while it waits)
+let sidePlaylists = null;
 function fillWrappedSide() {
+  // (drawn again for every click and change: it stays where it was scrolled to)
+  const keepScroll = wrappedSide.scrollTop;
+  requestAnimationFrame(() => (wrappedSide.scrollTop = keepScroll));
   wrappedSide.replaceChildren();
   const current = wrapped.hidden ? null : wrappedStack.at(-1)?.page;
   for (const [caption, items] of wrappedSideGroups()) {
@@ -5584,16 +5704,26 @@ function fillWrappedSide() {
   wrappedSide.append(lists);
   if (libraryReady) {
     const fill = ++wrappedSideFill;
-    invoke("library_playlists")
-      .then((list) => {
-        if (fill !== wrappedSideFill || !list.length) return;
+    {
+      const paint = (list) => {
+        lists.replaceChildren();
+        if (!list.length) return;
         const head = document.createElement("div");
         head.className = "wrapped-side-caption";
         head.textContent = "Playlists";
         lists.append(head);
-        const week = thisWeeksLists(list);
-        const sorted = [...week, ...newestPlaylistsFirst(list.filter((p) => !isThisWeeksList(p)))];
-        for (const p of sorted) {
+        // (the pinned ones first, in the order they were dragged into, a line under them)
+        const pins = pinnedPlaylistKeys();
+        const pinned = pins.map((key) => list.find((p) => playlistKey(p) === key)).filter(Boolean);
+        const loose = list.filter((p) => !pins.includes(playlistKey(p)));
+        const week = thisWeeksLists(loose);
+        const sorted = [...week, ...newestPlaylistsFirst(loose.filter((p) => !isThisWeeksList(p)))];
+        const sideLine = () => {
+          const line = document.createElement("div");
+          line.className = "wrapped-side-line";
+          lists.append(line);
+        };
+        const entry = (p, isPinned) => {
           const option = document.createElement("button");
           option.className = "wrapped-side-btn wrapped-side-list";
           option.insertAdjacentHTML("beforeend", WRAPPED_ICONS.playlists);
@@ -5602,18 +5732,40 @@ function fillWrappedSide() {
           option.append(label);
           const mark = playlistMark(p.kind);
           if (mark) option.append(mark);
-          option.title = mark ? `${p.name} (${mark.title.replace(/^An? /, "")})` : p.name;
+          // (the pin: there on a pinned one, under the pointer on the others)
+          const pin = document.createElement("i");
+          pin.className = `pin-toggle${isPinned ? " on" : ""}`;
+          pin.innerHTML = PIN_ICON;
+          pin.title = isPinned ? "Unpin" : "Pin to the top";
+          pin.addEventListener("click", (event) => {
+            event.stopPropagation();
+            togglePlaylistPin(p);
+          });
+          option.append(pin);
+          option.title = (mark ? `${p.name} (${mark.title.replace(/^An? /, "")})` : p.name) + (isPinned ? "\nPinned: drag to move it among the pinned ones" : "");
           if (current === "playlist" && wrappedStack.at(-1)?.handle === p.handle) option.classList.add("selected");
           option.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
+          if (isPinned) pinDraggable(option, playlistKey(p));
           lists.append(option);
-          if (week.length && p === week.at(-1) && sorted.length > week.length) {
-            const line = document.createElement("div");
-            line.className = "wrapped-side-line";
-            lists.append(line);
-          }
+        };
+        for (const p of pinned) entry(p, true);
+        if (pinned.length && sorted.length) sideLine();
+        for (const p of sorted) {
+          entry(p, false);
+          if (week.length && p === week.at(-1) && sorted.length > week.length) sideLine();
         }
-      })
-      .catch(() => {});
+        wrappedSide.scrollTop = keepScroll;
+      };
+      if (sidePlaylists) paint(sidePlaylists);
+      invoke("library_playlists")
+        .then((list) => {
+          if (fill !== wrappedSideFill) return;
+          const same = sidePlaylists && JSON.stringify(sidePlaylists) === JSON.stringify(list);
+          sidePlaylists = list;
+          if (!same) paint(list);
+        })
+        .catch(() => {});
+    }
   }
   if (!wrapped.hidden) {
     const close = document.createElement("button");
@@ -6067,9 +6219,17 @@ let diveText = "";
 // Where the songs come from: "new", "library" or "both" (the toggle under
 // the words; remembered)
 let diveSource = "both";
-try {
-  diveSource = ["new", "library", "both"].includes(localStorage.getItem("wrapped-dive-source")) ? localStorage.getItem("wrapped-dive-source") : "both";
-} catch {}
+function diveSourceKept() {
+  try {
+    const kept = localStorage.getItem("wrapped-dive-source");
+    return ["new", "library", "both"].includes(kept) ? kept : "both";
+  } catch {
+    return "both";
+  }
+}
+diveSource = diveSourceKept();
+// (lights the "Songs from" choice that is in use, while the Deep Dive page shows; set by the page)
+let diveSourcePaint = () => {};
 let deepDiveTab = "dive";
 let diveRadioAt = -1;
 
@@ -6843,21 +7003,66 @@ const WRAPPED_PAGES = {
     }
     if (ticket !== wrappedTicket) return;
     wrappedBody.replaceChildren(wrappedCorner("Ban list", () => openWrappedPage({ page: "banlist" })));
-    const week = thisWeeksLists(list);
-    const mine = newestPlaylistsFirst(list.filter((p) => isWrappedPlaylist(p) && !isThisWeeksList(p)));
-    const others = newestPlaylistsFirst(list.filter((p) => !isWrappedPlaylist(p)));
-    // (this week's Discover lists first, a line under them)
-    if (week.length) {
-      const line = document.createElement("hr");
-      line.className = "wrapped-playlists-line";
-      wrappedBody.append(wrappedSection("This week's Discover"), playlistRows(week, true), line);
+    // The pinned ones first, in the order they were dragged into; then the three sections, in the order
+    // their arrows put them (Wrapped's settings, `playlistSections`), each newest first
+    const pins = pinnedPlaylistKeys();
+    const pinned = pins.map((key) => list.find((p) => playlistKey(p) === key)).filter(Boolean);
+    const loose = list.filter((p) => !pins.includes(playlistKey(p)));
+    const week = thisWeeksLists(loose);
+    const mine = newestPlaylistsFirst(loose.filter((p) => isWrappedPlaylist(p) && !isThisWeeksList(p)));
+    const others = newestPlaylistsFirst(loose.filter((p) => !isWrappedPlaylist(p)));
+    if (pinned.length) wrappedBody.append(wrappedSection("Pinned"), playlistRows(pinned, false, true));
+    const sections = {
+      discover: ["This week's Discover", week, true],
+      wrapped: ["Made by Wrapped", mine, true],
+      other: ["Your other playlists", others, false],
+    };
+    const saved = Array.isArray(wrappedSettings?.playlistSections) ? wrappedSettings.playlistSections.filter((id) => sections[id]) : [];
+    const order = [...new Set([...saved, ...Object.keys(sections)])];
+    const shown = order.filter((id) => sections[id][1].length);
+    const moveSection = async (id, by) => {
+      // (past the next one that shows, so every press is seen)
+      const at = shown.indexOf(id);
+      const other = shown[at + by];
+      if (!other) return;
+      const next = order.slice();
+      const [a, b] = [next.indexOf(id), next.indexOf(other)];
+      [next[a], next[b]] = [next[b], next[a]];
+      try {
+        wrappedSettings = await invoke("wrapped_settings_update", { changes: { playlistSections: next } });
+      } catch (err) {
+        return wrappedToast(String(err));
+      }
+      playlistsScrollTo = wrappedBody.scrollTop;
+      renderWrapped();
+    };
+    for (const id of shown) {
+      const [title, rows, mineRows] = sections[id];
+      const head = wrappedSection(title);
+      head.classList.add("wrapped-playlists-head");
+      if (shown.length > 1) {
+        const arrows = document.createElement("span");
+        arrows.className = "wrapped-playlists-arrows";
+        for (const [by, label, d] of [
+          [-1, "Move this section up", "m18 15-6-6-6 6"],
+          [1, "Move this section down", "m6 9 6 6 6-6"],
+        ]) {
+          const icon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+          const btn = wrappedIconButton(icon, label, () => moveSection(id, by), "wrapped-playlists-arrow");
+          btn.disabled = !shown[shown.indexOf(id) + by];
+          arrows.append(btn);
+        }
+        head.append(arrows);
+      }
+      wrappedBody.append(head, playlistRows(rows, mineRows));
     }
-    if (mine.length) {
-      wrappedBody.append(wrappedSection("Made by Wrapped"), playlistRows(mine, true));
-    } else if (!week.length) {
+    if (!mine.length && !week.length && !pinned.some(isWrappedPlaylist)) {
       wrappedBody.append(wrappedNote("Wrapped hasn't made any playlists yet. On an album page, the list button saves the album as one."));
     }
-    if (others.length) wrappedBody.append(wrappedSection("Your other playlists"), playlistRows(others, false));
+    if (playlistsScrollTo != null) {
+      wrappedBody.scrollTop = playlistsScrollTo;
+      playlistsScrollTo = null;
+    }
   },
 
   // The ban list: artists never suggested again (a thumbs down on a
@@ -7233,9 +7438,11 @@ function diveFromSwitch() {
   fromTabs.className = "wrapped-tabs small";
   from.append(fromLabel, fromTabs);
   const chips = [];
+  diveSourcePaint = () => chips.forEach((c) => c.classList.toggle("selected", c.dataset.source === diveSource));
   for (const [value, text] of [["new", "New to you"], ["library", "Your library"], ["both", "Both"]]) {
     const chip = document.createElement("button");
     chip.className = `wrapped-tab${diveSource === value ? " selected" : ""}`;
+    chip.dataset.source = value;
     chip.textContent = text;
     chip.addEventListener("click", () => {
       diveSource = value;
@@ -7466,6 +7673,8 @@ function diveChatPanel() {
     over.textContent = chat.waiting ? "Cancel" : "Start over";
     over.addEventListener("click", () => {
       diveChat = null;
+      diveSource = diveSourceKept();
+      diveSourcePaint();
       diveChatRedraw();
     });
     actions.append(over);
@@ -7524,6 +7733,8 @@ function diveChatPanel() {
   over.textContent = "Start over";
   over.addEventListener("click", () => {
     diveChat = null;
+    diveSource = diveSourceKept();
+    diveSourcePaint();
     diveChatRedraw();
   });
   actions.append(make, over);
@@ -7588,12 +7799,9 @@ function diveTakeUp(d) {
   }));
   diveText = d.request || "";
   const p = d.plan;
-  if (["new", "library", "both"].includes(p?.source)) {
-    diveSource = p.source;
-    try {
-      localStorage.setItem("wrapped-dive-source", diveSource);
-    } catch {}
-  }
+  // (its own source, for carrying it on: not remembered as yours. Taking up a Deep Dive made with "Both"
+  // used to set the choice back to Both for every one after it; "Start over" brings yours back)
+  if (["new", "library", "both"].includes(p?.source)) diveSource = p.source;
   diveChat = {
     turns: [
       ...(d.talk || []),
@@ -8656,7 +8864,7 @@ async function homeMemories(holder, ticket) {
     bottomRows.push(
       homeRow(
         "onthisday",
-        "On this day",
+        "Last year on this day",
         memories.onThisDay.map((a) => ({ albumId: a.albumId, title: a.title, artist: a.artist, sub: `${a.year} · ${a.artist}`, imageKey: a.imageKey, why: `${songs(a.plays)} of it on ${dateOf(a.lastPlayed)}` })),
         openMemory,
         null,
@@ -8913,6 +9121,7 @@ function columnDraggable(cell, id, onMove) {
     const startY = event.clientY;
     let moving = false;
     let over = null;
+    let ghost = null;
     // (the heading under the pointer, else the nearest one across)
     const headingAt = (x) => {
       let best = null;
@@ -8931,9 +9140,11 @@ function columnDraggable(cell, id, onMove) {
       if (!moving && Math.hypot(e.clientX - startX, e.clientY - startY) < 4) return;
       if (!moving) {
         moving = true;
+        ghost = dragGhost(cell, event);
         cell.classList.add("dragging");
         document.body.classList.add("wrapped-column-moving");
       }
+      ghost.move(e);
       const target = headingAt(e.clientX);
       const next = target && target !== cell ? target : null;
       if (next !== over) {
@@ -8947,6 +9158,7 @@ function columnDraggable(cell, id, onMove) {
       window.removeEventListener("pointerup", up);
       window.removeEventListener("pointercancel", up);
       cell.classList.remove("dragging");
+      ghost?.remove();
       over?.classList.remove("drop");
       document.body.classList.remove("wrapped-column-moving");
       if (moving && over) onMove(id, over.dataset.columnId);
@@ -9509,6 +9721,9 @@ function wrappedArtistTracks(box, card, ticket) {
     length.className = "wrapped-track-length";
     length.textContent = song.lengthSeconds ? formatTime(song.lengthSeconds) : "";
     row.append(play, text, length);
+    // (a click anywhere on the row is a click on the song: only its name took one before, with no
+    // hand over the rest of the row and nothing lit under the pointer)
+    wholeRowOpens(row, name);
     if (song.unavailable) markUnavailable(row, name);
     return row;
   };
@@ -14453,7 +14668,8 @@ async function discoverBuild(which, title) {
   }
 }
 
-function playlistRows(list, mine) {
+// (`pinned`: the Pinned section's rows, which are dragged into their order)
+function playlistRows(list, mine, pinned = false) {
   const rows = document.createElement("div");
   rows.className = "wrapped-tracks";
   for (const p of list) {
@@ -14473,7 +14689,7 @@ function playlistRows(list, mine) {
     text.className = "wrapped-track-text";
     const title = document.createElement("span");
     title.className = "wrapped-track-title";
-    title.textContent = mine && p.name.startsWith(WRAPPED_PREFIX) ? p.name.slice(WRAPPED_PREFIX.length) : p.name;
+    title.textContent = (mine || isWrappedPlaylist(p)) && p.name.startsWith(WRAPPED_PREFIX) ? p.name.slice(WRAPPED_PREFIX.length) : p.name;
     const sub = document.createElement("span");
     sub.className = "wrapped-track-sub";
     sub.textContent = [
@@ -14489,6 +14705,11 @@ function playlistRows(list, mine) {
     title.classList.add("link");
     title.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
     row.append(art, text);
+    row.append(wrappedIconButton(PIN_ICON, pinned ? "Unpin" : "Pin to the top of this page and the side menu", () => togglePlaylistPin(p), `wrapped-pin${pinned ? " on" : ""}`));
+    if (pinned) {
+      pinDraggable(row, playlistKey(p));
+      row.title = "Drag to move it among the pinned playlists";
+    }
     // (any playlist Roon lets be changed, Wrapped's own or not; two clicks)
     if (!p.readOnly) {
       const del = wrappedIconButton(TRASH_ICON, "Delete this playlist", async () => {
@@ -15362,7 +15583,7 @@ const ONBOARDING_TOURS = {
     { find: () => homeRowEl("New albums from artists you may like"), text: "And new albums from artists suggested for you. Every row shows one line that fits; click its title for three lines, Keep looking for more." },
     { find: () => homeRowEl("Newer albums from your favorite artists you may have missed"), text: "Newer albums from your favorite artists you may have missed: albums from the last three years that you haven't played a song of, from the artists you play most first. Easy to have slipped past, even when they're no longer new." },
     { find: () => homeRowEl("Forgotten favorites"), text: "Forgotten favorites are albums you once played a lot but haven't touched in a year or more. Worth a revisit." },
-    { find: () => homeRowEl("On this day"), text: "On this day shows what you were playing on today's date in earlier years." },
+    { find: () => homeRowEl("Last year on this day"), text: "Last year on this day shows what you were playing on today's date in earlier years." },
     // (only pointed at: on a first visit Home was just put together, so
     // pressing it would only redo the work)
     { find: () => document.querySelector(".wrapped-home-corner"), text: "Home keeps itself up to date: new albums are looked for daily, artists for you every two weeks. Refresh does both right away, if you ever want it sooner. Hover a row's title for a word on what it is." },
