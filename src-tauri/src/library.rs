@@ -145,6 +145,9 @@ struct Inner {
     /// connection task that wakes up late knows to stand down.
     generation: u64,
     last_sent: Option<LibraryStatus>,
+    /// The Core the connection was started for (its id and address): the one Toasted itself was
+    /// connected to then. A connection to any other Core is dropped (`reconsider`).
+    linked: Option<(String, String)>,
 }
 
 /// The library connection, stored in Tauri's managed state.
@@ -165,6 +168,7 @@ impl Default for Library {
                 },
                 generation: 0,
                 last_sent: None,
+                linked: None,
             }),
             app: OnceLock::new(),
         }
@@ -249,17 +253,27 @@ pub fn reconsider(app: &AppHandle) {
             return;
         }
     };
-    // Already connected to this Core: nothing to do.
+    // Already connected (or connecting, or turned down) for this very Core, at this address: nothing to
+    // do. The Core Toasted is connected to is the only one the link may be on: a link still open to
+    // another Core (Toasted moved to a different one, or the Core to a new address) is dropped and made
+    // again, and a Core that turned the link down doesn't speak for the next one.
+    let wanted = (core.core_id.clone(), core.host.clone());
     {
         let inner = library.inner.lock().unwrap();
-        if inner.client.as_ref().is_some_and(|c| c.is_connected())
-            || inner.status.state == LibraryState::Connecting
-            || inner.status.state == LibraryState::Unsupported
+        let same = inner.linked.as_ref() == Some(&wanted);
+        if same
+            && (inner.client.as_ref().is_some_and(|c| c.is_connected())
+                || inner.status.state == LibraryState::Connecting
+                || inner.status.state == LibraryState::Unsupported)
         {
             return;
         }
+        if !same && inner.linked.is_some() {
+            println!("[library {}] the Core changed (to {} at {}): connecting again", clock(), core.name, core.host);
+        }
     }
     let generation = library.stop();
+    library.inner.lock().unwrap().linked = Some(wanted);
     library.set_status(LibraryState::Connecting, None);
     let app = app.clone();
     tauri::async_runtime::spawn(run(app, generation, core.host, core.core_id));
@@ -281,18 +295,221 @@ pub fn settings_changed(app: &AppHandle, before: &AppSettings, after: &AppSettin
     }
 }
 
+/// What is kept about a Core (settings.rs, `CoreNote`).
+fn core_note(app: &AppHandle, core_id: &str) -> Option<settings::CoreNote> {
+    settings::path(app).and_then(|p| settings::load(&p).cores.get(core_id).cloned())
+}
+
+/// Changes what is kept about a Core (and the rest of the settings with it, when `change` says so).
+fn note_core(app: &AppHandle, core_id: &str, change: impl FnOnce(&mut AppSettings, &str)) {
+    let Some(path) = settings::path(app) else { return };
+    let before = settings::load(&path);
+    let mut after = before.clone();
+    after.cores.entry(core_id.to_string()).or_default();
+    change(&mut after, core_id);
+    if serde_json::to_value(&before).ok() != serde_json::to_value(&after).ok() {
+        let _ = settings::save(&path, &after);
+    }
+}
+
+/// On connecting to a Core: its name, address and the port found are kept, and the profile last used on
+/// it is picked again (each Core has its own, as the profiles of a Roon account show on every Core and
+/// the one in use otherwise carries over from the Core before). The pages are told when that changed
+/// the profile ("library-core-profile"), so it doesn't happen unseen.
+fn use_core_profile(app: &AppHandle, client: &LibraryClient, core_id: &str, host: &str, port: Option<u16>) {
+    let before = settings::get_settings(app.clone());
+    let kept = before.cores.get(core_id).and_then(|n| n.profile.clone());
+    // (a Core never seen before starts on the profile in use)
+    let wanted = kept.clone().or_else(|| before.library_profile.clone());
+    client.set_profile(wanted.as_deref());
+    let now = client.profile();
+    let name = app.state::<crate::roon::Roon>().status().connected.filter(|c| c.core_id == core_id).map(|c| c.name).unwrap_or_default();
+    let now_id = now.as_ref().map(|p| p.id.clone());
+    note_core(app, core_id, |s, id| {
+        let note = s.cores.get_mut(id).expect("made by note_core");
+        if !name.is_empty() {
+            note.name = name.clone();
+        }
+        note.host = host.to_string();
+        if port.is_some() && note.library_port_typed != port {
+            note.library_port = port;
+        }
+        if now_id.is_some() {
+            note.profile = now_id.clone();
+            s.library_profile = now_id.clone();
+        }
+    });
+    if let Some(p) = now.filter(|p| before.library_profile.is_some() && before.library_profile.as_ref() != Some(&p.id)) {
+        println!("[library {}] {name}: its own profile, {}", clock(), p.name);
+        let _ = app.emit("library-core-profile", serde_json::json!({ "core": name, "profile": p.name }));
+    }
+}
+
+/// A Core in Settings > Roon Core > Advanced.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CoreRow {
+    pub core_id: String,
+    pub name: String,
+    pub host: String,
+    /// The port its Hearts & Library connection was found on, and the one typed for it.
+    pub port: Option<u16>,
+    pub port_typed: Option<u16>,
+    pub profile: Option<String>,
+    /// The Core Toasted is connected to.
+    pub current: bool,
+}
+
+/// Every Core Toasted has connected to, the one in use first.
+#[tauri::command]
+pub fn library_cores(app: AppHandle) -> Vec<CoreRow> {
+    let using = app.state::<crate::roon::Roon>().status().connected.map(|c| c.core_id);
+    let mut rows: Vec<CoreRow> = settings::get_settings(app)
+        .cores
+        .into_iter()
+        .map(|(core_id, n)| CoreRow { current: using.as_ref() == Some(&core_id), core_id, name: n.name, host: n.host, port: n.library_port, port_typed: n.library_port_typed, profile: n.profile })
+        .collect();
+    rows.sort_by(|a, b| b.current.cmp(&a.current).then(a.name.to_lowercase().cmp(&b.name.to_lowercase())));
+    rows
+}
+
+/// Sets (or, with none, clears) the Hearts & Library port typed for a Core. For the Core in use the
+/// connection is made again with it.
+#[tauri::command]
+pub fn library_set_core_port(app: AppHandle, core_id: String, port: Option<u16>) -> Result<Vec<CoreRow>, String> {
+    if port == Some(0) {
+        return Err("A port is a number from 1 to 65535.".into());
+    }
+    note_core(&app, &core_id, |s, id| {
+        let note = s.cores.get_mut(id).expect("made by note_core");
+        note.library_port_typed = port;
+        // (a cleared one: looked for again from Roon's usual port)
+        if port.is_none() {
+            note.library_port = None;
+        }
+    });
+    let library = app.state::<Library>();
+    let current = library.inner.lock().unwrap().linked.as_ref().is_some_and(|(id, _)| *id == core_id);
+    if current {
+        library.stop();
+        {
+            let mut inner = library.inner.lock().unwrap();
+            inner.linked = None;
+            // (a Core that turned the old port down gets asked again on the new one)
+            inner.status.state = LibraryState::Unavailable;
+        }
+        reconsider(&app);
+    }
+    Ok(library_cores(app))
+}
+
+/// Picks the profile a Core starts on. For the Core in use that is picking the profile.
+#[tauri::command]
+pub async fn library_set_core_profile(app: AppHandle, core_id: String, profile: String) -> Result<Vec<CoreRow>, String> {
+    let current = app.state::<Library>().inner.lock().unwrap().linked.as_ref().is_some_and(|(id, _)| *id == core_id);
+    if current {
+        library_set_profile(app.clone(), profile).await?;
+    } else {
+        note_core(&app, &core_id, |s, id| s.cores.get_mut(id).expect("made by note_core").profile = Some(profile.clone()));
+    }
+    Ok(library_cores(app))
+}
+
+/// Takes a Core Toasted is not connected to off the list.
+#[tauri::command]
+pub fn library_forget_core(app: AppHandle, core_id: String) -> Result<Vec<CoreRow>, String> {
+    let using = app.state::<crate::roon::Roon>().status().connected.map(|c| c.core_id);
+    if using.as_ref() == Some(&core_id) {
+        return Err("That is the Core in use.".into());
+    }
+    if let Some(path) = settings::path(&app) {
+        let mut s = settings::load(&path);
+        if s.cores.remove(&core_id).is_some() {
+            settings::save(&path, &s)?;
+        }
+    }
+    Ok(library_cores(app))
+}
+
+/// The ports Roon gives a Core's services (9330 to 9339): the internal protocol is on 9332 as a rule, but
+/// a second Core on the same machine (two in Docker with host networking, say) gets another of them.
+const CORE_PORTS: std::ops::RangeInclusive<u16> = 9330..=9339;
+
+/// Connects to the Core on the port its internal protocol is on. Nothing says which that is (the Core's
+/// answer to the search names its extension ports only), so: the port it answered on before, or 9332,
+/// and when that one is another Core's, or silent, or closed, the others of Roon's range, briefly each.
+/// The handshake names the Core wanted, so a wrong Core can't be taken for it. `port` keeps the one
+/// that worked.
+async fn connect_on_its_port(host: &str, core_id: &str, port: &mut Option<u16>) -> Result<LibraryClient, LibraryError> {
+    let first = port.unwrap_or(roon_library::DEFAULT_PORT);
+    let mut opts = ClientOptions::new(host.to_string(), core_id.to_string());
+    opts.port = first;
+    let failed = match LibraryClient::connect(opts).await {
+        Ok(client) => {
+            *port = Some(first);
+            return Ok(client);
+        }
+        Err(e) => e,
+    };
+    // (a Core that answered as itself and then turned the link down is a Roon version this doesn't speak:
+    // no other port will do better)
+    let another_core = matches!(&failed, LibraryError::UnsupportedCore(m) if m.contains("does not match"));
+    if matches!(failed, LibraryError::UnsupportedCore(_)) && !another_core {
+        return Err(failed);
+    }
+    // (what each port said goes in the log, in release builds too: with a setup this can't be tried on,
+    // the log is how the answer gets back)
+    let mut said = vec![format!("{first}: {failed}")];
+    for other in CORE_PORTS.filter(|p| *p != first) {
+        let mut opts = ClientOptions::new(host.to_string(), core_id.to_string());
+        opts.port = other;
+        opts.handshake_timeout = Duration::from_secs(2);
+        match LibraryClient::connect(opts).await {
+            Ok(client) => {
+                println!("[library {}] the Core {core_id} at {host} answers on port {other}, not {first} ({})", clock(), said.join("; "));
+                *port = Some(other);
+                return Ok(client);
+            }
+            Err(e) => said.push(format!("{other}: {e}")),
+        }
+    }
+    // (once per run of bad luck, not at every retry)
+    static TOLD: Mutex<Option<String>> = Mutex::new(None);
+    let line = format!("the Core {core_id} at {host} wasn't found on any port: {}", said.join("; "));
+    if TOLD.lock().unwrap().replace(line.clone()).as_ref() != Some(&line) {
+        println!("[library {}] {line}", clock());
+    }
+    if another_core {
+        // (to be tried again, like any Core that can't be reached, and said as it is)
+        return Err(LibraryError::Io(std::io::Error::other(format!(
+            "another Roon Core answers at {host}:{first}, and this Core wasn't found on ports {} to {}",
+            CORE_PORTS.start(),
+            CORE_PORTS.end()
+        ))));
+    }
+    Err(failed)
+}
+
 /// One connection's life: connect, forward events, reconnect on drops, stand
 /// down when a newer generation took over.
 async fn run(app: AppHandle, generation: u64, host: String, core_id: String) {
     let library = app.state::<Library>();
     let mut attempt = 0usize;
+    // (the port this Core answered on, once found: the one typed in Settings for it, or the one found
+    // the last time, to begin with)
+    let mut port: Option<u16> = core_note(&app, &core_id).and_then(|n| n.library_port_typed.or(n.library_port));
     loop {
         if library.inner.lock().unwrap().generation != generation {
             return; // stopped or restarted meanwhile
         }
-        let mut opts = ClientOptions::new(host.clone(), core_id.clone());
-        opts.settle = Duration::from_secs(3);
-        match LibraryClient::connect(opts).await {
+        let connected = connect_on_its_port(&host, &core_id, &mut port).await;
+        if library.inner.lock().unwrap().generation != generation {
+            if let Ok(client) = connected {
+                client.close();
+            }
+            return;
+        }
+        match connected {
             Ok(client) => {
                 {
                     let mut inner = library.inner.lock().unwrap();
@@ -303,9 +520,9 @@ async fn run(app: AppHandle, generation: u64, host: String, core_id: String) {
                     inner.client = Some(client.clone());
                 }
                 println!("[library {}] connected to the Core at {host} ({} objects)", clock(), client.object_count());
-                // The profile picked in Settings (the account's first if none
-                // was, or it's gone), before anything reads a heart
-                client.set_profile(crate::settings::get_settings(app.clone()).library_profile.as_deref());
+                // The profile used on this Core the last time (else the one picked in Settings; the
+                // account's first if none was, or it's gone), before anything reads a heart
+                use_core_profile(&app, &client, &core_id, &host, port);
                 library.set_status(LibraryState::Ready, None);
                 let _ = app.emit("library-profiles", profiles_now(&client));
                 // (the profile in use is known for sure now: its colors, and
@@ -469,6 +686,11 @@ pub async fn library_set_profile(app: AppHandle, id: String) -> Result<Profiles,
     // (the profile first: the settings then go out with its colors)
     client.set_profile(Some(&id));
     crate::settings::update_settings(app.clone(), serde_json::json!({ "libraryProfile": id }), None)?;
+    // (and it is this Core's own from now on: picked again when Toasted comes back to it)
+    let linked = library.inner.lock().unwrap().linked.clone();
+    if let Some((core_id, _)) = linked {
+        note_core(&app, &core_id, |s, core| s.cores.get_mut(core).expect("made by note_core").profile = Some(id.clone()));
+    }
     let now = profiles_now(&client);
     println!("[library {}] profile: {}", clock(), client.profile().map(|p| p.name).unwrap_or_default());
     // (Wrapped's General settings may be this profile's own)

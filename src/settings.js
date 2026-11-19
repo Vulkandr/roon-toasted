@@ -487,6 +487,132 @@ async function refreshDiagnostics() {
   }
 }
 
+// ===== Advanced: each Core's own Hearts & Library port and profile =========
+// (library.rs: library_cores, library_set_core_port, library_set_core_profile, library_forget_core)
+
+const advButton = document.querySelector("#adv-toggle");
+const advPanel = document.querySelector("#adv-panel");
+const advList = document.querySelector("#adv-list");
+const advError = document.querySelector("#adv-error");
+
+function showCores(cores) {
+  advList.replaceChildren();
+  if (!cores.length) {
+    const none = document.createElement("li");
+    none.className = "muted";
+    none.textContent = "Nothing yet: a Core shows here once Hearts & Library has connected to it.";
+    advList.append(none);
+    return;
+  }
+  const act = async (command, args) => {
+    advError.textContent = "";
+    try {
+      showCores(await invoke(command, args));
+    } catch (err) {
+      advError.textContent = err;
+    }
+  };
+  for (const core of cores) {
+    const item = document.createElement("li");
+    item.className = "adv-core";
+    const head = document.createElement("div");
+    head.className = "adv-head";
+    const name = document.createElement("strong");
+    name.textContent = core.name || "Roon Core";
+    const where = document.createElement("span");
+    where.className = "muted";
+    where.textContent = [core.host, core.current ? "in use" : ""].filter(Boolean).join(" · ");
+    head.append(name, where);
+    if (!core.current) {
+      const forget = document.createElement("button");
+      forget.className = "small";
+      forget.type = "button";
+      forget.textContent = "Forget";
+      forget.title = "Take this Core off the list (it comes back if you connect to it again)";
+      forget.addEventListener("click", () => act("library_forget_core", { coreId: core.coreId }));
+      head.append(forget);
+    }
+
+    // The Hearts & Library port: found by itself, or typed here
+    const portRow = document.createElement("div");
+    portRow.className = "adv-row";
+    const portLabel = document.createElement("label");
+    portLabel.className = "muted";
+    portLabel.textContent = "Hearts & Library port";
+    const portInput = document.createElement("input");
+    portInput.type = "text";
+    portInput.inputMode = "numeric";
+    portInput.spellcheck = false;
+    portInput.autocomplete = "off";
+    portInput.placeholder = String(core.port ?? 9332);
+    portInput.value = core.portTyped ? String(core.portTyped) : "";
+    portInput.title = "Leave empty and Toasted finds it (9332 as a rule; another of Roon's ports, 9330 to 9339, for a second Core on the same machine)";
+    const portState = document.createElement("span");
+    portState.className = "muted adv-state";
+    portState.textContent = core.portTyped ? "typed" : core.port ? `found: ${core.port}` : "not found yet";
+    const portSave = document.createElement("button");
+    portSave.className = "small";
+    portSave.type = "button";
+    portSave.textContent = "Save";
+    portSave.addEventListener("click", () => {
+      const text = portInput.value.trim();
+      const port = text === "" ? null : Number(text);
+      if (port !== null && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+        advError.textContent = "A port is a number from 1 to 65535.";
+        return;
+      }
+      act("library_set_core_port", { coreId: core.coreId, port });
+    });
+    portRow.append(portLabel, portInput, portSave, portState);
+
+    // Its profile (the profiles of the Roon account, which every Core shows)
+    const profileRow = document.createElement("div");
+    profileRow.className = "adv-row";
+    const profileLabel = document.createElement("label");
+    profileLabel.className = "muted";
+    profileLabel.textContent = "Profile";
+    const select = document.createElement("select");
+    const known = profileState.profiles ?? [];
+    if (!known.some((p) => p.id === core.profile)) {
+      const unknown = document.createElement("option");
+      unknown.value = "";
+      unknown.textContent = core.profile ? "(a profile not in this account now)" : "(the one in use when you connect)";
+      select.append(unknown);
+    }
+    for (const p of known) {
+      const option = document.createElement("option");
+      option.value = p.id;
+      option.textContent = p.name;
+      select.append(option);
+    }
+    select.value = known.some((p) => p.id === core.profile) ? core.profile : "";
+    select.disabled = !known.length;
+    select.title = known.length ? "The profile Toasted picks when it connects to this Core" : "Turn on Hearts & Library to pick a profile";
+    select.addEventListener("change", () => {
+      if (select.value) act("library_set_core_profile", { coreId: core.coreId, profile: select.value });
+    });
+    profileRow.append(profileLabel, select);
+
+    item.append(head, portRow, profileRow);
+    advList.append(item);
+  }
+}
+
+const refreshCores = () =>
+  invoke("library_cores")
+    .then(showCores)
+    .catch((err) => (advError.textContent = err));
+
+advButton.addEventListener("click", () => {
+  const open = !advPanel.classList.contains("open");
+  setOpen(advPanel, advButton, open);
+  advError.textContent = "";
+  if (open) refreshCores();
+});
+// (a profile picked elsewhere, or the link coming up on a Core: the list follows while it shows)
+listen("library-profiles", () => advPanel.classList.contains("open") && refreshCores());
+listen("library-status", () => advPanel.classList.contains("open") && refreshCores());
+
 diagButton.addEventListener("click", () => {
   const open = !diagPanel.classList.contains("open");
   setOpen(diagPanel, diagButton, open);

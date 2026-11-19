@@ -560,7 +560,90 @@ button.small {
 .diag-bar {
   display: flex;
   justify-content: center;
+  gap: 8px;
   margin-top: 10px;
+}
+
+/* Advanced: each Core's Hearts & Library port and profile (settings.js, showCores) */
+.adv-box {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.adv-intro {
+  margin: 0 0 8px;
+}
+
+#adv-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.adv-core {
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+}
+
+.adv-head,
+.adv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.adv-head span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.adv-row {
+  margin-top: 6px;
+}
+
+.adv-row label {
+  flex: 0 0 140px;
+  margin: 0;
+}
+
+.adv-row input,
+.adv-row select {
+  font: inherit;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.adv-row input {
+  flex: 0 0 80px;
+  min-width: 0;
+}
+
+.adv-row select {
+  flex: 1;
+  min-width: 0;
+}
+
+.adv-row select option {
+  background: var(--card);
+  color: var(--text);
+}
+
+.adv-row input:focus,
+.adv-row select:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.adv-box .error:empty {
+  display: none;
 }
 
 /* Roon Core, packed tighter: title, heading and list closer together, and

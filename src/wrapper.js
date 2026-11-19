@@ -15837,6 +15837,13 @@ listen("roon-fullscreen", () => {
 });
 
 let wrapperToastTimer;
+// A Core Toasted connected to had its own profile, and it was picked (library.rs, use_core_profile): said,
+// so that plays and hearts don't go to another profile than the one in mind
+listen("library-core-profile", (event) => {
+  const { core, profile } = event.payload || {};
+  if (profile) wrapperToast(core ? `${core}: profile ${profile}` : `Profile: ${profile}`);
+});
+
 function wrapperToast(text) {
   let toast = document.querySelector("body > .wrapped-toast");
   if (!toast) {

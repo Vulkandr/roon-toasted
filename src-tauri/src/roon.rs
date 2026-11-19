@@ -67,6 +67,9 @@ struct Inner {
     paired_core_id: Option<String>,
     connected: Option<CoreInfo>,
     seen: HashMap<String, (CoreInfo, Instant)>,
+    /// Cores reached at a typed address (their id: that address and port), for one the search never
+    /// finds: its address is known from here alone.
+    reached: HashMap<String, (String, u16)>,
     last_sent: Option<RoonStatus>,
 }
 
@@ -110,6 +113,7 @@ impl Default for Roon {
                 paired_core_id: None,
                 connected: None,
                 seen: HashMap::new(),
+                reached: HashMap::new(),
                 last_sent: None,
             }),
             state_path: OnceLock::new(),
@@ -474,12 +478,12 @@ async fn run(app: AppHandle, state_path: PathBuf) -> Result<(), ApiError> {
                         inner.paired_core_id = Some(core_id.clone());
                         inner.connected = Some(match inner.seen.get(&core_id) {
                             Some((info, _)) => info.clone(),
-                            None => CoreInfo {
-                                core_id,
-                                name: fallback_name,
-                                host: String::new(),
-                                port: 0,
-                            },
+                            // (not found by the search: reached at a typed address, which is then
+                            // its address, or not known yet)
+                            None => {
+                                let (host, port) = inner.reached.get(&core_id).cloned().unwrap_or_default();
+                                CoreInfo { core_id, name: fallback_name, host, port }
+                            }
                         });
                     });
                     // Each (re)connection gets its own zone watcher; the old one ends with its connection.
@@ -554,7 +558,7 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
     tokio::pin!(direct_due);
     let mut direct_task: Option<JoinHandle<()>> = None;
     // Result of the direct attempt: the Core it reached, or None if it failed
-    let (direct_tx, mut direct_rx) = tokio::sync::mpsc::channel::<Option<String>>(1);
+    let (direct_tx, mut direct_rx) = tokio::sync::mpsc::channel::<Option<(String, String, u16)>>(1);
     let (connected_tx, mut connected_rx) = tokio::sync::mpsc::channel::<String>(1);
     let mut attempts: HashMap<String, JoinHandle<()>> = HashMap::new();
     let mut ignored: HashSet<String> = HashSet::new();
@@ -610,7 +614,7 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                 direct_task = Some(tokio::spawn(async move {
                     match client.connect(&host, port).await {
                         Ok(core) => {
-                            let _ = direct_tx.send(Some(core.core_id().to_string())).await;
+                            let _ = direct_tx.send(Some((core.core_id().to_string(), host.clone(), port))).await;
                         }
                         Err(e) => {
                             eprintln!("[roon] direct connection to {host}:{port} failed: {e} (will keep trying)");
@@ -622,7 +626,7 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
 
             Some(result) = direct_rx.recv() => {
                 match result {
-                    Some(core_id) => {
+                    Some((core_id, host, port)) => {
                         // A typed address means "use that Core": if it isn't
                         // the paired one, switch to it, which restarts the app
                         if paired.as_ref().is_some_and(|p| *p != core_id) {
@@ -636,6 +640,17 @@ async fn discover_and_connect(app: &AppHandle, client: &Arc<RoonClient>) -> Resu
                         for (_, task) in attempts.drain() {
                             task.abort();
                         }
+                        // A Core the search never reached has no address on record (the search is what
+                        // notes it): the one it was reached at is it. Without it the Hearts & Library
+                        // link, which connects to the Core's address, waited for the Core forever.
+                        // (noted for the pairing that follows, and put on the Core if it is paired already)
+                        roon.update(|inner| {
+                            inner.reached.insert(core_id.clone(), (host.clone(), port));
+                            if let Some(c) = inner.connected.as_mut().filter(|c| c.core_id == core_id && c.host.is_empty()) {
+                                c.host = host.clone();
+                                c.port = port;
+                            }
+                        });
                         connected = Some(core_id);
                         roon.set_direct(DirectState::Connected);
                     }

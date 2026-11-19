@@ -17,6 +17,24 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
 
+/// What is kept about one Roon Core (by its id, `AppSettings::cores`), so that a setup with several
+/// Cores has each one's own: where its Hearts & Library connection is, and the profile used on it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CoreNote {
+    /// Its name and address when last connected (for the list in Settings).
+    pub name: String,
+    pub host: String,
+    /// The port its Hearts & Library connection was found on (library.rs: 9332 as a rule, another of
+    /// Roon's ports for a second Core on one machine). Tried first next time.
+    pub library_port: Option<u16>,
+    /// That port as typed in Settings > Roon Core > Advanced, for a Core the search for it can't find.
+    /// Goes before the found one.
+    pub library_port_typed: Option<u16>,
+    /// The profile last used on this Core (its id): picked again when Toasted connects to it.
+    pub profile: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AppSettings {
@@ -82,8 +100,12 @@ pub struct AppSettings {
     /// people who only open the Toaster from the Stream Deck).
     pub hotkeys_enabled: bool,
     /// The Roon profile hearts, bans and history go to (its id; library.rs).
-    /// None: the account's first.
+    /// None: the account's first. With several Cores, each keeps its own (`cores`), and this is the one
+    /// of the Core in use.
     pub library_profile: Option<String>,
+    /// Every Core Toasted has connected to, by its id: its Hearts & Library port and its profile.
+    /// Changed by library.rs, not through `update_settings`.
+    pub cores: std::collections::BTreeMap<String, CoreNote>,
     /// The keyboard's Play/Pause, Stop, Next and Previous keys control the
     /// selected Roon zone instead of other apps (mediakeys.rs).
     pub media_keys_playback: bool,
@@ -214,6 +236,7 @@ impl Default for AppSettings {
             background_images: Vec::new(),
             hotkeys_enabled: true,
             library_profile: None,
+            cores: Default::default(),
             media_keys_playback: true,
             media_keys_volume: false,
             hotkey_player: Some("Ctrl+Alt+Z".into()),

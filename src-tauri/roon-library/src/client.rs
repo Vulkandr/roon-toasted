@@ -148,6 +148,8 @@ pub struct ClientOptions {
     pub port: u16,
     /// The Core id, e.g. "fafb763c-9ad0-4f07-887d-44e19b8374e0".
     pub core_id: String,
+    /// How long the handshake may take. Default 10 s.
+    pub handshake_timeout: Duration,
     /// How long to give the Core to send its objects after connecting. Default 3 s.
     pub settle: Duration,
     /// How long a call may wait for the Core's answer. Default 15 s.
@@ -162,6 +164,7 @@ impl ClientOptions {
             host: host.into(),
             port: DEFAULT_PORT,
             core_id: core_id.into(),
+            handshake_timeout: Duration::from_secs(10),
             settle: Duration::from_secs(3),
             request_timeout: Duration::from_secs(15),
             confirm_timeout: Duration::from_secs(8),
@@ -867,7 +870,10 @@ impl From<ConnectError> for LibraryError {
         match e {
             ConnectError::Unsupported(m) => LibraryError::UnsupportedCore(m),
             ConnectError::Io(e) => LibraryError::Io(e),
-            ConnectError::Timeout => LibraryError::UnsupportedCore("the handshake timed out".into()),
+            // (no answer is network trouble, to try again: it says nothing about the Roon version. It was
+            // filed as an unsupported Core, which stopped the retries: seen with two Cores on one address,
+            // where the port asked was the other Core's)
+            ConnectError::Timeout => LibraryError::Io(std::io::Error::new(std::io::ErrorKind::TimedOut, "the Core did not answer in time")),
         }
     }
 }
@@ -960,7 +966,7 @@ impl LibraryClient {
     pub async fn connect(opts: ClientOptions) -> Result<LibraryClient, LibraryError> {
         let broker_id = broker_id_from_core_id(&opts.core_id)
             .ok_or_else(|| LibraryError::UnsupportedCore(format!("\"{}\" is not a Core id", opts.core_id)))?;
-        let handshake = connection::connect(&opts.host, opts.port, broker_id, Duration::from_secs(10)).await?;
+        let handshake = connection::connect(&opts.host, opts.port, broker_id, opts.handshake_timeout).await?;
 
         let graph = Arc::new(Mutex::new(ObjectGraph::new()));
         let changed = Arc::new(Notify::new());

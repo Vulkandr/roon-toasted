@@ -240,7 +240,22 @@
 
         <!-- Diagnostics: what the search is doing, for when a Core can't be found -->
         <div class="diag-bar">
+          <button id="adv-toggle" class="small" type="button" aria-expanded="false" aria-controls="adv-panel" title="For setups with more than one Roon Core">Advanced</button>
           <button id="diag-toggle" class="small" type="button" aria-expanded="false" aria-controls="diag-panel">Diagnostics</button>
+        </div>
+        <!-- Advanced: what Toasted keeps for each Core it has connected to (library.rs, library_cores) -->
+        <div id="adv-panel" class="drop" inert>
+          <div class="drop-inner">
+            <div class="adv-box">
+              <p class="muted adv-intro">
+                For setups with more than one Roon Core. Each Core keeps its own Hearts &amp; Library
+                connection and its own profile, and Toasted picks them again when you switch to it.
+                Nothing here needs setting with a single Core.
+              </p>
+              <ul id="adv-list"></ul>
+              <p id="adv-error" class="error"></p>
+            </div>
+          </div>
         </div>
         <div id="diag-panel" class="drop" inert>
           <div class="drop-inner">
