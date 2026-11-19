@@ -8864,8 +8864,9 @@ async function homeMemories(holder, ticket) {
     bottomRows.push(
       homeRow(
         "onthisday",
-        "Last year on this day",
-        memories.onThisDay.map((a) => ({ albumId: a.albumId, title: a.title, artist: a.artist, sub: `${a.year} · ${a.artist}`, imageKey: a.imageKey, why: `${songs(a.plays)} of it on ${dateOf(a.lastPlayed)}` })),
+        "On this day, over the years",
+        // (`badge`: the year it was played in, on its cover)
+        memories.onThisDay.map((a) => ({ albumId: a.albumId, title: a.title, artist: a.artist, sub: a.artist, badge: String(a.year), imageKey: a.imageKey, why: `${songs(a.plays)} of it on ${dateOf(a.lastPlayed)}` })),
         openMemory,
         null,
         `What you played on ${today} in years past`,
@@ -8921,6 +8922,12 @@ function homeRow(id, title, items, onOpen, ban, tip) {
         const wrap = document.createElement("div");
         wrap.className = "wrapped-card-wrap";
         wrap.append(wrappedCard(item, () => onOpen(item)));
+        if (item.badge) {
+          const badge = document.createElement("span");
+          badge.className = "wrapped-card-badge";
+          badge.textContent = item.badge;
+          wrap.append(badge);
+        }
         if (item.artist && ban) {
           const x = document.createElement("button");
           x.className = "discover-ask-x wrapped-card-ban";
@@ -15583,7 +15590,7 @@ const ONBOARDING_TOURS = {
     { find: () => homeRowEl("New albums from artists you may like"), text: "And new albums from artists suggested for you. Every row shows one line that fits; click its title for three lines, Keep looking for more." },
     { find: () => homeRowEl("Newer albums from your favorite artists you may have missed"), text: "Newer albums from your favorite artists you may have missed: albums from the last three years that you haven't played a song of, from the artists you play most first. Easy to have slipped past, even when they're no longer new." },
     { find: () => homeRowEl("Forgotten favorites"), text: "Forgotten favorites are albums you once played a lot but haven't touched in a year or more. Worth a revisit." },
-    { find: () => homeRowEl("Last year on this day"), text: "Last year on this day shows what you were playing on today's date in earlier years." },
+    { find: () => homeRowEl("On this day, over the years"), text: "On this day, over the years shows what you were playing on today's date in earlier years, with the year on each cover." },
     // (only pointed at: on a first visit Home was just put together, so
     // pressing it would only redo the work)
     { find: () => document.querySelector(".wrapped-home-corner"), text: "Home keeps itself up to date: new albums are looked for daily, artists for you every two weeks. Refresh does both right away, if you ever want it sooner. Hover a row's title for a word on what it is." },

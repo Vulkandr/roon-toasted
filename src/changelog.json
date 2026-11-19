@@ -24,7 +24,7 @@
       {
         "title": "Changes",
         "items": [
-          ["\"On this day\" has a new name", "Home's row of what you played on today's date in earlier years is now called \"Last year on this day\"."],
+          ["\"On this day\" has a new name", "Home's row of what you played on today's date in earlier years is now called \"On this day, over the years\", and each album shows the year you played it on its cover."],
           ["Dragging shows what you drag", "When you drag something in Wrapped, a pinned playlist or a column heading on the Tracks page, a copy of it now follows the pointer. The side menu also stays where you scrolled it when you click something in it."],
           ["Favorites and songs found in a Discover list", "Plays from a Discover Weekly or Library Rediscover list used to never count toward your all-time favorites on Home. Now they wait only until you play the song some other way. From then on every play of it counts, the first one from the list too. A song you only ever hear in the lists still doesn't count, so the lists can't push their own picks up your favorites."]
         ]

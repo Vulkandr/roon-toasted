@@ -3992,6 +3992,20 @@ html.invert-colors {
   width: 100%;
 }
 
+/* A word on a card's cover, top left (the year, in "On this day, over the years") */
+.wrapped-card-badge {
+  position: absolute;
+  top: 13px;
+  left: 13px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.72);
+  pointer-events: none;
+}
+
 .wrapped-card-ban {
   position: absolute;
   top: 4px;
