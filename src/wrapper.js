@@ -5104,6 +5104,33 @@ function closePlaylistMenu() {
   playlistAnchor = null;
   reportHole();
 }
+// What kind of playlist one is, where it isn't a plain Roon playlist: Qobuz's or TIDAL's own mark (the
+// playlists are theirs, and Roon shows the same), or a bolt (smart). Two playlists can share a name (a "Faves" on
+// Qobuz and one in Roon); the mark tells them apart. Null for a plain one.
+// (An <i>, not a <span>: the lists these sit in stretch their spans. Qobuz's mark: the file Vulk gave,
+// from SVG Repo, cut down for this size: its outer ring and tail, heavier, and its center as a dot, in
+// the text's color at full strength. Its middle ring is left out: tried with all three (builds 1287 and
+// 1289, dimmed and not), the rings ran together into a smudge either way. TIDAL's: Simple Icons, CC0.)
+const QOBUZ_MARK =
+  '<svg viewBox="0 0 192 192" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path stroke-width="20" d="M140.672 157.486a76.004 76.004 0 0 1-102.464-12.128 76.001 76.001 0 0 1 107.15-107.15 76.004 76.004 0 0 1 12.128 102.464"/><circle cx="96" cy="96" r="24" fill="currentColor" stroke="none"/><path stroke-width="22" d="m126 126 37.064 36.821"/></svg>';
+const TIDAL_MARK =
+  '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12.012 3.992L8.008 7.996 4.004 3.992 0 7.996 4.004 12l4.004-4.004L12.012 12l-4.004 4.004 4.004 4.004 4.004-4.004L12.012 12l4.004-4.004-4.004-4.004zM16.042 7.996l3.979-3.979L24 7.996l-3.979 3.979z"/></svg>';
+const PLAYLIST_MARKS = {
+  qobuz: [QOBUZ_MARK, "A Qobuz playlist"],
+  tidal: [TIDAL_MARK, "A TIDAL playlist"],
+  smart: ["\u26A1", "A smart playlist"],
+};
+function playlistMark(kind) {
+  const known = PLAYLIST_MARKS[kind];
+  if (!known) return null;
+  const mark = document.createElement("i");
+  mark.className = `playlist-mark ${kind}`;
+  if (known[0].startsWith("<svg")) mark.innerHTML = known[0];
+  else mark.textContent = known[0];
+  mark.title = known[1];
+  return mark;
+}
+
 async function openPlaylistMenu(anchor, tracksOf) {
   const say = (text) => (stage.hidden ? wrappedToast(text) : wrappedToastStage(text));
   let lists;
@@ -5154,6 +5181,9 @@ async function openPlaylistMenu(anchor, tracksOf) {
     }
     for (const p of lists) {
       if (words && !p.name.toLowerCase().includes(words)) continue;
+      // (only Roon's own playlists take songs: a smart one is made by its rules, and one from Qobuz or
+      // TIDAL only moved to the top of the list when a song was added to it, without the song)
+      if (p.kind !== "roon" || p.readOnly) continue;
       const option = document.createElement("button");
       option.className = "zone-option";
       const name = document.createElement("span");
@@ -5570,7 +5600,9 @@ function fillWrappedSide() {
           const label = document.createElement("span");
           label.append(...monoEmoji(p.name));
           option.append(label);
-          option.title = p.name;
+          const mark = playlistMark(p.kind);
+          if (mark) option.append(mark);
+          option.title = mark ? `${p.name} (${mark.title.replace(/^An? /, "")})` : p.name;
           if (current === "playlist" && wrappedStack.at(-1)?.handle === p.handle) option.classList.add("selected");
           option.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
           lists.append(option);
@@ -14452,6 +14484,8 @@ function playlistRows(list, mine) {
       .filter(Boolean)
       .join(" · ");
     text.append(title, sub);
+    const mark = playlistMark(p.kind);
+    if (mark) title.append(mark);
     title.classList.add("link");
     title.addEventListener("click", () => openWrappedPage({ page: "playlist", handle: p.handle, name: p.name }));
     row.append(art, text);

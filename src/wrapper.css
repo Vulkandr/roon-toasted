@@ -9327,3 +9327,23 @@ body.zone-paused .wrapped-track-eq i {
   text-transform: uppercase;
   opacity: 0.6;
 }
+
+/* A playlist's kind beside its name (wrapper.js, playlistMark): Qobuz's or TIDAL's mark, or a bolt */
+.playlist-mark {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  width: 15px;
+  height: 15px;
+  margin-left: 7px;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1;
+  vertical-align: -2px;
+}
+
+.playlist-mark svg {
+  width: 15px;
+  height: 15px;
+  shape-rendering: geometricPrecision;
+}
